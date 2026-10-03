@@ -61,7 +61,7 @@ const json = {
   appVersionCode: Number(raw.versionCode) || Number(process.env.GITHUB_RUN_NUMBER) || 1,
   appVersion: String(raw.versionName || '1.0.0'),
   splashScreenFadeOutDuration: 300,
-  signingKey: { path: `${out}/wybuild-release.jks`, alias: process.env.WB_KEY_ALIAS_SECRET || 'wybuild' },
+  signingKey: { path: `${out}/wybuild-release.jks`, alias: process.env.WB_KEY_ALIAS || process.env.WB_KEY_ALIAS_SECRET || 'wybuild' },
   shortcuts,
   webManifestUrl: manifestUrl,
   fallbackType: 'customtabs',

@@ -8,7 +8,7 @@ command -v apksigner >/dev/null 2>&1 || true
 cat > "$DIST/store-readiness.md" <<REPORT
 # WyBuild TWA readiness
 
-- Artifact: `$(basename "$APK")`
+- Artifact: \`$(basename "$APK")\`
 - TWA build path: Bubblewrap Trusted Web Activity
 - WebView wrapper: **not used**
 REPORT

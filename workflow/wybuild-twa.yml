@@ -1,4 +1,4 @@
-# wybuild-twa-workflow-version: 4
+# wybuild-twa-workflow-version: 5
 name: WyBuild TWA
 concurrency:
   group: wybuild-${{ github.workflow }}-${{ github.ref }}
@@ -71,6 +71,9 @@ jobs:
           cd "$WB_TOOLS"
           npm init -y >/dev/null
           npm install --no-audit --no-fund "@bubblewrap/cli@${{ inputs.bubblewrap_version }}"
+          for f in twa-prepare.mjs twa-generate.mjs twa-verify.sh; do
+            test -f "$GITHUB_WORKSPACE/.github/wybuild/$f" || { echo "::error::.github/wybuild/$f is missing in this repo/branch. Reinstall the WyBuild TWA workflow (WyBuild > Web to Android > Update workflow) so all four files are committed."; exit 1; }
+          done
           cp "$GITHUB_WORKSPACE/.github/wybuild/twa-generate.mjs" .
           echo "$WB_TOOLS/node_modules/.bin" >> "$GITHUB_PATH"
           "$WB_TOOLS/node_modules/.bin/bubblewrap" --version || true
@@ -101,6 +104,11 @@ jobs:
               -storepass "$SPASS" -keypass "$KPASS" -dname "CN=WyBuild Test, O=WyBuild, C=US" >/dev/null
           fi
           echo "::add-mask::$SPASS"; echo "::add-mask::$KPASS"
+          # fail fast with a readable reason instead of hanging later at the signing prompt
+          if ! keytool -list -keystore "$KS" -alias "$ALIAS" -storepass "$SPASS" >"$WB_OUT/keytool-check.txt" 2>&1; then
+            sed 's/^/keytool: /' "$WB_OUT/keytool-check.txt" | head -5
+            echo "::error::Cannot open the keystore with alias '$ALIAS'. Check WB_KEYSTORE_PASSWORD and WB_KEY_ALIAS (alias is case-sensitive) and that WB_KEYSTORE_BASE64 is the raw .jks/.p12 base64 with no line prefix."; exit 1
+          fi
           { echo "WB_KEYSTORE_PATH=$KS"; echo "WB_KEY_ALIAS=$ALIAS"; echo "BUBBLEWRAP_KEYSTORE_PASSWORD=$SPASS"; echo "BUBBLEWRAP_KEY_PASSWORD=$KPASS"; } >> "$GITHUB_ENV"
 
       - name: Resolve configuration (auto-detect from the site's Web App Manifest)
@@ -144,23 +152,43 @@ jobs:
           fi
 
       - name: Build with Bubblewrap TWA only
+        env:
+          CI: "true"
+          BUBBLEWRAP_NO_PROMPT: "1"
         run: |
           set -euo pipefail
           P="$WB_OUT/project"; DIST="$WB_OUT/dist"; mkdir -p "$DIST"
           cd "$P"
-          ok=true
-          if ! bubblewrap build --manifest="$P/twa-manifest.json" --signingKeyPath="$WB_KEYSTORE_PATH" --signingKeyAlias="$WB_KEY_ALIAS"; then
-            echo "::error::Bubblewrap TWA build failed. No WebView fallback is permitted."
-            exit 1
+          # Bubblewrap build reads the manifest from the project folder; make sure it is there and matches the checksum
+          cp -f "$WB_OUT/twa-manifest.json" "$P/twa-manifest.json"
+          # keystore path/alias come from twa-manifest.json (signingKey); passwords come from BUBBLEWRAP_* env vars.
+          # stdin is closed and a hard timeout is applied so a surprise prompt fails with a message instead of hanging forever.
+          BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"; echo "$BT" >> "$GITHUB_PATH"; export PATH="$BT:$PATH"
+          if ! timeout 20m bubblewrap build --skipPwaValidation --manifest="$P/twa-manifest.json" < /dev/null; then
+            echo "::warning::bubblewrap build did not finish (error or timeout). Trying to sign the Gradle output directly."
+            pkill -f gradle 2>/dev/null || true
+            UNSIGNED="$(ls "$P"/app/build/outputs/apk/release/*unsigned*.apk 2>/dev/null | head -1 || true)"
+            if [ -n "$UNSIGNED" ]; then
+              zipalign -f -p 4 "$UNSIGNED" "$P/aligned.apk"
+              apksigner sign --ks "$WB_KEYSTORE_PATH" --ks-key-alias "$WB_KEY_ALIAS" \
+                --ks-pass env:BUBBLEWRAP_KEYSTORE_PASSWORD --key-pass env:BUBBLEWRAP_KEY_PASSWORD \
+                --out "$P/app-release-signed.apk" "$P/aligned.apk" < /dev/null
+            fi
+            AAB="$(ls "$P"/app/build/outputs/bundle/release/*.aab 2>/dev/null | head -1 || true)"
+            if [ -n "$AAB" ] && [ ! -f "$P/app-release-bundle.aab" ]; then
+              cp "$AAB" "$P/app-release-bundle.aab"
+              jarsigner -keystore "$WB_KEYSTORE_PATH" -storepass:env BUBBLEWRAP_KEYSTORE_PASSWORD -keypass:env BUBBLEWRAP_KEY_PASSWORD \
+                "$P/app-release-bundle.aab" "$WB_KEY_ALIAS" < /dev/null
+            fi
           fi
-          # Bubblewrap is the only build path. This prevents accidental WebView wrappers.
-          test -f app-release-signed.apk || { echo "::error::No signed APK was produced"; exit 1; }
-          NAME="${WB_PACKAGE}_${WB_VERSION_NAME}_${WB_VERSION_CODE}"
+          test -f app-release-signed.apk || { echo "::error::No signed APK was produced. See the Bubblewrap output above."; exit 1; }
+          NAME="${WYBUILD_PACKAGE}_${WYBUILD_VERSION}_${WYBUILD_VERSION_CODE}"
           case "$OUTPUT" in
             apk|both) cp app-release-signed.apk "$DIST/$NAME.apk" ;;
           esac
           case "$OUTPUT" in
-            aab|both) cp app-release-bundle.aab "$DIST/$NAME.aab" ;;
+            aab|both) test -f app-release-bundle.aab || { echo "::error::No app bundle (.aab) was produced"; exit 1; }
+                      cp app-release-bundle.aab "$DIST/$NAME.aab" ;;
           esac
           # the verification below always runs against an APK, even for aab-only output
           cp app-release-signed.apk "$WB_OUT/verify.apk"
@@ -170,7 +198,7 @@ jobs:
         run: |
           set -euo pipefail
           DIST="$WB_OUT/dist"
-          BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
+          BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"; export PATH="$BT:$PATH"
           # Certificate fingerprint -> assetlinks.json (host this at https://<site>/.well-known/assetlinks.json)
           FP="$(keytool -list -v -keystore "$WB_KEYSTORE_PATH" -alias "$WB_KEY_ALIAS" -storepass "$BUBBLEWRAP_KEYSTORE_PASSWORD" 2>/dev/null | sed -n 's/^ *SHA256: *//p' | head -1)"
           test -n "$FP" || { echo "::error::Could not read the release certificate SHA-256 fingerprint from the configured keystore."; exit 1; }
@@ -181,7 +209,7 @@ jobs:
             "relation": ["delegate_permission/common.handle_all_urls"],
             "target": {
               "namespace": "android_app",
-              "package_name": "$WB_PACKAGE",
+              "package_name": "$WYBUILD_PACKAGE",
               "sha256_cert_fingerprints": ["$FP"]
             }
           }]
@@ -190,7 +218,7 @@ jobs:
           cp "$WB_OUT/project/twa-manifest.json" "$DIST/twa-manifest.json"
           bash .github/wybuild/twa-verify.sh "$WB_OUT/verify.apk" "$DIST" "$STORE_READY"
           RC=$?
-          { echo "## WyBuild TWA: $WB_PACKAGE $WB_VERSION_NAME ($WB_VERSION_CODE)"; cat "$DIST/store-readiness.md"
+          { echo "## WyBuild TWA: $WYBUILD_PACKAGE $WYBUILD_VERSION ($WYBUILD_VERSION_CODE)"; cat "$DIST/store-readiness.md"
             echo; echo "### Digital Asset Links"; echo "Publish \`assetlinks.json\` at \`https://$WYBUILD_SOURCE_HOST/.well-known/assetlinks.json\`:"; echo '```json'; cat "$DIST/assetlinks.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           exit $RC
 

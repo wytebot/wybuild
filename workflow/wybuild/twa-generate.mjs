@@ -11,5 +11,6 @@ await fs.mkdir(`${out}/project`, { recursive: true });
 const generator = new TwaGenerator();
 await generator.createTwaProject(`${out}/project`, manifest, new ConsoleLog('WyBuild TWA'));
 const bytes = await fs.readFile(manifestPath);
+await fs.writeFile(`${out}/project/twa-manifest.json`, bytes);
 await fs.writeFile(`${out}/project/manifest-checksum.txt`, crypto.createHash('sha1').update(bytes).digest('hex'));
 console.log(`WYBUILD_PROJECT_READY=true`);
