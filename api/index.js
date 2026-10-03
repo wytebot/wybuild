@@ -106,6 +106,31 @@ function unseal(str) {
   }
 }
 
+function oauthState(secret) {
+  const payload = {
+    n: crypto.randomBytes(16).toString('hex'),
+    iat: Date.now(),
+  };
+  const raw = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const sig = crypto.createHmac('sha256', key32()).update(raw).digest('base64url');
+  return `${raw}.${sig}`;
+}
+
+function verifyOAuthState(state) {
+  try {
+    const [raw, sig] = String(state || '').split('.');
+    if (!raw || !sig) return false;
+    const expected = crypto.createHmac('sha256', key32()).update(raw).digest('base64url');
+    const a = Buffer.from(sig);
+    const b = Buffer.from(expected);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return false;
+    const payload = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
+    return Number.isFinite(payload.iat) && Date.now() - payload.iat >= 0 && Date.now() - payload.iat <= 10 * 60 * 1000;
+  } catch {
+    return false;
+  }
+}
+
 function getSession(req) {
   const raw = parseCookies(req)[SESSION_COOKIE];
   const s = raw && unseal(raw);
@@ -862,18 +887,21 @@ async function route(req, res, path, query) {
   /* auth */
   if (path === 'auth/login') {
     if (!env('GITHUB_CLIENT_ID')) throw new HttpError(500, 'GitHub OAuth is not configured');
-    const state = crypto.randomBytes(16).toString('hex');
+    // Stateless, signed OAuth state avoids Vercel/host cookie mismatches while
+    // retaining CSRF protection. The signature is tied to SESSION_SECRET.
+    const state = oauthState();
     const url = new URL('https://github.com/login/oauth/authorize');
     url.searchParams.set('client_id', env('GITHUB_CLIENT_ID'));
     url.searchParams.set('redirect_uri', `${appUrl(req)}/api/auth/callback`);
     url.searchParams.set('scope', 'repo workflow');
     url.searchParams.set('state', state);
-    return redirect(res, url.toString(), [cookie(STATE_COOKIE, state, 600)]);
+    return redirect(res, url.toString());
   }
 
   if (path === 'auth/callback') {
-    const saved = parseCookies(req)[STATE_COOKIE];
-    if (!query.code || !query.state || !saved || saved !== query.state) throw new HttpError(400, 'Invalid OAuth state');
+    if (!query.code || !query.state || !verifyOAuthState(query.state)) {
+      throw new HttpError(400, 'Invalid or expired OAuth state. Please start GitHub sign-in again.');
+    }
     const tr = await fetch('https://github.com/login/oauth/access_token', {
       method: 'POST',
       headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
@@ -883,7 +911,7 @@ async function route(req, res, path, query) {
     if (!t.access_token) throw new HttpError(400, t.error_description || 'GitHub sign-in failed');
     const u = await ghJson({ token: t.access_token }, '/user');
     const session = { token: t.access_token, login: u.login, name: u.name || u.login, avatar: u.avatar_url, email: u.email || '', exp: Date.now() + 7 * 24 * 3600 * 1000 };
-    return redirect(res, '/', [cookie(SESSION_COOKIE, seal(session), 7 * 24 * 3600), cookie(STATE_COOKIE, '', 0)]);
+    return redirect(res, '/', [cookie(SESSION_COOKIE, seal(session), 7 * 24 * 3600)]);
   }
 
   if (path === 'auth/logout' && post) {

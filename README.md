@@ -12,7 +12,7 @@ GitHub API. Builds run on the repository owner's GitHub Actions minutes. Signing
 encrypted Actions secrets (`WB_KEYSTORE_BASE64`, `WB_KEYSTORE_PASSWORD`, `WB_KEY_ALIAS`, `WB_KEY_PASSWORD`).
 
 ## Setup
-1. Create a GitHub OAuth App. Callback URL: `{APP_URL}/api/auth/callback`.
+1. Create a GitHub OAuth App. Callback URL: `{APP_URL}/api/auth/callback`. The OAuth state is signed with `SESSION_SECRET`, so sign-in no longer depends on a state cookie surviving the GitHub redirect.
 2. Create a Vercel KV / Upstash Redis store and link it to the project (provides `KV_REST_API_*`).
 3. Flutterwave v4: create the v4 Client ID, Client Secret and Encryption Key, set a webhook secret hash, and point the webhook at `{APP_URL}/api/billing/webhook`. v4 authenticates server calls with OAuth2 access tokens; the server refreshes them automatically.
 4. Set the env vars in `.env.example` on Vercel (or in `.env.local` for `vercel dev`). Keep `FLW_CLIENT_SECRET` and `FLW_ENCRYPTION_KEY` server-side. The encryption key is returned only to an authenticated WyBuild session so card fields can be encrypted in the browser before submission.
@@ -94,3 +94,22 @@ The initial card flow is:
 Pro entitlements enforced by the server are 5 concurrent build slots and no monthly successful-build cap (represented internally as 9999 to avoid a client-side infinity value). Free remains 5 successful builds/month and 1 concurrent build. Flutter and TWA builds use the same server quota.
 
 Team members, audit logs and webhook configuration are still browser-local in this release; they should not be advertised as server-backed collaboration/RBAC until persistent workspace APIs are added.
+
+
+## Browser-only developer utilities
+
+The Free Developer Utilities Suite is designed to keep usage cost at $0 to WyBuild. The utilities execute in the user's browser and do not call an AI API or upload files to the WyBuild backend.
+
+Included utilities:
+- Android icon generator
+- pubspec.yaml linter and optimization suggestions
+- AndroidManifest permission/security audit
+- keystore command and signing configuration helper
+- ProGuard/R8 rule generator
+- GitHub Actions workflow exporter
+- JSON formatter/validator
+- SHA-256 checksum generator
+- APK/AAB ZIP/package structure inspector
+- Gradle/Android release configuration audit
+
+The APK/AAB inspector and checksum generator process the selected files locally in the browser.

@@ -13,8 +13,13 @@ import {
   AlertTriangle,
   Github,
   FolderArchive,
+  FileJson,
+  Hash,
+  PackageCheck,
+  SearchCheck,
 } from 'lucide-react';
 import { generateAndroidIconZip } from '../../services/iconGenerator';
+import JSZip from 'jszip';
 import {
   analyzePubspec,
   analyzeAndroidManifest,
@@ -29,7 +34,7 @@ interface DevToolsViewProps {
 
 export const DevToolsView: React.FC<DevToolsViewProps> = ({ onOpenExportZip }) => {
   const [activeTool, setActiveTool] = useState<
-    'icon' | 'pubspec' | 'manifest' | 'keystore' | 'proguard' | 'github_actions'
+    'icon' | 'pubspec' | 'manifest' | 'keystore' | 'proguard' | 'github_actions' | 'json' | 'checksum' | 'package' | 'build_audit'
   >('icon');
 
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -173,6 +178,98 @@ dev_dependencies:
   // --- Tool 6: GitHub Actions Exporter ---
   const ghWorkflow = generateGitHubActionsWorkflow('My Flutter App', '3.29.0');
 
+
+  // --- Tool 7: JSON Formatter / Validator ---
+  const [jsonText, setJsonText] = useState(`{
+  "name": "my_flutter_app",
+  "version": "1.0.0",
+  "android": {
+    "minSdk": 23,
+    "targetSdk": 35
+  }
+}`);
+  const [jsonError, setJsonError] = useState('');
+  const [formattedJson, setFormattedJson] = useState('');
+
+  const formatJson = () => {
+    try {
+      const value = JSON.parse(jsonText);
+      const out = JSON.stringify(value, null, 2);
+      setFormattedJson(out);
+      setJsonError('');
+    } catch (e) {
+      setFormattedJson('');
+      setJsonError(e instanceof Error ? e.message : 'Invalid JSON');
+    }
+  };
+
+  // --- Tool 8: SHA-256 Checksum ---
+  const [checksum, setChecksum] = useState('');
+  const [checksumFile, setChecksumFile] = useState('');
+  const handleChecksum = async (file?: File) => {
+    if (!file) return;
+    setChecksumFile(file.name);
+    const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+    setChecksum(Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join(''));
+  };
+
+  // --- Tool 9: APK/AAB Package Inspector ---
+  const [packageReport, setPackageReport] = useState<{
+    name: string; size: number; files: number; dex: number; native: number; assets: number;
+    hasMapping: boolean; hasDebugSymbols: boolean; hasSignature: boolean; hasManifest: boolean;
+  } | null>(null);
+
+  const inspectPackage = async (file?: File) => {
+    if (!file) return;
+    try {
+      const zip = await JSZip.loadAsync(file);
+      const entries = Object.values(zip.files).filter((f) => !f.dir);
+      const names = entries.map((e) => e.name);
+      setPackageReport({
+        name: file.name,
+        size: file.size,
+        files: entries.length,
+        dex: names.filter((n) => /^classes\d*\.dex$/.test(n)).length,
+        native: names.filter((n) => /\.(so)$/.test(n)).length,
+        assets: names.filter((n) => n.startsWith('assets/')).length,
+        hasMapping: names.some((n) => /(^|\/)mapping\.txt$/.test(n)),
+        hasDebugSymbols: names.some((n) => /(^|\/)(symbols|native-debug-symbols)/i.test(n)),
+        hasSignature: names.some((n) => /^META-INF\/.*\.(RSA|DSA|EC)$/.test(n)),
+        hasManifest: names.some((n) => n === 'AndroidManifest.xml'),
+      });
+    } catch {
+      setPackageReport(null);
+    }
+  };
+
+  // --- Tool 10: Flutter/Android Build Audit ---
+  const [buildAuditText, setBuildAuditText] = useState(`android {
+    compileSdk 35
+    defaultConfig {
+        minSdk 23
+        targetSdk 35
+    }
+}
+android {
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+        }
+    }
+}`);
+  const buildAudit = (() => {
+    const t = buildAuditText;
+    const checks = [
+      { label: 'compileSdk 35+', ok: /compileSdk(?:Version)?\s*[\s:=]+(3[5-9]|\d{3,})/.test(t) },
+      { label: 'targetSdk 35+', ok: /targetSdk(?:Version)?\s*[\s:=]+(3[5-9]|\d{3,})/.test(t) },
+      { label: 'Release minification enabled', ok: /minifyEnabled\s+true/.test(t) },
+      { label: 'Release resource shrinking enabled', ok: /shrinkResources\s+true/.test(t) },
+      { label: 'Debug signing not used for release', ok: !/signingConfig\s+signingConfigs\.debug/.test(t) },
+    ];
+    return checks;
+  })();
+
   const tools = [
     { id: 'icon', label: 'App Icon Generator', icon: ImageIcon },
     { id: 'pubspec', label: 'Pubspec Linter', icon: FileCode },
@@ -180,6 +277,10 @@ dev_dependencies:
     { id: 'keystore', label: 'Keystore Command Helper', icon: Key },
     { id: 'proguard', label: 'ProGuard/R8 Rules', icon: Layers },
     { id: 'github_actions', label: 'GitHub Actions Export', icon: Github },
+    { id: 'json', label: 'JSON Formatter', icon: FileJson },
+    { id: 'checksum', label: 'SHA-256 Checksum', icon: Hash },
+    { id: 'package', label: 'APK/AAB Inspector', icon: PackageCheck },
+    { id: 'build_audit', label: 'Build Config Audit', icon: SearchCheck },
   ];
 
   return (
@@ -655,6 +756,86 @@ dev_dependencies:
           <pre className="p-4 bg-slate-950 border border-slate-800 rounded font-mono text-xs text-cyan-300 overflow-x-auto max-h-96">
             {ghWorkflow}
           </pre>
+        </div>
+
+      )}
+
+      {/* TOOL 7: JSON FORMATTER */}
+      {activeTool === 'json' && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-bold text-white">JSON Formatter & Validator</h2>
+              <button onClick={formatJson} className="px-3 py-1.5 text-xs font-semibold rounded bg-cyan-600 text-white">Format & Validate</button>
+            </div>
+            <textarea value={jsonText} onChange={(e) => setJsonText(e.target.value)} rows={20}
+              className="w-full p-3 bg-slate-950 border border-slate-800 rounded font-mono text-xs text-slate-200 focus:border-cyan-500 focus:outline-none" />
+            {jsonError && <p className="text-xs text-rose-300">{jsonError}</p>}
+          </div>
+          <div className="p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-3">
+            <div className="flex justify-between"><h2 className="text-sm font-bold text-white">Formatted output</h2>
+              <button disabled={!formattedJson} onClick={() => copyToClipboard(formattedJson, 'json')} className="text-xs text-cyan-400">{copiedKey === 'json' ? 'Copied' : 'Copy'}</button></div>
+            <pre className="p-3 bg-slate-950 border border-slate-800 rounded font-mono text-xs text-emerald-300 whitespace-pre-wrap overflow-auto max-h-[520px]">{formattedJson || 'Paste JSON and validate it.'}</pre>
+          </div>
+        </div>
+      )}
+
+      {/* TOOL 8: CHECKSUM */}
+      {activeTool === 'checksum' && (
+        <div className="p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-5">
+          <h2 className="text-base font-bold text-white">SHA-256 File Checksum</h2>
+          <p className="text-xs text-slate-400">Compute a cryptographic checksum locally. The file is never uploaded to WyBuild.</p>
+          <input type="file" onChange={(e) => handleChecksum(e.target.files?.[0])}
+            className="w-full text-slate-400 file:mr-3 file:py-2 file:px-3 file:rounded file:border-0 file:bg-slate-800 file:text-cyan-400 text-xs" />
+          {checksum && <div className="p-4 bg-slate-950 border border-slate-800 rounded space-y-2">
+            <div className="text-xs text-slate-400">{checksumFile}</div>
+            <code className="block break-all text-xs text-emerald-300">{checksum}</code>
+            <button onClick={() => copyToClipboard(checksum, 'checksum')} className="text-xs text-cyan-400">{copiedKey === 'checksum' ? 'Copied' : 'Copy SHA-256'}</button>
+          </div>}
+        </div>
+      )}
+
+      {/* TOOL 9: APK/AAB INSPECTOR */}
+      {activeTool === 'package' && (
+        <div className="p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-5">
+          <div>
+            <h2 className="text-base font-bold text-white">APK / AAB Package Inspector</h2>
+            <p className="text-xs text-slate-400 mt-1">Inspect package structure locally without uploading the build.</p>
+          </div>
+          <input type="file" accept=".apk,.aab" onChange={(e) => inspectPackage(e.target.files?.[0])}
+            className="w-full text-slate-400 file:mr-3 file:py-2 file:px-3 file:rounded file:border-0 file:bg-slate-800 file:text-cyan-400 text-xs" />
+          {packageReport && <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+            <div className="p-3 bg-slate-950 border border-slate-800 rounded"><span className="text-slate-400">Size</span><b className="block text-white mt-1">{(packageReport.size / 1048576).toFixed(2)} MB</b></div>
+            <div className="p-3 bg-slate-950 border border-slate-800 rounded"><span className="text-slate-400">Files</span><b className="block text-white mt-1">{packageReport.files}</b></div>
+            <div className="p-3 bg-slate-950 border border-slate-800 rounded"><span className="text-slate-400">DEX files</span><b className="block text-white mt-1">{packageReport.dex}</b></div>
+            <div className="p-3 bg-slate-950 border border-slate-800 rounded"><span className="text-slate-400">Native .so</span><b className="block text-white mt-1">{packageReport.native}</b></div>
+          </div>}
+          {packageReport && <div className="space-y-2 text-xs">
+            {[
+              ['Android manifest present', packageReport.hasManifest],
+              ['Release signature found', packageReport.hasSignature],
+              ['R8 mapping file present', packageReport.hasMapping],
+              ['Native debug symbols included', packageReport.hasDebugSymbols],
+            ].map(([label, ok]) => <div key={String(label)} className={`p-3 rounded border ${ok ? 'border-emerald-800/50 bg-emerald-950/30 text-emerald-300' : 'border-amber-800/50 bg-amber-950/30 text-amber-300'}`}>{ok ? '✓' : '•'} {label}</div>)}
+          </div>}
+        </div>
+      )}
+
+      {/* TOOL 10: BUILD CONFIG AUDIT */}
+      {activeTool === 'build_audit' && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-3">
+            <h2 className="text-sm font-bold text-white">Gradle / Android Build Configuration</h2>
+            <textarea value={buildAuditText} onChange={(e) => setBuildAuditText(e.target.value)} rows={20}
+              className="w-full p-3 bg-slate-950 border border-slate-800 rounded font-mono text-xs text-slate-200 focus:border-cyan-500 focus:outline-none" />
+          </div>
+          <div className="p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-3">
+            <h2 className="text-sm font-bold text-white">Release Readiness Checks</h2>
+            {buildAudit.map((c) => <div key={c.label} className={`p-3 rounded border text-xs ${c.ok ? 'border-emerald-800/50 bg-emerald-950/30 text-emerald-300' : 'border-amber-800/50 bg-amber-950/30 text-amber-300'}`}>
+              <b>{c.ok ? '✓ PASS' : '⚠ REVIEW'}</b><span className="ml-2">{c.label}</span>
+            </div>)}
+            <p className="text-[11px] text-slate-500 pt-2">These checks are deterministic browser-side heuristics, not a replacement for a real Gradle build.</p>
+          </div>
         </div>
       )}
     </div>
