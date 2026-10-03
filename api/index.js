@@ -42,10 +42,13 @@ const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const SECRET_NAMES = ['WB_KEYSTORE_BASE64', 'WB_KEYSTORE_PASSWORD', 'WB_KEY_ALIAS', 'WB_KEY_PASSWORD'];
 
 class HttpError extends Error {
-  constructor(status, message, code) {
+  // extra: { hint?: string, details?: object } shown to the user; never put tokens or secrets in here
+  constructor(status, message, code, extra = {}) {
     super(message);
     this.status = status;
     this.code = code;
+    this.hint = extra.hint;
+    this.details = extra.details;
   }
 }
 
@@ -172,31 +175,75 @@ const utcDay = (d = new Date()) => d.toISOString().slice(0, 10);
 /* --------------------------------- GitHub --------------------------------- */
 
 async function gh(session, path, init = {}) {
-  const r = await fetch(path.startsWith('http') ? path : `https://api.github.com${path}`, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${session.token}`,
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
-      'User-Agent': 'wybuild',
-      ...(init.body ? { 'Content-Type': 'application/json' } : {}),
-      ...(init.headers || {}),
-    },
-  });
-  return r;
+  const url = path.startsWith('http') ? path : `https://api.github.com${path}`;
+  try {
+    return await fetch(url, {
+      ...init,
+      headers: {
+        Authorization: `Bearer ${session.token}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+        'User-Agent': 'wybuild',
+        ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+        ...(init.headers || {}),
+      },
+    });
+  } catch (e) {
+    throw new HttpError(502, `Could not reach GitHub (${e?.cause?.code || e?.message || 'network error'}).`, 'GITHUB_UNREACHABLE', {
+      hint: 'GitHub or the network between Vercel and GitHub is unavailable. Retry in a minute; check githubstatus.com if it keeps happening.',
+      details: { request: `${init.method || 'GET'} ${new URL(url).pathname}` },
+    });
+  }
 }
 
-async function ghJson(session, path, init) {
+// Turns a failed GitHub response into a specific message, a fix hint and a stable error code.
+function describeGithubFailure(r, data, ctx, request) {
+  const status = r.status;
+  const gm = String(data?.message || '').trim();
+  const scopes = r.headers.get('x-oauth-scopes');
+  const granted = scopes === null ? 'unknown' : scopes || 'none';
+  const remaining = r.headers.get('x-ratelimit-remaining');
+  const reset = r.headers.get('x-ratelimit-reset');
+  const where = ctx ? ` while ${ctx}` : '';
+  const writesWorkflow = /\/contents\/\.github\/workflows\//.test(request) && /^(PUT|DELETE)/.test(request);
+  const lacksWorkflowScope = scopes !== null && !scopes.split(/,\s*/).includes('workflow');
+  const details = { request, githubStatus: status, githubMessage: gm || undefined, oauthScopes: granted };
+  if (status === 401) return { code: 'GITHUB_AUTH', message: `GitHub rejected your login${where} (401 ${gm || 'Bad credentials'}).`, hint: 'Sign out of WyBuild and sign in with GitHub again.', details, http: 401 };
+  if (status === 403 && remaining === '0') {
+    const when = reset ? new Date(Number(reset) * 1000).toISOString().slice(11, 16) + ' UTC' : 'shortly';
+    return { code: 'GITHUB_RATE_LIMIT', message: `GitHub API rate limit reached${where}.`, hint: `Wait until about ${when} and retry.`, details, http: 429 };
+  }
+  if ((status === 403 || status === 404) && writesWorkflow && lacksWorkflowScope) {
+    return { code: 'MISSING_WORKFLOW_SCOPE', message: `GitHub refused to write ${request.split('/contents/')[1].split('?')[0]} because your login does not have the "workflow" permission (granted: ${granted}). GitHub reports this as "${status} ${gm || 'Not Found'}".`, hint: 'Sign out of WyBuild and sign in again, approving the "repo" and "workflow" permissions. If you signed in before, also remove WyBuild at github.com/settings/applications and re-authorize.', details, http: 403 };
+  }
+  if (status === 403) return { code: 'GITHUB_FORBIDDEN', message: `GitHub denied access${where}: ${gm || 'forbidden'}.`, hint: /not accessible by integration|resource not accessible/i.test(gm) ? 'The token lacks permission for this action. Re-authorize WyBuild with the repo and workflow scopes.' : 'You need push/admin access to this repository (and its organization may restrict OAuth apps: github.com/settings/connections/applications).', details, http: 403 };
+  if (status === 404) {
+    const repoPart = (/^\w+ \/repos\/([^/]+\/[^/]+)/.exec(request) || [])[1];
+    const what = /\/contents\//.test(request) ? `the file ${request.split('/contents/')[1].split('?')[0]}` : /\/actions\/workflows\//.test(request) ? 'that workflow' : /\/actions\/runs\//.test(request) ? 'that run' : /\/actions\/secrets/.test(request) ? 'the Actions secrets API' : repoPart ? `repository ${repoPart}` : 'the requested resource';
+    return { code: 'GITHUB_NOT_FOUND', message: `GitHub returned 404 for ${what}${where}.`, hint: /\/actions\/secrets/.test(request) ? 'Writing secrets needs admin access to the repository, and the repository must exist under the account you signed in with.' : /\/actions\/workflows\//.test(request) ? 'The workflow file is not committed on that branch yet, or GitHub has not indexed it. Reinstall the workflow, wait a few seconds, and retry. Also check that Actions is enabled for the repository.' : repoPart ? `Either ${repoPart} does not exist, the branch/path is wrong, or your GitHub login cannot see it (private repositories and unauthorized organizations also return 404). Check the spelling and that you signed in as an account with access.` : 'Check the repository, branch and file names.', details, http: 404 };
+  }
+  if (status === 409) return { code: 'GITHUB_CONFLICT', message: `GitHub reported a conflict${where}: ${gm}.`, hint: 'The file or branch changed while WyBuild was writing. Retry; if it persists, the branch may be protected.', details, http: 409 };
+  if (status === 422) {
+    const errs = Array.isArray(data?.errors) ? data.errors.map((e) => (typeof e === 'string' ? e : e.message || e.code)).filter(Boolean).join('; ') : '';
+    return { code: 'GITHUB_VALIDATION', message: `GitHub rejected the request${where}: ${gm}${errs ? ` (${errs})` : ''}.`, hint: /workflow_dispatch|inputs?/i.test(gm + errs) ? 'The workflow in the repo does not match this WyBuild version (missing/renamed inputs). Reinstall the workflow and retry.' : /protected|rule/i.test(gm) ? 'The branch is protected; install the workflow on an unprotected branch or allow the push.' : undefined, details, http: 422 };
+  }
+  return { code: 'GITHUB_ERROR', message: `GitHub error ${status}${where}: ${gm || 'no message'}.`, hint: status >= 500 ? 'GitHub is having trouble. Retry shortly.' : undefined, details, http: 502 };
+}
+
+async function ghJson(session, path, init, ctx = '') {
   const r = await gh(session, path, init);
-  if (r.status === 401) throw new HttpError(401, 'GitHub session expired, sign in again');
   const text = await r.text();
   let data = {};
   try {
     data = text ? JSON.parse(text) : {};
   } catch {
-    data = { message: text };
+    data = { message: text.slice(0, 300) };
   }
-  if (!r.ok) throw new HttpError(r.status === 404 ? 404 : 502, data.message || `GitHub error ${r.status}`, 'GITHUB');
+  if (!r.ok) {
+    const request = `${(init && init.method) || 'GET'} ${path.replace(/^https:\/\/api\.github\.com/, '').split('?')[0]}`;
+    const d = describeGithubFailure(r, data, ctx, request);
+    throw new HttpError(d.http, d.message, d.code, { hint: d.hint, details: d.details });
+  }
   return data;
 }
 
@@ -561,9 +608,17 @@ const STEP_STATUS = (s) => {
 };
 
 const DIAGNOSES = [
+  { re: /Unexpected EOF|stdin|EOF.*prompt|Is a terminal|inquirer|Cannot read.*(?:password|input)/i, category: 'twa_config', title: 'Bubblewrap asked a question and nobody could answer', fix: 'Bubblewrap needed input (usually the keystore password or "update project?"). Check WB_KEYSTORE_PASSWORD and WB_KEY_PASSWORD and re-run the updated TWA workflow.' },
+  { re: /exceeded the maximum execution time|timed out|The operation was canceled|timeout.*bubblewrap|Terminated/i, category: 'twa_config', title: 'Build hung and was stopped (timeout)', fix: 'The failed step ran out of time, most often while signing. Reinstall the TWA workflow (v5 closes stdin and times out with a clear error) and verify the keystore alias/passwords.' },
+  { re: /Cannot open the keystore|keystore was tampered|Keystore was tampered|password was incorrect|Cannot recover key|UnrecoverableKeyException|Invalid keystore format/i, category: 'keystore', title: 'Keystore password, alias or format is wrong', fix: 'Re-upload the keystore with the correct store password, key password and exact (case-sensitive) alias. A .p12 may need the same password for store and key.' },
+  { re: /alias.*does not exist|Alias <.*> does not exist/i, category: 'keystore', title: 'Key alias not found in keystore', fix: 'The alias saved in WB_KEY_ALIAS is not in your keystore. Run keytool -list -keystore <file> locally and re-upload with the exact alias.' },
+  { re: /\.github\/wybuild\/[\w.-]+ is missing|cp: cannot stat '?[^\n]*\.github\/wybuild|Cannot find module[^\n]*\.github\/wybuild/i, category: 'twa_config', title: 'Workflow helper files are missing in the repo', fix: 'Use Update workflow so .github/wybuild/twa-prepare.mjs, twa-generate.mjs and twa-verify.sh are committed alongside the workflow.' },
+  { re: /unbound variable/i, category: 'twa_config', title: 'Workflow script used an undefined variable', fix: 'Your repo has an outdated WyBuild workflow. Use Update workflow and re-run.' },
+  { re: /unknown option|too many arguments|error: missing required/i, category: 'twa_config', title: 'Bubblewrap command-line option rejected', fix: 'Your repo has an outdated WyBuild TWA workflow that passes options Bubblewrap does not accept. Use Update workflow.' },
+  { re: /No such file or directory|ENOENT[^\n]*/i, category: 'twa_config', title: 'A required file was not found', fix: 'The error line names the missing path. If it is under .github/wybuild or twa-manifest.json, update the workflow; if it is under android/ or pubspec.yaml, check the branch contents.' },
   { re: /Store-ready mode|store-readiness|WB_KEYSTORE_BASE64 secret is missing|Signed with the Android debug|key-continuity/i, category: 'keystore', title: 'Not ready for APKMirror / Uptodown', fix: 'Open the store-readiness report in the artifact or job summary. Typical fixes: upload your own release keystore, keep the same key as earlier releases, and avoid com.example-style package ids.' },
-  { re: /No app icon|icon.*manifest|bubblewrap build failed|Invalid TWA manifest|Invalid Android package id/i, category: 'twa_config', title: 'TWA setup is incomplete', fix: 'The website needs a valid Web App Manifest, a usable app icon (512px recommended), and a stable package ID. WyBuild now generates the package ID from the domain for free.' },
-  { re: /key\.properties|keystore|Keystore was tampered|WB_KEYSTORE/i, category: 'keystore', title: 'Release signing problem', fix: 'Use the same release keystore as the previous APK and confirm the four WB_KEYSTORE_* GitHub Actions secrets are present.' },
+  { re: /No app icon|app icon|Invalid TWA manifest|Invalid Android package id|No Web App Manifest|Web App Manifest returned HTTP|Web app returned HTTP|must use HTTPS/i, category: 'twa_config', title: 'The website or its manifest is not usable', fix: 'The site must be reachable over HTTPS, publish a Web App Manifest, and include a PNG icon of at least 192px (512px recommended).' },
+  { re: /key\.properties|WB_KEYSTORE/i, category: 'keystore', title: 'Release signing problem', fix: 'Use the same release keystore as the previous APK and confirm the four WB_KEYSTORE_* GitHub Actions secrets are present.' },
   { re: /version solving failed|Could not resolve|pub get failed/i, category: 'dependency', title: 'Dependency resolution failed', fix: 'Run flutter pub get locally, commit pubspec.lock, and check SDK constraints in pubspec.yaml.' },
   { re: /compileSdk|Android SDK|NDK|Unsupported class file major version/i, category: 'gradle', title: 'Android Gradle / SDK mismatch', fix: 'Align compileSdk, AGP and Gradle versions with the Flutter version used for the build.' },
   { re: /Flutter SDK|requires Dart SDK|Dart SDK version/i, category: 'flutter_sdk', title: 'Flutter / Dart SDK version mismatch', fix: 'Pin a Flutter version that satisfies the sdk constraint in pubspec.yaml.' },
@@ -617,9 +672,11 @@ async function runDetail(session, repo, id) {
       };
     });
     if (build.status === 'failed') {
-      const all = build.steps.flatMap((s) => s.logs).join('\n');
-      const hit = DIAGNOSES.find((d) => d.re.test(all));
       const failedStep = build.steps.find((s) => s.status === 'failed');
+      // match against the failed step first so unrelated log lines from earlier steps cannot cause a wrong diagnosis
+      const failedText = failedStep ? failedStep.logs.join('\n') : '';
+      const all = build.steps.flatMap((s) => s.logs).join('\n');
+      const hit = DIAGNOSES.find((d) => d.re.test(failedText)) || (failedStep ? undefined : DIAGNOSES.find((d) => d.re.test(all)));
       if (hit || failedStep) {
         build.errorDiagnosis = {
           id: `diag-${id}`,
@@ -627,7 +684,7 @@ async function runDetail(session, repo, id) {
           category: hit ? hit.category : 'gradle',
           severity: 'critical',
           matchedPattern: failedStep?.error || failedStep?.name || '',
-          description: failedStep?.error || 'The build failed. Open the failed step logs for details.',
+          description: `${failedStep ? `Failed at step "${failedStep.name}". ` : ''}${failedStep?.error || [...(failedStep?.logs || [])].reverse().find((l) => /error|fail|denied|not found|no such|timed? ?out/i.test(l)) || 'Open the step logs for details.'}`.slice(0, 600),
           suggestedFix: hit ? hit.fix : 'Inspect the failing step logs; re-run once fixed.',
           autoFixAvailable: false,
         };
@@ -1130,16 +1187,28 @@ async function route(req, res, path, query) {
     const { repo, branch, kind } = bodyOf(req);
     checkRepo(repo);
     const k = WORKFLOW_KINDS[kindOf(kind)];
-    const target = branch || (await ghJson(session, `/repos/${repo}`)).default_branch;
+    const target = branch || (await ghJson(session, `/repos/${repo}`, undefined, `looking up ${repo}`)).default_branch;
+    // a missing "workflow" scope shows up as a confusing 404 from GitHub, so check it up front
+    const who = await gh(session, '/user');
+    const sc = who.headers.get('x-oauth-scopes');
+    if (sc !== null && !sc.split(/,\s*/).includes('workflow')) {
+      throw new HttpError(403, `Your GitHub login is missing the "workflow" permission (granted: ${sc || 'none'}), so WyBuild cannot write .github/workflows files.`, 'MISSING_WORKFLOW_SCOPE', {
+        hint: 'Sign out of WyBuild and sign in again, approving the "repo" and "workflow" permissions.',
+        details: { oauthScopes: sc || 'none' },
+      });
+    }
     // commit the workflow first, helper scripts after it; the contents API needs one request per file
     for (const [repoPath, localPath] of k.files) {
       const content = fs.readFileSync(new URL(`../workflow/${localPath}`, import.meta.url), 'utf8');
       const ex = await gh(session, `/repos/${repo}/contents/${repoPath}?ref=${encodeURIComponent(target)}`);
+      if (!ex.ok && ex.status !== 404) {
+        await ghJson(session, `/repos/${repo}/contents/${repoPath}?ref=${encodeURIComponent(target)}`, undefined, `checking ${repoPath} on branch ${target}`);
+      }
       const sha = ex.ok ? (await ex.json()).sha : undefined;
       await ghJson(session, `/repos/${repo}/contents/${repoPath}`, {
         method: 'PUT',
         body: JSON.stringify({ message: `ci: ${sha ? 'update' : 'add'} WyBuild ${kindOf(kind) === 'twa' ? 'TWA ' : ''}workflow (${repoPath.split('/').pop()})`, content: Buffer.from(content).toString('base64'), branch: target, ...(sha ? { sha } : {}) }),
-      });
+      }, `writing ${repoPath} to branch ${target}`);
     }
     return send(res, 200, { ok: true, branch: target });
   }
@@ -1156,11 +1225,11 @@ async function route(req, res, path, query) {
     if (!/^(stable|beta|\d+\.\d+\.\d+)$/.test(flutterVersion)) throw new HttpError(400, 'Flutter version must be stable, beta, or like 3.29.0');
 
     const wf = await gh(session, `/repos/${repo}/contents/${WORKFLOW_PATH}?ref=${encodeURIComponent(branch)}`);
-    if (wf.status === 404) throw new HttpError(409, 'WyBuild workflow is not installed on this branch', 'NO_WORKFLOW');
+    if (wf.status === 404) throw new HttpError(409, `The WyBuild workflow (${WORKFLOW_PATH}) is not on branch "${branch}" of ${repo}.`, 'NO_WORKFLOW', { hint: 'Reconnect the project to install the workflow, or commit it to that branch.' });
 
     if (c.useKeystore) {
       const sec = await ghJson(session, `/repos/${repo}/actions/secrets?per_page=100`);
-      if (!(sec.secrets || []).some((s) => s.name === 'WB_KEYSTORE_BASE64')) throw new HttpError(400, 'No keystore uploaded for this repository', 'NO_KEYSTORE');
+      if (!(sec.secrets || []).some((s) => s.name === 'WB_KEYSTORE_BASE64')) throw new HttpError(400, `No keystore secret (WB_KEYSTORE_BASE64) exists on ${repo}.`, 'NO_KEYSTORE', { hint: 'Add your release keystore under Keystores & Config for this exact repository.' });
     }
 
     const reservation = await reserveBuildSlot(session, repo);
@@ -1190,7 +1259,8 @@ async function route(req, res, path, query) {
     if (r.status !== 204) {
       await kv.decr(inflightKey);
       const e = await r.json().catch(() => ({}));
-      throw new HttpError(502, e.message || `GitHub refused the dispatch (${r.status})`);
+      const d = describeGithubFailure(r, e, `starting the build on branch ${branch}`, `POST /repos/${repo}/actions/workflows/<workflow>/dispatches`);
+      throw new HttpError(d.http === 404 ? 409 : d.http, d.code === 'GITHUB_NOT_FOUND' ? `GitHub cannot find the workflow on branch "${branch}" of ${repo} (404).` : d.message, d.code === 'GITHUB_NOT_FOUND' ? 'WORKFLOW_NOT_DISPATCHABLE' : d.code, { hint: d.code === 'GITHUB_NOT_FOUND' ? 'The workflow file must exist on that exact branch and contain "on: workflow_dispatch". Reinstall the workflow for that branch, make sure Actions is enabled in the repo settings, then retry.' : d.hint, details: d.details });
     }
     return send(res, 200, { ok: true });
   }
@@ -1233,10 +1303,17 @@ async function route(req, res, path, query) {
     if (storeReady && !useKeystore) throw new HttpError(400, 'Store-ready builds must be signed with your own release keystore');
 
     const wf = await gh(session, `/repos/${repo}/contents/${TWA_WORKFLOW_PATH}?ref=${encodeURIComponent(branch)}`);
-    if (wf.status === 404) throw new HttpError(409, 'The WyBuild TWA workflow is not installed on this branch', 'NO_WORKFLOW');
+    if (wf.status === 404) throw new HttpError(409, `The WyBuild TWA workflow (${TWA_WORKFLOW_PATH}) is not on branch "${branch}" of ${repo}.`, 'NO_WORKFLOW', { hint: 'Open Web to Android, pick this repo and use Update workflow to install it.' });
+    const missingHelpers = [];
+    for (const [repoPath] of WORKFLOW_KINDS.twa.files.slice(1)) {
+      const hr = await gh(session, `/repos/${repo}/contents/${repoPath}?ref=${encodeURIComponent(branch)}`);
+      if (hr.status === 404) missingHelpers.push(repoPath);
+      else if (!hr.ok) await ghJson(session, `/repos/${repo}/contents/${repoPath}?ref=${encodeURIComponent(branch)}`, undefined, `checking ${repoPath}`);
+    }
+    if (missingHelpers.length) throw new HttpError(409, `The TWA workflow is installed but these helper files are missing on branch "${branch}": ${missingHelpers.join(', ')}.`, 'MISSING_HELPER_FILES', { hint: 'The build would fail with "No such file". Use Update workflow to commit all four WyBuild TWA files, then retry.', details: { missing: missingHelpers } });
     if (useKeystore) {
       const sec = await ghJson(session, `/repos/${repo}/actions/secrets?per_page=100`);
-      if (!(sec.secrets || []).some((s) => s.name === 'WB_KEYSTORE_BASE64')) throw new HttpError(400, 'No keystore uploaded for this repository. Add one under Keystores & Config.', 'NO_KEYSTORE');
+      if (!(sec.secrets || []).some((s) => s.name === 'WB_KEYSTORE_BASE64')) throw new HttpError(400, `No keystore secret (WB_KEYSTORE_BASE64) exists on ${repo}.`, 'NO_KEYSTORE', { hint: 'Add your release keystore under Keystores & Config for this exact repository.' });
     }
 
     const reservation = await reserveBuildSlot(session, repo);
@@ -1258,7 +1335,8 @@ async function route(req, res, path, query) {
     if (r.status !== 204) {
       await kv.decr(inflightKey);
       const e = await r.json().catch(() => ({}));
-      throw new HttpError(502, e.message || `GitHub refused the dispatch (${r.status})`);
+      const d = describeGithubFailure(r, e, `starting the build on branch ${branch}`, `POST /repos/${repo}/actions/workflows/<workflow>/dispatches`);
+      throw new HttpError(d.http === 404 ? 409 : d.http, d.code === 'GITHUB_NOT_FOUND' ? `GitHub cannot find the workflow on branch "${branch}" of ${repo} (404).` : d.message, d.code === 'GITHUB_NOT_FOUND' ? 'WORKFLOW_NOT_DISPATCHABLE' : d.code, { hint: d.code === 'GITHUB_NOT_FOUND' ? 'The workflow file must exist on that exact branch and contain "on: workflow_dispatch". Reinstall the workflow for that branch, make sure Actions is enabled in the repo settings, then retry.' : d.hint, details: d.details });
     }
     return send(res, 200, { ok: true });
   }
@@ -1296,7 +1374,7 @@ async function route(req, res, path, query) {
     if (!/^\d+$/.test(query.id || '')) throw new HttpError(400, 'Invalid artifact id');
     const r = await gh(session, `/repos/${repo}/actions/artifacts/${query.id}/zip`, { redirect: 'manual' });
     const loc = r.headers.get('location');
-    if (!loc) throw new HttpError(404, 'Artifact not found or expired');
+    if (!loc) throw new HttpError(404, `GitHub has no downloadable artifact ${query.id} in ${repo} (HTTP ${r.status}).`, 'ARTIFACT_GONE', { hint: 'Artifacts expire after the repository retention period (default 90 days) or when the run is deleted. Rebuild to get a fresh one.' });
     return redirect(res, loc);
   }
 
@@ -1333,7 +1411,7 @@ async function route(req, res, path, query) {
     return send(res, 200, { ok: true });
   }
 
-  throw new HttpError(404, 'Not found');
+  throw new HttpError(404, `Unknown WyBuild API route: ${m} /api/${path}`, 'UNKNOWN_ROUTE', { hint: 'The frontend and API are out of sync (stale deployment or cached page). Redeploy and hard-refresh.', details: { route: `${m} /api/${path}` } });
 }
 
 export default async function handler(req, res) {
@@ -1344,6 +1422,11 @@ export default async function handler(req, res) {
   } catch (e) {
     if (!(e instanceof HttpError)) console.error(e);
     if (res.headersSent) return res.end();
-    send(res, e.status || 500, { error: e instanceof HttpError ? e.message : 'Internal error', ...(e.code ? { code: e.code } : {}) });
+    send(res, e.status || 500, {
+      error: e instanceof HttpError ? e.message : `Unexpected server error: ${String(e?.message || e).slice(0, 200)}`,
+      ...(e.code ? { code: e.code } : e instanceof HttpError ? {} : { code: 'INTERNAL' }),
+      ...(e.hint ? { hint: e.hint } : {}),
+      ...(e.details ? { details: e.details } : {}),
+    });
   }
 }

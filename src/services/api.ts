@@ -3,22 +3,47 @@ import { AuthUser, BillingCycle, BuildConfiguration, BuildKind, BuildRecord, Key
 export class ApiError extends Error {
   status: number;
   code?: string;
-  constructor(message: string, status: number, code?: string) {
-    super(message);
+  hint?: string;
+  details?: Record<string, unknown>;
+  /** the bare cause, without the hint appended */
+  reason: string;
+  constructor(message: string, status: number, code?: string, hint?: string, details?: Record<string, unknown>) {
+    super(hint ? `${message} Fix: ${hint}` : message);
+    this.reason = message;
     this.status = status;
     this.code = code;
+    this.hint = hint;
+    this.details = details;
   }
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const res = await fetch(`/api/${path}`, {
-    credentials: 'same-origin',
-    ...init,
-    headers: init.body ? { 'Content-Type': 'application/json' } : undefined,
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError(data.error || res.statusText, res.status, data.code);
-  return data as T;
+  const method = init.method || 'GET';
+  const where = `${method} /api/${path.split('?')[0]}`;
+  let res: Response;
+  try {
+    res = await fetch(`/api/${path}`, {
+      credentials: 'same-origin',
+      ...init,
+      headers: init.body ? { 'Content-Type': 'application/json' } : undefined,
+    });
+  } catch {
+    throw new ApiError(`Could not reach the WyBuild server (${where}).`, 0, 'NETWORK', navigator.onLine ? 'The server may be redeploying or blocked by an extension/VPN. Retry in a few seconds.' : 'You appear to be offline.');
+  }
+  const raw = await res.text();
+  let data: any = {};
+  try { data = raw ? JSON.parse(raw) : {}; } catch { data = null; }
+  if (!res.ok) {
+    if (data === null) {
+      // the response was not our JSON error: a platform page (Vercel 404/500/timeout) rather than the app
+      const platform = res.status === 404 ? 'The API route does not exist on this deployment (the serverless function was not deployed or vercel.json rewrites are missing).'
+        : res.status === 504 || res.status === 408 ? 'The server function timed out.'
+        : res.status >= 500 ? 'The server function crashed before it could respond; check the Vercel function logs.' : '';
+      throw new ApiError(`${where} returned HTTP ${res.status} ${res.statusText} with a non-JSON body.`, res.status, 'NON_JSON_RESPONSE', platform || undefined);
+    }
+    throw new ApiError(data.error || `${where} failed with HTTP ${res.status} ${res.statusText}.`, res.status, data.code, data.hint, data.details);
+  }
+  return (data ?? {}) as T;
 }
 
 const post = <T,>(path: string, body: unknown) => request<T>(path, { method: 'POST', body: JSON.stringify(body) });

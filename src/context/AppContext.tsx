@@ -398,7 +398,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       try {
         await dispatch();
       } catch (e) {
-        if (!(e instanceof ApiError && e.code === 'NO_WORKFLOW')) throw e;
+        if (!(e instanceof ApiError && (e.code === 'NO_WORKFLOW' || e.code === 'MISSING_HELPER_FILES'))) throw e;
         await api.installWorkflow(repo, ref, kind);
         showToast('Build workflow prepared. Starting build...');
         // GitHub can take a few seconds to register a freshly committed workflow; retry only transient dispatch failures.
@@ -411,7 +411,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             break;
           } catch (err) {
             lastErr = err;
-            if (!(err instanceof ApiError) || err.code || ![404, 422, 502].includes(err.status)) break;
+            const transient = ['NO_WORKFLOW', 'MISSING_HELPER_FILES', 'WORKFLOW_NOT_DISPATCHABLE', 'GITHUB_VALIDATION', 'GITHUB_ERROR', 'GITHUB_NOT_FOUND'];
+            if (!(err instanceof ApiError) || (err.code ? !transient.includes(err.code) : ![404, 422, 502].includes(err.status))) break;
           }
         }
         if (lastErr) throw lastErr;

@@ -1,11 +1,11 @@
 import React from 'react';
 import { useApp } from '../context/AppContext';
-import { Home, Terminal, Wrench, KeyRound, CreditCard, Sparkles, Server, X, Smartphone } from 'lucide-react';
+import { Home, Terminal, Wrench, KeyRound, CreditCard, Sparkles, Server, X, Smartphone, LogOut } from 'lucide-react';
 
 interface SidebarProps { open: boolean; onClose: () => void; }
 
 export const Sidebar: React.FC<SidebarProps> = ({ open, onClose }) => {
-  const { currentTab, setCurrentTab, subscription, rateLimits } = useApp();
+  const { currentTab, setCurrentTab, subscription, rateLimits, user, logout } = useApp();
   const isPro = subscription.plan === 'pro';
   const go = (id: string, tool?: string) => {
     setCurrentTab(id as any);
@@ -32,6 +32,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, onClose }) => {
         {!isPro && <button onClick={() => go('billing')} className="w-full mt-3 px-3 py-3 rounded-lg border border-emerald-400/15 bg-emerald-400/[.04] text-left"><div className="flex gap-2 items-center text-emerald-300 text-xs font-semibold"><Sparkles className="w-4 h-4"/>Pro automation</div><div className="text-[11px] text-slate-500 mt-1">Automate repetitive build work.</div></button>}
       </nav>
       <div className="m-3 p-3 rounded-lg bg-white/[.02] border border-white/[.05] text-[11px] text-slate-500"><div className="flex justify-between"><span>{isPro ? 'Pro' : 'Free builds'}</span><span className="text-slate-300 font-mono">{isPro ? 'Active' : `${rateLimits.monthlyBuildsUsed}/${rateLimits.monthlyLimit}`}</span></div></div>
+      {user && <div className="mx-3 mb-3 pt-3 border-t border-white/[.05]">
+        <div className="px-1 pb-2 text-[11px] text-slate-500 truncate">Signed in as <span className="text-slate-300 font-mono">{user.login}</span></div>
+        <button onClick={() => { void logout(); }} className="w-full min-h-11 px-3 rounded-lg flex items-center gap-3 text-sm text-slate-400 hover:bg-red-400/10 hover:text-red-300"><LogOut className="w-4 h-4"/><span>Sign out</span></button>
+      </div>}
     </aside>
   </>;
 };
