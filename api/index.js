@@ -903,12 +903,10 @@ async function route(req, res, path, query) {
       throw new HttpError(400, 'Invalid or expired OAuth state. Please start GitHub sign-in again.');
     }
 
-    // Complete the OAuth exchange on the callback request, but do not rely on
-    // that request's hostname to carry the session cookie. Vercel can redirect
-    // a deployment hostname to a custom/canonical hostname after this response.
-    // In that case a host-only cookie would be lost when the browser follows
-    // the redirect. A short-lived encrypted handoff ticket fixes that while
-    // keeping the GitHub access token out of the browser URL.
+    // Exchange the code and set the session cookie right here. The browser is
+    // then sent to a relative '/', so it stays on the exact host that received
+    // the cookie. No KV store or second hop is involved, so a missing/unlinked
+    // KV store can no longer break sign-in.
     const callbackUrl = `${appUrl(req)}/api/auth/callback`;
     const tr = await fetch('https://github.com/login/oauth/access_token', {
       method: 'POST',
@@ -919,10 +917,7 @@ async function route(req, res, path, query) {
     if (!t.access_token) throw new HttpError(400, t.error_description || 'GitHub sign-in failed');
     const u = await ghJson({ token: t.access_token }, '/user');
     const session = { token: t.access_token, login: u.login, name: u.name || u.login, avatar: u.avatar_url, email: u.email || '', exp: Date.now() + 7 * 24 * 3600 * 1000 };
-
-    const ticket = crypto.randomBytes(24).toString('base64url');
-    await kv.set(`wb:oauth-ticket:${ticket}`, seal({ session, exp: Date.now() + 60 * 1000 }), { ex: 60 });
-    return redirect(res, `${appUrlFromEnv()}/api/auth/complete?ticket=${encodeURIComponent(ticket)}`);
+    return redirect(res, '/', [cookie(SESSION_COOKIE, seal(session), 7 * 24 * 3600)]);
   }
 
   if (path === 'auth/complete') {
