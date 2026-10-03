@@ -1,0 +1,23 @@
+{
+  "functions": {
+    "api/index.js": {
+      "includeFiles": "{workflow,lib}/**",
+      "maxDuration": 30
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "/api/index.js"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/billing/renew",
+      "schedule": "17 1 * * *"
+    }
+  ],
+  "buildCommand": "bash vercel-build.sh",
+  "outputDirectory": "dist",
+  "framework": "vite"
+}

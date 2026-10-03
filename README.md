@@ -13,7 +13,7 @@ encrypted Actions secrets (`WB_KEYSTORE_BASE64`, `WB_KEYSTORE_PASSWORD`, `WB_KEY
 
 ## Setup
 1. Create a GitHub OAuth App. Callback URL: `{APP_URL}/api/auth/callback`. The OAuth state is signed with `SESSION_SECRET`, so sign-in no longer depends on a state cookie surviving the GitHub redirect.
-2. Create a Vercel KV / Upstash Redis store and link it to the project (provides `KV_REST_API_*`).
+2. Create a Supabase project, run `supabase/schema.sql` in its SQL Editor, then set `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` (Project Settings -> API) in Vercel. Never expose the service-role key to the browser.
 3. Flutterwave v4: create the v4 Client ID, Client Secret and Encryption Key, set a webhook secret hash, and point the webhook at `{APP_URL}/api/billing/webhook`. v4 authenticates server calls with OAuth2 access tokens; the server refreshes them automatically.
 4. Set the env vars in `.env.example` on Vercel (or in `.env.local` for `vercel dev`). Keep `FLW_CLIENT_SECRET` and `FLW_ENCRYPTION_KEY` server-side. The encryption key is returned only to an authenticated WyBuild session so card fields can be encrypted in the browser before submission.
 5. Deploy to Vercel (Production env vars must be set before the first deploy; changing them later needs a redeploy). The billing renewal job runs daily through the Vercel Cron entry in `vercel.json`. Set `CRON_SECRET` so only the cron job can invoke `/api/billing/renew`.
