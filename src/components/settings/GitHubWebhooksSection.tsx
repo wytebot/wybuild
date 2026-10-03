@@ -267,7 +267,7 @@ export const GitHubWebhooksSection: React.FC = () => {
                         <span>{copiedKey === `url-${wh.id}` ? 'Copied!' : 'Copy URL'}</span>
                       </button>
                     </div>
-                    <p className="font-mono text-slate-200 text-xs truncate select-all">{wh.webhookUrl}</p>
+                    <p className="font-mono text-slate-200 text-xs break-words select-all">{wh.webhookUrl}</p>
                   </div>
 
                   {/* Secret */}
@@ -298,7 +298,7 @@ export const GitHubWebhooksSection: React.FC = () => {
                         </button>
                       </div>
                     </div>
-                    <p className="font-mono text-slate-200 text-xs truncate select-all">
+                    <p className="font-mono text-slate-200 text-xs break-words select-all">
                       {isSecretVisible ? wh.secret : '••••••••••••••••••••••••••••••••••••••••'}
                     </p>
                   </div>
@@ -349,7 +349,7 @@ export const GitHubWebhooksSection: React.FC = () => {
 
         <div className="bg-slate-950 border border-slate-800 rounded-lg overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+            <table className="w-full min-w-[34rem] text-left text-xs">
               <thead className="bg-slate-900 border-b border-slate-800 text-slate-400 font-mono text-[10px] uppercase">
                 <tr>
                   <th className="py-2.5 px-4">Status</th>
@@ -390,9 +390,9 @@ export const GitHubWebhooksSection: React.FC = () => {
                     </td>
 
                     <td className="py-2.5 px-4">
-                      <div className="flex items-center gap-1.5 max-w-sm truncate">
+                      <div className="flex items-center gap-1.5 break-words">
                         <span className="font-mono text-cyan-400 text-[11px]">{del.commitHash}</span>
-                        <span className="text-slate-400 truncate text-xs">{del.commitMessage}</span>
+                        <span className="text-slate-400 break-words text-xs">{del.commitMessage}</span>
                       </div>
                     </td>
 
@@ -428,8 +428,8 @@ export const GitHubWebhooksSection: React.FC = () => {
 
       {/* MODAL: GENERATE NEW WEBHOOK */}
       {showCreateModal && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 max-w-lg w-full space-y-5 shadow-2xl">
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-800 rounded-t-2xl sm:rounded-xl p-4 sm:p-6 max-w-lg w-full max-h-[92dvh] overflow-y-auto overscroll-contain space-y-5 shadow-2xl">
             <div className="flex items-center justify-between pb-3 border-b border-slate-800">
               <div className="flex items-center gap-2">
                 <Webhook className="w-4 h-4 text-cyan-400" />
@@ -476,7 +476,7 @@ export const GitHubWebhooksSection: React.FC = () => {
                 </span>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-slate-300 font-medium mb-1">Output Target Binary</label>
                   <select
@@ -539,8 +539,8 @@ export const GitHubWebhooksSection: React.FC = () => {
 
       {/* MODAL: CONFIGURE / EDIT WEBHOOK */}
       {editingWebhook && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 max-w-lg w-full space-y-5 shadow-2xl">
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-800 rounded-t-2xl sm:rounded-xl p-4 sm:p-6 max-w-lg w-full max-h-[92dvh] overflow-y-auto overscroll-contain space-y-5 shadow-2xl">
             <div className="flex items-center justify-between pb-3 border-b border-slate-800">
               <h3 className="text-base font-bold text-white">Configure Webhook: {editingWebhook.projectName}</h3>
               <button
@@ -569,7 +569,7 @@ export const GitHubWebhooksSection: React.FC = () => {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-slate-300 font-medium mb-1">Output Target</label>
                   <select

@@ -77,8 +77,8 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({ isOpen, onClos
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 max-w-xl w-full space-y-5 shadow-2xl">
+    <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 overflow-y-auto">
+      <div className="bg-slate-900 border border-slate-800 rounded-t-2xl sm:rounded-xl p-4 sm:p-6 max-w-xl w-full max-h-[92dvh] overflow-y-auto overscroll-contain space-y-5 shadow-2xl">
         <div className="flex items-center justify-between pb-3 border-b border-slate-800">
           <div className="flex items-center gap-2">
             <Github className="w-5 h-5 text-cyan-400" />
@@ -120,8 +120,8 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({ isOpen, onClos
                 onClick={() => handleSelectPreset(p.name, p.desc)}
                 className="p-2.5 rounded bg-slate-950 border border-slate-800 hover:border-cyan-500/50 text-left transition text-xs cursor-pointer"
               >
-                <p className="font-semibold text-white truncate">{p.name.split('/')[1]}</p>
-                <p className="text-[10px] text-slate-400 truncate mt-0.5">{p.desc}</p>
+                <p className="font-semibold text-white break-words">{p.name.split('/')[1]}</p>
+                <p className="text-[10px] text-slate-400 break-words mt-0.5">{p.desc}</p>
               </button>
             ))}
           </div>
@@ -162,7 +162,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({ isOpen, onClos
             </datalist>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-slate-300 mb-1 font-medium">Default Branch</label>
               <input
@@ -188,7 +188,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({ isOpen, onClos
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-slate-300 mb-1 font-medium">Target Binary Format</label>
               <select

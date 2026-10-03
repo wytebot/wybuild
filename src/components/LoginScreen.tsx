@@ -2,7 +2,7 @@ import React from 'react';
 import { Github } from 'lucide-react';
 
 export const LoginScreen: React.FC = () => (
-  <div className="h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-6">
+  <div className="min-h-dvh bg-slate-950 text-slate-100 flex items-center justify-center p-4 sm:p-6">
     <div className="max-w-sm w-full space-y-6 text-center">
       <div>
         <h1 className="text-2xl font-bold tracking-tight text-white">WyBuild</h1>

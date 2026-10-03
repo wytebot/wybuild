@@ -39,7 +39,7 @@ export const ErrorTelemetryView: React.FC = () => {
   });
 
   return (
-    <div className="p-8 max-w-7xl mx-auto space-y-8">
+    <div className="p-3 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-5 sm:space-y-8">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-800">
         <div>
@@ -103,7 +103,7 @@ export const ErrorTelemetryView: React.FC = () => {
           filtered.map((item) => (
             <div
               key={item.buildId}
-              className="p-6 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 transition space-y-4"
+              className="p-4 sm:p-6 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 transition space-y-4"
             >
               <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
                 <div>

@@ -32,8 +32,8 @@ export const QuickBuildModal: React.FC<QuickBuildModalProps> = ({ isOpen, onClos
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 max-w-md w-full space-y-5 shadow-2xl">
+    <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 overflow-y-auto">
+      <div className="bg-slate-900 border border-slate-800 rounded-t-2xl sm:rounded-xl p-4 sm:p-6 max-w-md w-full max-h-[92dvh] overflow-y-auto overscroll-contain space-y-5 shadow-2xl">
         <div className="flex items-center justify-between pb-3 border-b border-slate-800">
           <div className="flex items-center gap-2">
             <Play className="w-4 h-4 text-emerald-400 fill-emerald-400" />

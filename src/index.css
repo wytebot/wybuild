@@ -29,3 +29,16 @@
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(148, 163, 184, 0.6);
 }
+
+/* ---- Mobile-first safeguards ---- */
+@layer base {
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; }
+  body { overflow-wrap: anywhere; overscroll-behavior-y: none; }
+  /* 16px inputs on phones stop iOS/Android from zooming the page on focus */
+  @media (max-width: 639px) {
+    input, select, textarea { font-size: 16px !important; }
+  }
+  /* long code/log lines wrap instead of forcing sideways scroll of the whole page */
+  pre { white-space: pre-wrap; word-break: break-word; }
+  button, a, [role="button"] { touch-action: manipulation; }
+}

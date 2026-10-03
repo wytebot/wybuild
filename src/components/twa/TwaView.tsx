@@ -208,7 +208,7 @@ export const TwaView: React.FC = () => {
     lvl === 'ok' ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" /> : lvl === 'warn' ? <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" /> : <XCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />;
 
   return (
-    <div className="p-6 max-w-5xl mx-auto space-y-5 text-xs">
+    <div className="p-3 sm:p-6 max-w-5xl mx-auto space-y-4 sm:space-y-5 text-xs">
       <div>
         <h1 className="text-xl font-bold text-white flex items-center gap-2">
           <Smartphone className="w-5 h-5 text-cyan-400" />
@@ -285,7 +285,7 @@ export const TwaView: React.FC = () => {
             <input className={`${input} font-mono`} value={cfg.packageId} onChange={(e) => set('packageId', e.target.value.trim())} placeholder="com.yourbrand.app" />
             <p className="text-[11px] text-slate-500 mt-1">Permanent. It identifies your app on every device and store; never reuse com.example.*.</p>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className={label}>Version name</label>
               <input className={`${input} font-mono`} value={cfg.versionName} onChange={(e) => set('versionName', e.target.value)} />

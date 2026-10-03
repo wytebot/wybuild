@@ -53,7 +53,7 @@ export const SettingsView: React.FC = () => {
   };
 
   return (
-    <div className="p-8 max-w-7xl mx-auto space-y-8">
+    <div className="p-3 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-5 sm:space-y-8">
       {/* Header */}
       <div className="pb-6 border-b border-slate-800">
         <h1 className="text-2xl font-bold tracking-tight text-white">Settings & Credentials</h1>
@@ -101,7 +101,7 @@ export const SettingsView: React.FC = () => {
 
       {/* SECTION 2: KEYSTORE MANAGEMENT */}
       {activeSection === 'keystores' && (
-      <div className="p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-5">
+      <div className="p-4 sm:p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-5">
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-base font-bold text-white flex items-center gap-2">
@@ -142,7 +142,7 @@ export const SettingsView: React.FC = () => {
                   <span>·</span>
                   <span>Validity: {k.validityYears} years</span>
                 </div>
-                <div className="text-slate-500 font-mono text-[10px] truncate max-w-xl">
+                <div className="text-slate-500 font-mono text-[10px] break-all">
                   {k.fingerprintSha256}
                 </div>
               </div>
@@ -164,8 +164,8 @@ export const SettingsView: React.FC = () => {
 
       {/* Modal: Add Keystore */}
       {showAddKeystore && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 max-w-md w-full space-y-4 shadow-2xl">
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-800 rounded-t-2xl sm:rounded-xl p-4 sm:p-6 max-w-md w-full max-h-[92dvh] overflow-y-auto overscroll-contain space-y-4 shadow-2xl">
             <h3 className="text-base font-bold text-white">Upload / Register Release Keystore</h3>
 
             <form onSubmit={handleSaveKeystore} className="space-y-4 text-xs">

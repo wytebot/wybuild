@@ -33,9 +33,9 @@ export const BuildsView: React.FC = () => {
   const isRunning = selectedBuild?.status === 'running';
 
   return (
-    <div className="h-full flex flex-col md:flex-row overflow-hidden">
+    <div className="h-full flex flex-col md:flex-row overflow-y-auto md:overflow-hidden">
       {/* Left List Pane: Builds Queue & History */}
-      <div className="w-full md:w-80 lg:w-96 border-r border-slate-800 bg-slate-950 flex flex-col shrink-0 overflow-y-auto">
+      <div className="w-full md:w-80 lg:w-96 border-b md:border-b-0 md:border-r border-slate-800 bg-slate-950 flex flex-col shrink-0 max-h-[40dvh] md:max-h-none overflow-y-auto">
         <div className="p-4 border-b border-slate-800 bg-slate-900/50 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <h2 className="text-sm font-bold text-white">Build Pipeline History</h2>
@@ -81,7 +81,7 @@ export const BuildsView: React.FC = () => {
                   )}
                 </div>
 
-                <p className="text-xs font-semibold text-slate-200 truncate">{build.projectName}</p>
+                <p className="text-xs font-semibold text-slate-200 break-words">{build.projectName}</p>
 
                 <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-1">
                   <span className="flex items-center gap-1 font-mono text-cyan-400">
@@ -103,13 +103,13 @@ export const BuildsView: React.FC = () => {
       </div>
 
       {/* Right Detail Pane: Pipeline Execution Details */}
-      <div className="flex-1 bg-slate-900 overflow-y-auto p-6 space-y-6">
+      <div className="flex-1 min-w-0 bg-slate-900 md:overflow-y-auto p-3 sm:p-6 space-y-4 sm:space-y-6">
         {selectedBuild ? (
           <>
             {/* Header info */}
             <div className="p-5 rounded-lg bg-slate-950 border border-slate-800 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
               <div>
-                <div className="flex items-center gap-2.5">
+                <div className="flex flex-wrap items-center gap-2.5">
                   <h1 className="text-lg font-bold text-white">{selectedBuild.projectName}</h1>
                   <span className="text-xs font-mono text-cyan-400 bg-slate-900 border border-slate-800 px-2 py-0.5 rounded">
                     Build #{selectedBuild.id.replace('build-', '')}
@@ -127,7 +127,7 @@ export const BuildsView: React.FC = () => {
                   <span>·</span>
                   <span>{selectedBuild.commitHash}</span>
                   <span>·</span>
-                  <span className="text-slate-300 italic font-sans truncate max-w-sm">"{selectedBuild.commitMessage}"</span>
+                  <span className="text-slate-300 italic font-sans break-words">"{selectedBuild.commitMessage}"</span>
                   <span>·</span>
                   <span>Runner: {selectedBuild.runnerType}</span>
                 </div>
@@ -217,7 +217,7 @@ export const BuildsView: React.FC = () => {
                         {step.status === 'pending' && <Clock className="w-4 h-4 text-slate-600 shrink-0" />}
 
                         <div className="min-w-0">
-                          <p className="text-slate-200 font-medium truncate">{step.name}</p>
+                          <p className="text-slate-200 font-medium break-words">{step.name}</p>
                           <span className="text-[10px] text-slate-500 font-mono">
                             {step.status === 'success' ? `${Math.round(step.durationMs / 100) / 10}s` : step.status}
                           </span>
@@ -256,7 +256,7 @@ export const BuildsView: React.FC = () => {
                       <div className="min-w-0 mr-3">
                         <div className="flex items-center gap-1.5">
                           <FileCode className="w-4 h-4 text-cyan-400 shrink-0" />
-                          <span className="font-semibold text-white truncate font-mono">{art.name}</span>
+                          <span className="font-semibold text-white break-words font-mono">{art.name}</span>
                         </div>
                         <p className="text-[11px] text-slate-400 font-mono mt-0.5">
                           {art.sizeFormatted} · SHA-256: {art.sha256.substring(0, 16)}...
@@ -291,8 +291,8 @@ export const BuildsView: React.FC = () => {
 
       {/* QR Code Modal */}
       {showQrModal && selectedBuild && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 max-w-sm w-full space-y-4 shadow-2xl text-center">
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-800 rounded-t-2xl sm:rounded-xl p-4 sm:p-6 max-w-sm w-full max-h-[92dvh] overflow-y-auto overscroll-contain space-y-4 shadow-2xl text-center">
             <h3 className="text-base font-bold text-white">Install APK on Physical Device</h3>
             <p className="text-xs text-slate-400">
               Scan this QR code with Google Lens or Camera on your Android phone to download and sideload the APK.

@@ -43,7 +43,7 @@ export const TestingView: React.FC = () => {
   ];
 
   return (
-    <div className="p-8 max-w-7xl mx-auto space-y-8">
+    <div className="p-3 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-5 sm:space-y-8">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-800">
         <div>
@@ -131,7 +131,8 @@ export const TestingView: React.FC = () => {
       <div className="space-y-3">
         <h2 className="text-sm font-bold text-white">Individual Test Invariants</h2>
         <div className="bg-slate-900 border border-slate-800 rounded-lg overflow-hidden">
-          <table className="w-full text-left text-xs">
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[34rem] text-left text-xs">
             <thead className="bg-slate-950 border-b border-slate-800 text-slate-400 font-mono text-[10px] uppercase">
               <tr>
                 <th className="py-2.5 px-4">Status</th>
@@ -158,6 +159,7 @@ export const TestingView: React.FC = () => {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       </div>
     </div>

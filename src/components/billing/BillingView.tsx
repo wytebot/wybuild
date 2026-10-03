@@ -80,7 +80,7 @@ export const BillingView: React.FC = () => {
   ];
 
   return (
-    <div className="p-8 max-w-7xl mx-auto space-y-8">
+    <div className="p-3 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-5 sm:space-y-8">
       {/* Header */}
       <div className="text-center max-w-2xl mx-auto space-y-3">
         <h1 className="text-3xl font-bold tracking-tight text-white">
@@ -119,7 +119,7 @@ export const BillingView: React.FC = () => {
       </div>
 
       {/* Active Subscription Status Banner */}
-      <div className="p-6 rounded-xl bg-slate-900 border border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="p-4 sm:p-6 rounded-xl bg-slate-900 border border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-center gap-4">
           <div
             className={`w-12 h-12 rounded-lg flex items-center justify-center font-bold shrink-0 ${
@@ -302,7 +302,8 @@ export const BillingView: React.FC = () => {
       <div className="space-y-4">
         <h2 className="text-base font-bold text-white">Detailed Feature Matrix</h2>
         <div className="bg-slate-900 border border-slate-800 rounded-lg overflow-hidden">
-          <table className="w-full text-left text-xs">
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[34rem] text-left text-xs">
             <thead className="bg-slate-950 border-b border-slate-800 text-slate-400 font-mono text-[10px] uppercase">
               <tr>
                 <th className="py-3 px-5">Platform Capability</th>
@@ -320,6 +321,7 @@ export const BillingView: React.FC = () => {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       </div>
 

@@ -202,8 +202,8 @@ export const BillingCheckoutModal: React.FC<Props> = ({ isOpen, initialCycle, on
   };
 
   return (
-    <div className="fixed inset-0 z-[100] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="w-full max-w-lg rounded-2xl bg-slate-950 border border-slate-800 shadow-2xl overflow-hidden">
+    <div className="fixed inset-0 z-[100] bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 overflow-y-auto">
+      <div className="w-full max-w-lg rounded-t-2xl sm:rounded-2xl bg-slate-950 border border-slate-800 shadow-2xl max-h-[92dvh] overflow-y-auto overscroll-contain">
         <div className="flex items-center justify-between px-6 py-5 border-b border-slate-800">
           <div>
             <h2 className="text-lg font-bold text-white">Upgrade to WyBuild Pro</h2>
@@ -235,7 +235,7 @@ export const BillingCheckoutModal: React.FC<Props> = ({ isOpen, initialCycle, on
                 <input value={card.number} onChange={(e) => setCard({ ...card, number: e.target.value })} inputMode="numeric" autoComplete="cc-number"
                   className="mt-1 w-full rounded-lg bg-slate-900 border border-slate-800 px-3 py-3 text-sm text-white outline-none focus:border-cyan-500" placeholder="1234 5678 9012 3456" />
               </label>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <label className="block text-xs text-slate-300">MM
                   <input value={card.month} onChange={(e) => setCard({ ...card, month: e.target.value })} inputMode="numeric" autoComplete="cc-exp-month"
                     className="mt-1 w-full rounded-lg bg-slate-900 border border-slate-800 px-3 py-3 text-sm text-white outline-none focus:border-cyan-500" placeholder="MM" />

@@ -32,6 +32,26 @@ const MainLayout: React.FC = () => {
   const [showExportZipModal, setShowExportZipModal] = useState(false);
   const [showBillingModal, setShowBillingModal] = useState(false);
   const [billingCycle, setBillingCycle] = useState<BillingCycle>('monthly');
+  // Menu starts open on desktop, closed (drawer) on phones/tablets.
+  const [navOpen, setNavOpen] = useState<boolean>(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setNavOpen((v) => (window.matchMedia('(max-width: 1023px)').matches ? false : v)); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // Lock page scroll behind the open drawer on small screens.
+  useEffect(() => {
+    const small = window.matchMedia('(max-width: 1023px)').matches;
+    document.body.style.overflow = navOpen && small ? 'hidden' : '';
+    return () => { document.body.style.overflow = ''; };
+  }, [navOpen]);
+
+  // Always close the drawer after navigating on small screens.
+  useEffect(() => {
+    if (window.matchMedia('(max-width: 1023px)').matches) setNavOpen(false);
+  }, [currentTab]);
 
   useEffect(() => {
     const onBillingOpen = (event: Event) => {
@@ -44,9 +64,9 @@ const MainLayout: React.FC = () => {
   }, []);
 
   return (
-    <div className="flex h-screen bg-slate-950 text-slate-100 overflow-hidden font-sans selection:bg-cyan-500/20 selection:text-cyan-300">
+    <div className="flex h-dvh bg-slate-950 text-slate-100 overflow-hidden font-sans selection:bg-cyan-500/20 selection:text-cyan-300">
       {/* Sidebar */}
-      <Sidebar />
+      <Sidebar open={navOpen} onClose={() => setNavOpen(false)} />
 
       {/* Main View Area */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
@@ -54,9 +74,11 @@ const MainLayout: React.FC = () => {
           onOpenNewProject={() => setShowNewProjectModal(true)}
           onOpenQuickBuild={() => setShowQuickBuildModal(true)}
           onOpenExportZip={() => setShowExportZipModal(true)}
+          onToggleMenu={() => setNavOpen((v) => !v)}
+          menuOpen={navOpen}
         />
 
-        <main className="flex-1 overflow-y-auto">
+        <main className="flex-1 overflow-y-auto overflow-x-hidden min-w-0">
           {currentTab === 'projects' && <ProjectsView onOpenNewProject={() => setShowNewProjectModal(true)} />}
           {currentTab === 'twa' && <TwaView />}
           {currentTab === 'builds' && <BuildsView />}
@@ -78,7 +100,7 @@ const MainLayout: React.FC = () => {
 
       {/* Toast Notification Banner */}
       {toastMessage && (
-        <div className="fixed bottom-6 right-6 z-50 bg-slate-900 border border-cyan-500/50 shadow-2xl rounded-lg px-4 py-3 flex items-center gap-3 text-xs text-slate-200 animate-in fade-in slide-in-from-bottom-2 duration-200">
+        <div className="fixed bottom-4 left-4 right-4 sm:left-auto sm:bottom-6 sm:right-6 z-[110] bg-slate-900 border border-cyan-500/50 shadow-2xl rounded-lg px-4 py-3 flex items-center gap-3 text-xs text-slate-200 animate-in fade-in slide-in-from-bottom-2 duration-200">
           <CheckCircle2 className="w-4 h-4 text-cyan-400 shrink-0" />
           <span className="font-medium">{toastMessage}</span>
         </div>
@@ -109,7 +131,7 @@ const MainLayout: React.FC = () => {
 const Gate: React.FC = () => {
   const { authState } = useApp();
   if (authState === 'loading') {
-    return <div className="h-screen bg-slate-950 flex items-center justify-center text-slate-500 text-sm">Loading...</div>;
+    return <div className="h-dvh bg-slate-950 flex items-center justify-center text-slate-500 text-sm">Loading...</div>;
   }
   return authState === 'authed' ? <MainLayout /> : <LoginScreen />;
 };

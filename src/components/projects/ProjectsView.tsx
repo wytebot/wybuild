@@ -42,7 +42,7 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({ onOpenNewProject }) 
   };
 
   return (
-    <div className="p-8 max-w-7xl mx-auto space-y-8">
+    <div className="p-3 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-5 sm:space-y-8">
       {/* Top Banner & Quota */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-slate-800">
         <div>
@@ -111,10 +111,10 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({ onOpenNewProject }) 
                 {/* Header */}
                 <div className="flex items-start justify-between gap-2 mb-2">
                   <div className="min-w-0">
-                    <h3 className="text-base font-semibold text-white truncate">{project.name}</h3>
+                    <h3 className="text-base font-semibold text-white break-words">{project.name}</h3>
                     <div className="flex items-center gap-2 text-xs text-slate-400 mt-1">
                       <Github className="w-3.5 h-3.5 shrink-0" />
-                      <span className="truncate">{project.repoUrl.replace('https://github.com/', '')}</span>
+                      <span className="break-words">{project.repoUrl.replace('https://github.com/', '')}</span>
                     </div>
                   </div>
 
@@ -151,7 +151,7 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({ onOpenNewProject }) 
                   </div>
                   <div>
                     <span className="text-slate-400 block text-[11px]">{project.kind === 'twa' ? 'Web app:' : 'Flutter SDK:'}</span>
-                    <span className="text-slate-200 font-mono truncate block">
+                    <span className="text-slate-200 font-mono break-words block">
                       {project.kind === 'twa' && project.twa ? project.twa.webUrl.replace(/^https:\/\//, '') : `v${project.config.flutterVersion}`}
                     </span>
                   </div>
@@ -224,8 +224,8 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({ onOpenNewProject }) 
 
       {/* Edit Configuration Modal */}
       {editingProject && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-xl max-w-xl w-full p-6 space-y-5 shadow-2xl">
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-800 rounded-t-2xl sm:rounded-xl p-4 sm:p-6 max-w-xl w-full max-h-[92dvh] overflow-y-auto overscroll-contain space-y-5 shadow-2xl">
             <div className="flex items-center justify-between pb-3 border-b border-slate-800">
               <div>
                 <h3 className="text-base font-bold text-white">Custom Build Configuration</h3>
@@ -241,7 +241,7 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({ onOpenNewProject }) 
 
             <div className="space-y-4 text-xs">
               {/* Target & Mode */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-slate-300 font-medium mb-1.5">Output Artifact Target</label>
                   <select

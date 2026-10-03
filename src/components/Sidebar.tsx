@@ -22,10 +22,27 @@ import {
   Key,
   Layers,
   Github,
+  X,
 } from 'lucide-react';
 
-export const Sidebar: React.FC = () => {
-  const { currentTab, setCurrentTab, projects, builds, subscription, rateLimits, openFlutterwaveCheckout } = useApp();
+interface SidebarProps {
+  open: boolean;
+  onClose: () => void;
+}
+
+export const Sidebar: React.FC<SidebarProps> = ({ open, onClose }) => {
+  const { currentTab, setCurrentTab: setTab, projects, builds, subscription, rateLimits, openFlutterwaveCheckout, user } = useApp();
+  // On phones/tablets the menu is a drawer: close it after choosing a destination.
+  const closeIfMobile = () => {
+    if (typeof window !== 'undefined' && window.matchMedia('(max-width: 1023px)').matches) onClose();
+  };
+  const setCurrentTab = (id: string) => {
+    setTab(id as any);
+    closeIfMobile();
+  };
+  // Swipe left on the drawer to close it.
+  const touchX = React.useRef<number | null>(null);
+  const initials = (user?.name || user?.login || 'U').split(/\s+/).map((w) => w[0]).slice(0, 2).join('').toUpperCase();
   const isPro = subscription.plan === 'pro';
   const [toolsOpen, setToolsOpen] = useState(false);
 
@@ -93,9 +110,25 @@ export const Sidebar: React.FC = () => {
   ];
 
   return (
-    <aside className="w-64 bg-slate-950 border-r border-slate-800 flex flex-col shrink-0">
+    <>
+    {/* Backdrop (touch outside to close) – mobile/tablet only */}
+    <div
+      onClick={onClose}
+      aria-hidden="true"
+      className={`fixed inset-0 z-40 bg-black/60 backdrop-blur-sm transition-opacity duration-200 lg:hidden ${open ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+    />
+    <aside
+      id="app-sidebar"
+      aria-label="Main menu"
+      onTouchStart={(e) => { touchX.current = e.touches[0].clientX; }}
+      onTouchEnd={(e) => {
+        if (touchX.current !== null && touchX.current - e.changedTouches[0].clientX > 60) onClose();
+        touchX.current = null;
+      }}
+      className={`fixed inset-y-0 left-0 z-50 w-[85vw] max-w-72 bg-slate-950 border-r border-slate-800 flex flex-col overflow-hidden transition-transform duration-200 ease-out lg:static lg:z-auto lg:w-64 lg:max-w-none lg:shrink-0 lg:transition-[margin] ${open ? 'translate-x-0 lg:ml-0' : '-translate-x-full lg:translate-x-0 lg:-ml-64'}`}
+    >
       {/* Brand Zone */}
-      <div className="h-16 px-5 border-b border-slate-800 flex items-center justify-between">
+      <div className="h-16 px-5 shrink-0 border-b border-slate-800 flex items-center justify-between">
         <div className="flex items-center gap-2.5">
           <div className="w-8 h-8 rounded-lg bg-cyan-600/20 border border-cyan-500/40 flex items-center justify-center text-cyan-400 font-bold">
             <Server className="w-4 h-4 text-cyan-400" />
@@ -105,10 +138,13 @@ export const Sidebar: React.FC = () => {
             <span className="block text-[10px] font-mono uppercase text-slate-400 tracking-wider">Flutter + Web-to-Android Cloud</span>
           </div>
         </div>
+        <button onClick={onClose} aria-label="Close menu" className="lg:hidden -mr-2 w-11 h-11 flex items-center justify-center rounded-md text-slate-400 hover:text-white hover:bg-slate-900 active:bg-slate-800">
+          <X className="w-5 h-5" />
+        </button>
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+      <nav className="flex-1 px-3 py-3 space-y-1 overflow-y-auto overscroll-contain">
         {navItems.map((item) => {
           const Icon = item.icon;
           const isActive = currentTab === item.id;
@@ -125,11 +161,11 @@ export const Sidebar: React.FC = () => {
               <div key={item.id}>
                 <button
                   onClick={() => setToolsOpen((v) => !v)}
-                  className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-xs font-medium transition cursor-pointer ${isActive ? 'bg-cyan-500/10 text-cyan-300 font-semibold' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'}`}
+                  className={`w-full flex items-center justify-between px-3 py-2.5 min-h-11 rounded-md text-sm lg:text-xs font-medium transition cursor-pointer active:bg-slate-800 touch-manipulation ${isActive ? 'bg-cyan-500/10 text-cyan-300 font-semibold' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'}`}
                 >
                   <div className="flex items-center gap-2.5 min-w-0">
                     <Icon className="w-4 h-4 shrink-0" />
-                    <span className="truncate">Free Dev Tools</span>
+                    <span className="break-words text-left leading-tight">Free Dev Tools</span>
                     <span className="text-[9px] text-emerald-400 font-mono">FREE</span>
                   </div>
                   {toolsOpen ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
@@ -140,10 +176,10 @@ export const Sidebar: React.FC = () => {
                       <button
                         key={tool}
                         onClick={() => { setCurrentTab('tools'); window.dispatchEvent(new CustomEvent('wybuild:tool-open', { detail: { tool } })); }}
-                        className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-[11px] text-slate-500 hover:text-slate-200 hover:bg-slate-900 text-left"
+                        className="w-full flex items-center gap-2 px-2.5 py-2.5 min-h-10 rounded text-xs text-slate-400 active:bg-slate-800 touch-manipulation hover:text-slate-200 hover:bg-slate-900 text-left"
                       >
                         <ToolIcon className="w-3.5 h-3.5" />
-                        <span className="truncate">{label}</span>
+                        <span className="break-words text-left leading-tight">{label}</span>
                       </button>
                     ))}
                   </div>
@@ -152,8 +188,8 @@ export const Sidebar: React.FC = () => {
             );
           }
           return (
-            <button key={item.id} onClick={() => setCurrentTab(item.id)} className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-xs font-medium transition cursor-pointer ${isActive ? 'bg-cyan-500/10 text-cyan-300 font-semibold border-l-2 border-cyan-400 pl-2.5' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'}`}>
-              <div className="flex items-center gap-2.5 min-w-0"><Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-cyan-400' : 'text-slate-400'}`} /><span className="truncate">{item.label}</span></div>
+            <button key={item.id} onClick={() => setCurrentTab(item.id)} className={`w-full flex items-center justify-between px-3 py-2.5 min-h-11 rounded-md text-sm lg:text-xs font-medium transition cursor-pointer active:bg-slate-800 touch-manipulation ${isActive ? 'bg-cyan-500/10 text-cyan-300 font-semibold border-l-2 border-cyan-400 pl-2.5' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'}`}>
+              <div className="flex items-center gap-2.5 min-w-0 flex-1"><Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-cyan-400' : 'text-slate-400'}`} /><span className="break-words text-left leading-tight">{item.label}</span></div>
               {item.badge && <span className={`text-[11px] font-mono tabular-nums shrink-0 ml-1 ${item.badgeColor || 'text-slate-400'}`}>{item.badge}</span>}
               {item.highlight && <span className="text-[10px] text-emerald-400 font-mono font-medium shrink-0 ml-1">{item.highlight}</span>}
             </button>
@@ -162,7 +198,7 @@ export const Sidebar: React.FC = () => {
       </nav>
 
       {/* Free Tier Rate Limiting & Resource Safeguard Box */}
-      <div className="p-3.5 m-3 rounded-lg bg-slate-900 border border-slate-800 text-xs">
+      <div className="p-3.5 m-3 shrink-0 rounded-lg bg-slate-900 border border-slate-800 text-xs">
         <div className="flex items-center justify-between mb-2">
           <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-300">
             {isPro ? 'Pro Active' : 'Free Quota'}
@@ -185,7 +221,7 @@ export const Sidebar: React.FC = () => {
             </p>
             <button
               onClick={() => openFlutterwaveCheckout('monthly')}
-              className="w-full py-1.5 text-center text-[11px] font-semibold rounded bg-cyan-600 hover:bg-cyan-500 text-white transition flex items-center justify-center gap-1.5 cursor-pointer"
+              className="w-full py-2.5 lg:py-1.5 text-center text-xs lg:text-[11px] font-semibold rounded bg-cyan-600 hover:bg-cyan-500 text-white transition flex items-center justify-center gap-1.5 cursor-pointer"
             >
               <Sparkles className="w-3 h-3 text-cyan-200" />
               Upgrade to Pro ($10/mo)
@@ -206,17 +242,18 @@ export const Sidebar: React.FC = () => {
       </div>
 
       {/* User profile / session */}
-      <div className="p-3 border-t border-slate-800/80 flex items-center justify-between text-xs">
+      <div className="p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shrink-0 border-t border-slate-800/80 flex items-center justify-between text-xs">
         <div className="flex items-center gap-2 min-w-0">
           <div className="w-7 h-7 rounded-full bg-gradient-to-tr from-cyan-600 to-blue-500 flex items-center justify-center text-white font-bold text-xs shrink-0">
-            IT
+            {initials}
           </div>
           <div className="min-w-0">
-            <p className="text-white font-medium truncate text-xs">Ilemobayo Tolulope</p>
-            <p className="text-slate-400 truncate text-[11px]">ilemobayo@finflow.io</p>
+            <p className="text-white font-medium break-words text-xs">{user?.name || user?.login}</p>
+            <p className="text-slate-400 break-all text-[11px]">{user?.email || (user?.login ? `@${user.login}` : '')}</p>
           </div>
         </div>
       </div>
     </aside>
+    </>
   );
 };

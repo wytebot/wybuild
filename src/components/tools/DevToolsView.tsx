@@ -284,7 +284,7 @@ android {
   ];
 
   return (
-    <div className="p-8 max-w-7xl mx-auto space-y-8">
+    <div className="p-3 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-5 sm:space-y-8">
       {/* Header */}
       <div className="pb-6 border-b border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
@@ -421,7 +421,7 @@ android {
           </div>
 
           {/* Preview Box */}
-          <div className="p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-4 flex flex-col items-center justify-center text-center">
+          <div className="p-4 sm:p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-4 flex flex-col items-center justify-center text-center">
             <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
               Real-Time Android Preview
             </span>
@@ -451,7 +451,7 @@ android {
       {/* TOOL 2: PUBSPEC ANALYZER */}
       {activeTool === 'pubspec' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-3">
+          <div className="p-4 sm:p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-3">
             <div className="flex justify-between items-center">
               <h2 className="text-sm font-bold text-white">pubspec.yaml Content</h2>
               <button
@@ -470,10 +470,10 @@ android {
             />
           </div>
 
-          <div className="p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-5">
+          <div className="p-4 sm:p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-5">
             <h2 className="text-sm font-bold text-white">Pubspec Audit Results</h2>
 
-            <div className="grid grid-cols-2 gap-3 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
               <div className="p-3 rounded bg-slate-950 border border-slate-800">
                 <span className="text-slate-400">Dependencies</span>
                 <p className="text-xl font-bold font-mono text-white mt-1">{pubspecResult.dependenciesCount}</p>
@@ -522,7 +522,7 @@ android {
       {/* TOOL 3: ANDROID MANIFEST INSPECTOR */}
       {activeTool === 'manifest' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-3">
+          <div className="p-4 sm:p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-3">
             <h2 className="text-sm font-bold text-white">AndroidManifest.xml</h2>
             <textarea
               rows={16}
@@ -532,7 +532,7 @@ android {
             />
           </div>
 
-          <div className="p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-4">
+          <div className="p-4 sm:p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-bold text-white">Google Play Compliance Audit</h2>
               <div className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800">
@@ -577,10 +577,10 @@ android {
       {/* TOOL 4: KEYSTORE GENERATOR */}
       {activeTool === 'keystore' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-4 text-xs">
+          <div className="p-4 sm:p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-4 text-xs">
             <h2 className="text-sm font-bold text-white">Keystore Parameters</h2>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-slate-300 mb-1">Keystore Filename</label>
                 <input
@@ -601,7 +601,7 @@ android {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-slate-300 mb-1">Developer Full Name</label>
                 <input
@@ -622,7 +622,7 @@ android {
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
                 <label className="block text-slate-300 mb-1">City</label>
                 <input
@@ -653,7 +653,7 @@ android {
             </div>
           </div>
 
-          <div className="p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-4">
+          <div className="p-4 sm:p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-4">
             <div>
               <div className="flex justify-between items-center mb-1">
                 <h3 className="text-xs font-bold text-white uppercase tracking-wider">keytool Command</h3>
@@ -691,7 +691,7 @@ android {
 
       {/* TOOL 5: PROGUARD RULES */}
       {activeTool === 'proguard' && (
-        <div className="p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-5">
+        <div className="p-4 sm:p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-5">
           <div className="flex justify-between items-center">
             <div>
               <h2 className="text-base font-bold text-white">ProGuard & R8 Optimization Rules</h2>
@@ -736,7 +736,7 @@ android {
 
       {/* TOOL 6: GITHUB ACTIONS EXPORT */}
       {activeTool === 'github_actions' && (
-        <div className="p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-4">
+        <div className="p-4 sm:p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-4">
           <div className="flex justify-between items-center">
             <div>
               <h2 className="text-base font-bold text-white">Self-Hosted GitHub Actions Mirror</h2>
@@ -763,7 +763,7 @@ android {
       {/* TOOL 7: JSON FORMATTER */}
       {activeTool === 'json' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-3">
+          <div className="p-4 sm:p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-3">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-bold text-white">JSON Formatter & Validator</h2>
               <button onClick={formatJson} className="px-3 py-1.5 text-xs font-semibold rounded bg-cyan-600 text-white">Format & Validate</button>
@@ -772,7 +772,7 @@ android {
               className="w-full p-3 bg-slate-950 border border-slate-800 rounded font-mono text-xs text-slate-200 focus:border-cyan-500 focus:outline-none" />
             {jsonError && <p className="text-xs text-rose-300">{jsonError}</p>}
           </div>
-          <div className="p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-3">
+          <div className="p-4 sm:p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-3">
             <div className="flex justify-between"><h2 className="text-sm font-bold text-white">Formatted output</h2>
               <button disabled={!formattedJson} onClick={() => copyToClipboard(formattedJson, 'json')} className="text-xs text-cyan-400">{copiedKey === 'json' ? 'Copied' : 'Copy'}</button></div>
             <pre className="p-3 bg-slate-950 border border-slate-800 rounded font-mono text-xs text-emerald-300 whitespace-pre-wrap overflow-auto max-h-[520px]">{formattedJson || 'Paste JSON and validate it.'}</pre>
@@ -782,7 +782,7 @@ android {
 
       {/* TOOL 8: CHECKSUM */}
       {activeTool === 'checksum' && (
-        <div className="p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-5">
+        <div className="p-4 sm:p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-5">
           <h2 className="text-base font-bold text-white">SHA-256 File Checksum</h2>
           <p className="text-xs text-slate-400">Compute a cryptographic checksum locally. The file is never uploaded to WyBuild.</p>
           <input type="file" onChange={(e) => handleChecksum(e.target.files?.[0])}
@@ -797,7 +797,7 @@ android {
 
       {/* TOOL 9: APK/AAB INSPECTOR */}
       {activeTool === 'package' && (
-        <div className="p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-5">
+        <div className="p-4 sm:p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-5">
           <div>
             <h2 className="text-base font-bold text-white">APK / AAB Package Inspector</h2>
             <p className="text-xs text-slate-400 mt-1">Inspect package structure locally without uploading the build.</p>
@@ -824,12 +824,12 @@ android {
       {/* TOOL 10: BUILD CONFIG AUDIT */}
       {activeTool === 'build_audit' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-3">
+          <div className="p-4 sm:p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-3">
             <h2 className="text-sm font-bold text-white">Gradle / Android Build Configuration</h2>
             <textarea value={buildAuditText} onChange={(e) => setBuildAuditText(e.target.value)} rows={20}
               className="w-full p-3 bg-slate-950 border border-slate-800 rounded font-mono text-xs text-slate-200 focus:border-cyan-500 focus:outline-none" />
           </div>
-          <div className="p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-3">
+          <div className="p-4 sm:p-6 rounded-lg bg-slate-900 border border-slate-800 space-y-3">
             <h2 className="text-sm font-bold text-white">Release Readiness Checks</h2>
             {buildAudit.map((c) => <div key={c.label} className={`p-3 rounded border text-xs ${c.ok ? 'border-emerald-800/50 bg-emerald-950/30 text-emerald-300' : 'border-amber-800/50 bg-amber-950/30 text-amber-300'}`}>
               <b>{c.ok ? '✓ PASS' : '⚠ REVIEW'}</b><span className="ml-2">{c.label}</span>

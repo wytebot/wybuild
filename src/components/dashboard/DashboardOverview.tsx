@@ -86,7 +86,7 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
   const latestBuild = builds[0];
 
   return (
-    <div className="p-8 max-w-7xl mx-auto space-y-8">
+    <div className="p-3 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-5 sm:space-y-8">
       {/* Welcome & Context Banner */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-6 border-b border-slate-800">
         <div>
@@ -237,7 +237,7 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
               <p className="text-sm font-semibold text-white mt-1">
                 {latestBuild.artifacts[0].name} ({latestBuild.artifacts[0].sizeFormatted})
               </p>
-              <p className="text-xs text-slate-400 font-mono mt-0.5 truncate max-w-lg">
+              <p className="text-xs text-slate-400 font-mono mt-0.5 break-all">
                 SHA-256: {latestBuild.artifacts[0].sha256}
               </p>
             </div>
@@ -326,8 +326,8 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
                 <div>
                   <div className="flex items-start justify-between gap-2 mb-2">
                     <div className="min-w-0">
-                      <h3 className="text-sm font-bold text-white truncate">{project.name}</h3>
-                      <p className="text-xs text-slate-400 truncate mt-0.5">{project.repoUrl.replace('https://github.com/', '')}</p>
+                      <h3 className="text-sm font-bold text-white break-words">{project.name}</h3>
+                      <p className="text-xs text-slate-400 break-words mt-0.5">{project.repoUrl.replace('https://github.com/', '')}</p>
                     </div>
 
                     {isRunning ? (
@@ -415,7 +415,7 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
 
         <div className="bg-slate-900 border border-slate-800 rounded-lg overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+            <table className="w-full min-w-[34rem] text-left text-xs">
               <thead className="bg-slate-950/70 border-b border-slate-800 text-slate-400 uppercase font-mono text-[10px]">
                 <tr>
                   <th className="py-3 px-4">Status</th>
@@ -461,7 +461,7 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
                         #{build.id.replace('build-', '')}
                       </td>
 
-                      <td className="py-3 px-4 font-medium text-white max-w-[160px] truncate">
+                      <td className="py-3 px-4 font-medium text-white break-words">
                         {build.projectName}
                       </td>
 
@@ -470,7 +470,7 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
                           <span className="font-mono text-cyan-300 bg-slate-800 px-1.5 py-0.5 rounded text-[11px]">
                             {build.commitHash}
                           </span>
-                          <span className="text-slate-400 truncate max-w-[200px]">{build.commitMessage}</span>
+                          <span className="text-slate-400 break-words">{build.commitMessage}</span>
                         </div>
                       </td>
 
@@ -515,8 +515,8 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
 
       {/* QR Code Install Modal */}
       {selectedQrBuild && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 max-w-sm w-full space-y-4 shadow-2xl text-center">
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-800 rounded-t-2xl sm:rounded-xl p-4 sm:p-6 max-w-sm w-full max-h-[92dvh] overflow-y-auto overscroll-contain space-y-4 shadow-2xl text-center">
             <h3 className="text-base font-bold text-white">Direct Android Device Install</h3>
             <p className="text-xs text-slate-400">
               Point your Android phone camera at this QR code to download and test the generated APK wirelessly.
