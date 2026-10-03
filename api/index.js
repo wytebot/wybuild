@@ -902,16 +902,43 @@ async function route(req, res, path, query) {
     if (!query.code || !query.state || !verifyOAuthState(query.state)) {
       throw new HttpError(400, 'Invalid or expired OAuth state. Please start GitHub sign-in again.');
     }
+
+    // Complete the OAuth exchange on the callback request, but do not rely on
+    // that request's hostname to carry the session cookie. Vercel can redirect
+    // a deployment hostname to a custom/canonical hostname after this response.
+    // In that case a host-only cookie would be lost when the browser follows
+    // the redirect. A short-lived encrypted handoff ticket fixes that while
+    // keeping the GitHub access token out of the browser URL.
+    const callbackUrl = `${appUrl(req)}/api/auth/callback`;
     const tr = await fetch('https://github.com/login/oauth/access_token', {
       method: 'POST',
       headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ client_id: env('GITHUB_CLIENT_ID'), client_secret: env('GITHUB_CLIENT_SECRET'), code: query.code, redirect_uri: `${appUrl(req)}/api/auth/callback` }),
+      body: JSON.stringify({ client_id: env('GITHUB_CLIENT_ID'), client_secret: env('GITHUB_CLIENT_SECRET'), code: query.code, redirect_uri: callbackUrl }),
     });
     const t = await tr.json();
     if (!t.access_token) throw new HttpError(400, t.error_description || 'GitHub sign-in failed');
     const u = await ghJson({ token: t.access_token }, '/user');
     const session = { token: t.access_token, login: u.login, name: u.name || u.login, avatar: u.avatar_url, email: u.email || '', exp: Date.now() + 7 * 24 * 3600 * 1000 };
-    return redirect(res, '/', [cookie(SESSION_COOKIE, seal(session), 7 * 24 * 3600)]);
+
+    const ticket = crypto.randomBytes(24).toString('base64url');
+    await kv.set(`wb:oauth-ticket:${ticket}`, seal({ session, exp: Date.now() + 60 * 1000 }), { ex: 60 });
+    return redirect(res, `${appUrlFromEnv()}/api/auth/complete?ticket=${encodeURIComponent(ticket)}`);
+  }
+
+  if (path === 'auth/complete') {
+    const ticket = String(query.ticket || '');
+    if (!/^[A-Za-z0-9_-]{32}$/.test(ticket)) throw new HttpError(400, 'Invalid sign-in handoff. Please start GitHub sign-in again.');
+
+    // NX makes the handoff single-use, preventing replay of a successful login.
+    const key = `wb:oauth-ticket:${ticket}`;
+    const packed = await kv.get(key);
+    if (!packed) throw new HttpError(400, 'Sign-in handoff expired. Please start GitHub sign-in again.');
+    await kv.del(key);
+    const handoff = unseal(String(packed));
+    if (!handoff?.session || !Number.isFinite(handoff.exp) || handoff.exp < Date.now()) {
+      throw new HttpError(400, 'Sign-in handoff expired. Please start GitHub sign-in again.');
+    }
+    return redirect(res, '/', [cookie(SESSION_COOKIE, seal(handoff.session), 7 * 24 * 3600)]);
   }
 
   if (path === 'auth/logout' && post) {
