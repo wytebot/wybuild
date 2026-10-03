@@ -17,7 +17,7 @@
       "schedule": "17 1 * * *"
     }
   ],
-  "buildCommand": "bash vercel-build.sh",
+  "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "framework": "vite"
 }
