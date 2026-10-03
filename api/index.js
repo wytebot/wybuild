@@ -230,6 +230,43 @@ function describeGithubFailure(r, data, ctx, request) {
   return { code: 'GITHUB_ERROR', message: `GitHub error ${status}${where}: ${gm || 'no message'}.`, hint: status >= 500 ? 'GitHub is having trouble. Retry shortly.' : undefined, details, http: 502 };
 }
 
+
+// A bare 404/403 on a write tells you nothing. Probe the repo, the branch and the token to name the real cause.
+async function diagnoseWriteFailure(session, repo, branch, original) {
+  const tok = String(session.token || '');
+  const kind = tok.startsWith('ghu_') ? 'github-app' : tok.startsWith('github_pat_') ? 'fine-grained' : 'oauth';
+  const kindLabel = { 'github-app': 'GitHub App user token', 'fine-grained': 'fine-grained token', oauth: 'OAuth app token' }[kind];
+  const facts = { repo, branch, tokenType: kindLabel, ...(original?.details || {}) };
+  const fail = (code, message, hint) => new HttpError(original?.status === 403 ? 403 : 409, message, code, { hint, details: facts });
+
+  const ri = await gh(session, `/repos/${repo}`);
+  facts.repoVisible = ri.ok;
+  if (ri.status === 404) {
+    const hint = kind === 'github-app'
+      ? `WyBuild's GitHub App is not installed on ${repo}. Open github.com/settings/installations, configure the app and add ${repo} (grant Contents and Workflows read & write), then retry.`
+      : `Your login cannot see ${repo}. If it belongs to an organization, approve WyBuild at github.com/settings/connections/applications (Organization access → Grant), or confirm the owner/name spelling.`;
+    return fail('REPO_NOT_VISIBLE', `GitHub says ${repo} does not exist for this login (404), so WyBuild cannot write to it.`, hint);
+  }
+  if (ri.ok) {
+    const info = await ri.json();
+    facts.private = !!info.private; facts.archived = !!info.archived; facts.canPush = info.permissions ? !!info.permissions.push : 'unknown'; facts.defaultBranch = info.default_branch; facts.empty = info.size === 0;
+    if (info.archived) return fail('REPO_ARCHIVED', `${repo} is archived, so it is read-only.`, 'Unarchive it in the repository settings, then retry.');
+    if (info.permissions && !info.permissions.push) return fail('NO_PUSH_ACCESS', `You only have read access to ${repo} (no push permission), so the workflow cannot be committed there.`, 'Ask the owner for write access, or fork the repo and connect your fork.');
+    const br = await gh(session, `/repos/${repo}/branches/${encodeURIComponent(branch)}`);
+    facts.branchExists = br.ok;
+    if (br.status === 404 && !facts.empty) return fail('BRANCH_NOT_FOUND', `Branch "${branch}" does not exist in ${repo} (default branch is "${info.default_branch}").`, `Create the branch first or reconnect the project on "${info.default_branch}".`);
+    if (br.ok) { const b = await br.json(); facts.branchProtected = !!b.protected; }
+  }
+  const scopes = facts.oauthScopes;
+  if (kind === 'oauth' && scopes && scopes !== 'unknown' && !scopes.split(/,\s*/).includes('workflow')) {
+    return fail('MISSING_WORKFLOW_SCOPE', `Your sign-in is missing the "workflow" permission (granted: ${scopes}).`, 'Sign out, sign in again and approve "workflow", or remove WyBuild at github.com/settings/applications first.');
+  }
+  if (kind === 'github-app' || scopes === 'unknown') {
+    return fail('APP_PERMISSION_MISSING', `Your token has no OAuth scopes (${kindLabel}), so GitHub is using the app's own permissions, and they do not include writing .github/workflows on ${repo}.`, 'In the GitHub App settings set Repository permissions → Contents: Read & write and Workflows: Read & write, then accept the update at github.com/settings/installations. Or switch WyBuild to an OAuth App (GITHUB_CLIENT_ID/SECRET) that requests the "repo workflow" scopes.');
+  }
+  return fail('WRITE_BLOCKED', `GitHub refused the commit to ${repo}@${branch} (${original?.status || 404}) although the repo, branch and "workflow" scope look fine${facts.branchProtected ? '; the branch is protected' : ''}.`, facts.branchProtected ? 'Branch protection or a ruleset blocks direct pushes. Install on an unprotected branch or allow WyBuild to bypass the rule.' : `The owning organization may restrict third-party OAuth apps: open github.com/settings/connections/applications and grant WyBuild access to the organization that owns ${repo}.`);
+}
+
 async function ghJson(session, path, init, ctx = '') {
   const r = await gh(session, path, init);
   const text = await r.text();
@@ -1205,10 +1242,19 @@ async function route(req, res, path, query) {
         await ghJson(session, `/repos/${repo}/contents/${repoPath}?ref=${encodeURIComponent(target)}`, undefined, `checking ${repoPath} on branch ${target}`);
       }
       const sha = ex.ok ? (await ex.json()).sha : undefined;
-      await ghJson(session, `/repos/${repo}/contents/${repoPath}`, {
-        method: 'PUT',
-        body: JSON.stringify({ message: `ci: ${sha ? 'update' : 'add'} WyBuild ${kindOf(kind) === 'twa' ? 'TWA ' : ''}workflow (${repoPath.split('/').pop()})`, content: Buffer.from(content).toString('base64'), branch: target, ...(sha ? { sha } : {}) }),
-      }, `writing ${repoPath} to branch ${target}`);
+      try {
+        await ghJson(session, `/repos/${repo}/contents/${repoPath}`, {
+          method: 'PUT',
+          body: JSON.stringify({ message: `ci: ${sha ? 'update' : 'add'} WyBuild ${kindOf(kind) === 'twa' ? 'TWA ' : ''}workflow (${repoPath.split('/').pop()})`, content: Buffer.from(content).toString('base64'), branch: target, ...(sha ? { sha } : {}) }),
+        }, `writing ${repoPath} to branch ${target}`);
+      } catch (e) {
+        if (e instanceof HttpError && (e.status === 403 || e.status === 404) && e.code !== 'GITHUB_RATE_LIMIT') {
+          const d = await diagnoseWriteFailure(session, repo, target, e);
+          d.message = `${d.message} (while writing ${repoPath})`;
+          throw d;
+        }
+        throw e;
+      }
     }
     return send(res, 200, { ok: true, branch: target });
   }
