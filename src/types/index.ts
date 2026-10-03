@@ -194,6 +194,7 @@ export interface SubscriptionInfo {
   customerEmail: string;
   cardLast4?: string;
   cardBrand?: string;
+  autoRenew?: boolean;
 }
 
 export interface RateLimitState {

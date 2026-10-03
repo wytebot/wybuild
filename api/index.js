@@ -11,7 +11,7 @@ const WORKFLOW_PATH = `.github/workflows/${WORKFLOW_FILE}`;
 const WORKFLOW_VERSION = 2;
 const TWA_WORKFLOW_FILE = 'wybuild-twa.yml';
 const TWA_WORKFLOW_PATH = `.github/workflows/${TWA_WORKFLOW_FILE}`;
-const TWA_WORKFLOW_VERSION = 2;
+const TWA_WORKFLOW_VERSION = 3;
 // every file committed to a repo for each workflow kind: [path in repo, path in ./workflow]
 const WORKFLOW_KINDS = {
   flutter: { file: WORKFLOW_FILE, path: WORKFLOW_PATH, version: WORKFLOW_VERSION, files: [[WORKFLOW_PATH, 'wybuild.yml']] },
@@ -267,19 +267,20 @@ async function activateFromCharge(charge, expected, fallbackLogin) {
   const pending = await kv.get(`wb:tx:${ref}`);
   if (!pending || pending.login !== fallbackLogin && fallbackLogin) return false;
   if (!expected || Number(charge.amount) < Number(expected.amount) || String(charge.currency) !== String(expected.currency)) return false;
+  const pmd = charge.payment_method_details || charge.payment_method || {};
+  const customerId = charge.customer_id || charge.customer?.id || pending.customerId || '';
+  const paymentMethodId = pmd.id || pending.paymentMethodId || '';
+  if (!customerId || !paymentMethodId) throw new HttpError(502, 'Payment succeeded but recurring billing details were not returned');
+
+  // Only mark the charge as processed once we know we can activate it, otherwise a retry/webhook would be skipped forever.
   const first = await kv.set(`wb:txdone:${ref}`, 1, { nx: true, ex: 60 * 60 * 24 * 90 });
   if (!first) return true;
-
+  try {
   const existing = await kv.get(`wb:sub:${pending.login}`);
   const base = existing && new Date(existing.nextBillingDate).getTime() > Date.now()
     ? new Date(existing.nextBillingDate) : new Date();
   if (pending.cycle === 'yearly') base.setUTCFullYear(base.getUTCFullYear() + 1);
   else base.setUTCMonth(base.getUTCMonth() + 1);
-
-  const pmd = charge.payment_method_details || charge.payment_method || {};
-  const customerId = charge.customer_id || charge.customer?.id || pending.customerId || '';
-  const paymentMethodId = pmd.id || pending.paymentMethodId || '';
-  if (!customerId || !paymentMethodId) throw new HttpError(502, 'Payment succeeded but recurring billing details were not returned');
 
   const sub = {
     plan: 'pro',
@@ -299,7 +300,12 @@ async function activateFromCharge(charge, expected, fallbackLogin) {
   };
   await kv.set(`wb:sub:${pending.login}`, sub);
   await kv.sadd(`wb:subscribers`, pending.login);
+  await kv.set(`wb:cust:${pending.login}`, customerId);
   return true;
+  } catch (e) {
+    await kv.del(`wb:txdone:${ref}`).catch(() => {}); // let the webhook / status poll retry
+    throw e;
+  }
 }
 
 async function reconcileCharge(chargeId, login) {
@@ -319,7 +325,7 @@ async function reconcileCharge(chargeId, login) {
   };
 }
 
-async function createV4Checkout(session, body) {
+async function createV4Checkout(session, body, base) {
   const cycle = body.cycle;
   if (!PRICING[cycle]) throw new HttpError(400, 'Invalid billing cycle');
   const card = body.card || {};
@@ -329,17 +335,21 @@ async function createV4Checkout(session, body) {
   if (String(card.nonce).length !== 12) throw new HttpError(400, 'Invalid card encryption nonce');
 
   const email = session.email || `${session.login}@users.noreply.github.com`;
-  const customer = await flw4('/customers', {
-    method: 'POST',
-    body: JSON.stringify({
-      email,
-      name: { first: String(session.name || session.login).split(/\s+/)[0].slice(0, 60), last: String(session.name || '').split(/\s+/).slice(1).join(' ').slice(0, 60) || undefined },
-      meta: { wybuild_login: session.login },
-    }),
-  }, { idempotencyPrefix: `customer-${session.login}` });
-
-  const customerId = customer.data?.id;
-  if (!customerId) throw new HttpError(502, 'Flutterwave did not return a customer id');
+  // Flutterwave rejects a second customer with the same email, so reuse the one we already created for this user.
+  let customerId = (await kv.get(`wb:cust:${session.login}`)) || (await kv.get(`wb:sub:${session.login}`))?.customerId || '';
+  if (!customerId) {
+    const customer = await flw4('/customers', {
+      method: 'POST',
+      body: JSON.stringify({
+        email,
+        name: { first: String(session.name || session.login).split(/\s+/)[0].slice(0, 60), last: String(session.name || '').split(/\s+/).slice(1).join(' ').slice(0, 60) || undefined },
+        meta: { wybuild_login: session.login },
+      }),
+    }, { idempotencyPrefix: `customer-${session.login}` });
+    customerId = customer.data?.id;
+    if (!customerId) throw new HttpError(502, 'Flutterwave did not return a customer id');
+    await kv.set(`wb:cust:${session.login}`, customerId);
+  }
 
   const paymentMethod = await flw4('/payment-methods', {
     method: 'POST',
@@ -377,7 +387,7 @@ async function createV4Checkout(session, body) {
       currency: 'USD',
       customer_id: customerId,
       payment_method_id: paymentMethodId,
-      redirect_url: `${appUrlFromEnv()}/api/billing/callback`,
+      redirect_url: `${base}/api/billing/callback`,
       meta: { wybuild_login: session.login, cycle },
     }),
   }, { idempotencyPrefix: `charge-${reference}` });
@@ -397,7 +407,7 @@ async function createV4Checkout(session, body) {
 }
 
 function appUrlFromEnv() {
-  return env('APP_URL') || 'https://wybuild.app';
+  return (env('APP_URL') || 'https://wybuild.app').replace(/\/$/, '');
 }
 
 async function renewDueSubscriptions() {
@@ -883,9 +893,12 @@ async function route(req, res, path, query) {
 
   /* billing webhook + callback: authenticated by Flutterwave, not by session */
   if (path === 'billing/webhook' && post) {
-    const given = String(req.headers['verif-hash'] || '');
     const want = env('FLW_SECRET_HASH');
-    const ok = want && given.length === want.length && crypto.timingSafeEqual(Buffer.from(given), Buffer.from(want));
+    const safeEq = (a, b) => a.length === b.length && a.length > 0 && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+    const legacy = String(req.headers['verif-hash'] || '');
+    const sig = String(req.headers['flutterwave-signature'] || '');
+    const expectedSig = want ? crypto.createHmac('sha256', want).update(JSON.stringify(req.body ?? {})).digest('base64') : '';
+    const ok = !!want && (safeEq(legacy, want) || safeEq(sig, expectedSig));
     if (!ok) throw new HttpError(401, 'Invalid signature');
     const id = bodyOf(req)?.data?.id;
     if (id) {
@@ -941,7 +954,7 @@ async function route(req, res, path, query) {
   }
 
   if (path === 'billing/checkout' && post) {
-    return send(res, 200, await createV4Checkout(session, bodyOf(req)));
+    return send(res, 200, await createV4Checkout(session, bodyOf(req), appUrl(req)));
   }
 
   if (path === 'billing/authorize' && post) {
@@ -982,6 +995,14 @@ async function route(req, res, path, query) {
     const owner = await kv.get(`wb:charge:${chargeId}`);
     if (!owner || owner.login !== session.login) throw new HttpError(403, 'Payment does not belong to this account');
     return send(res, 200, await reconcileCharge(chargeId, session.login));
+  }
+
+  if (path === 'billing/cancel' && post) {
+    const sub = await kv.get(`wb:sub:${session.login}`);
+    if (!sub || sub.plan !== 'pro') throw new HttpError(404, 'No active subscription');
+    await kv.set(`wb:sub:${session.login}`, { ...sub, autoRenew: false });
+    await kv.srem('wb:subscribers', session.login);
+    return send(res, 200, { ok: true, activeUntil: sub.nextBillingDate });
   }
 
   if (path === 'me' && m === 'GET') {

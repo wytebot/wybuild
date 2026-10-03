@@ -18,7 +18,7 @@ import {
 import { FLUTTERWAVE_PRICING } from '../../services/flutterwave';
 
 export const BillingView: React.FC = () => {
-  const { subscription, rateLimits, openFlutterwaveCheckout } = useApp();
+  const { subscription, rateLimits, openFlutterwaveCheckout, cancelSubscription } = useApp();
   const [billingCycle, setBillingCycle] = useState<BillingCycle>('monthly');
 
   const isPro = subscription.plan === 'pro';
@@ -213,10 +213,13 @@ export const BillingView: React.FC = () => {
 
           <div className="mt-8 pt-4 border-t border-slate-800">
             <button
-              disabled={!isPro}
-              className="w-full py-2.5 text-xs font-semibold rounded bg-slate-800 text-slate-400 disabled:opacity-70 text-center"
+              disabled={!isPro || subscription.autoRenew === false}
+              onClick={() => {
+                if (window.confirm('Stop auto-renewal? Pro stays active until the end of the period you already paid for.')) cancelSubscription();
+              }}
+              className="w-full py-2.5 text-xs font-semibold rounded bg-slate-800 text-slate-400 disabled:opacity-70 text-center cursor-pointer"
             >
-              {!isPro ? 'Current Plan' : 'Downgrade to Free'}
+              {!isPro ? 'Current Plan' : subscription.autoRenew === false ? 'Cancels at period end' : 'Cancel auto-renewal'}
             </button>
           </div>
         </div>

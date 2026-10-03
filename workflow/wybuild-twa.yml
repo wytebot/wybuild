@@ -1,4 +1,4 @@
-# wybuild-twa-workflow-version: 2
+# wybuild-twa-workflow-version: 3
 name: WyBuild TWA
 run-name: "WyBuild TWA ${{ fromJSON(inputs.twa_config).packageId || 'auto' }}/${{ inputs.output }} on ${{ github.ref_name }}"
 
@@ -203,4 +203,5 @@ jobs:
         with:
           name: wb-twa-${{ github.run_id }}
           path: .wybuild-out/dist/**
+          include-hidden-files: true
           if-no-files-found: warn

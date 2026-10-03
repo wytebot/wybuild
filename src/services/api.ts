@@ -84,6 +84,7 @@ export const api = {
     pin?: { nonce: string; encrypted_pin: string };
     otp?: string;
   }) => post<{ chargeId: string; status: string; nextAction: any; redirectUrl?: string | null }>('billing/authorize', body),
+  cancelSubscription: () => post<{ ok: true; activeUntil: string }>('billing/cancel', {}),
   billingStatus: (chargeId: string) =>
     request<{ id: string; reference: string; status: string; nextAction: any; redirectUrl?: string | null }>(
       `billing/status?chargeId=${enc(chargeId)}`

@@ -16,7 +16,7 @@ encrypted Actions secrets (`WB_KEYSTORE_BASE64`, `WB_KEYSTORE_PASSWORD`, `WB_KEY
 2. Create a Vercel KV / Upstash Redis store and link it to the project (provides `KV_REST_API_*`).
 3. Flutterwave v4: create the v4 Client ID, Client Secret and Encryption Key, set a webhook secret hash, and point the webhook at `{APP_URL}/api/billing/webhook`. v4 authenticates server calls with OAuth2 access tokens; the server refreshes them automatically.
 4. Set the env vars in `.env.example` on Vercel (or in `.env.local` for `vercel dev`). Keep `FLW_CLIENT_SECRET` and `FLW_ENCRYPTION_KEY` server-side. The encryption key is returned only to an authenticated WyBuild session so card fields can be encrypted in the browser before submission.
-5. Deploy to Vercel. The billing renewal job runs daily through the Vercel Cron entry in `vercel.json`. Set `CRON_SECRET` so only the cron job can invoke `/api/billing/renew`.
+5. Deploy to Vercel (Production env vars must be set before the first deploy; changing them later needs a redeploy). The billing renewal job runs daily through the Vercel Cron entry in `vercel.json`. Set `CRON_SECRET` so only the cron job can invoke `/api/billing/renew`.
 6. For local development run `vercel dev` (the `/api` routes need the Vercel runtime; `npm run dev` serves only the UI).
 
 ## Web app to Android (TWA)
@@ -67,6 +67,9 @@ Flutter and TWA builds share the same quota. Only successful runs consume the 5-
 - Workflow file is now `wybuild.yml` (Flutter) and `wybuild-twa.yml`; reinstall it from the UI on each repo. Old `flutterforge.yml` runs are no longer listed.
 - Signing secrets were renamed `FF_*` to `WB_*`; re-upload keystores once. Paid subscriptions stored under the old KV prefix are still honoured.
 - Browser-local data (projects list) uses new storage keys, so saved projects must be re-added once.
+
+## Cancelling Pro
+`POST /api/billing/cancel` stops auto-renewal (removes the user from the renewal list). Pro stays active until the already-paid period ends.
 
 ## Not backed by a server yet
 Team members, audit log, error-telemetry seed data and the Webhooks settings panel are still local browser state.

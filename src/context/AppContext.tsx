@@ -37,6 +37,7 @@ interface AppContextType {
   subscription: SubscriptionInfo;
   rateLimits: RateLimitState;
   openFlutterwaveCheckout: (cycle: BillingCycle) => void;
+  cancelSubscription: () => Promise<void>;
   user: AuthUser | null;
   authState: 'loading' | 'anon' | 'authed';
   logout: () => Promise<void>;
@@ -351,6 +352,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  const cancelSubscription = async () => {
+    try {
+      const r = await api.cancelSubscription();
+      showToast(`Auto-renewal stopped. Pro stays active until ${new Date(r.activeUntil).toLocaleDateString()}.`);
+      await refreshMe();
+    } catch (e) {
+      showToast(errMsg(e));
+    }
+  };
+
   const openFlutterwaveCheckout = (cycle: BillingCycle) => {
     window.dispatchEvent(new CustomEvent('wybuild:billing-open', { detail: { cycle } }));
   };
@@ -379,8 +390,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
         await api.installWorkflow(repo, ref, kind);
         showToast('Workflow installed. Starting build...');
-        await new Promise((r) => setTimeout(r, 2500));
-        await dispatch();
+        // GitHub can take a few seconds to register a freshly committed workflow; retry only transient dispatch failures.
+        let lastErr: unknown;
+        for (let attempt = 0; attempt < 4; attempt++) {
+          await new Promise((r) => setTimeout(r, attempt === 0 ? 2500 : 4000));
+          try {
+            await dispatch();
+            lastErr = undefined;
+            break;
+          } catch (err) {
+            lastErr = err;
+            if (!(err instanceof ApiError) || err.code || ![404, 422, 502].includes(err.status)) break;
+          }
+        }
+        if (lastErr) throw lastErr;
       }
 
       showToast(`Build dispatched for ${proj.name} (${ref}).`);
@@ -662,6 +685,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         subscription,
         rateLimits,
         openFlutterwaveCheckout,
+        cancelSubscription,
         user,
         authState,
         logout,

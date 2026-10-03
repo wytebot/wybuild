@@ -5,7 +5,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import * as core from '@bubblewrap/core';
+import * as coreNs from '@bubblewrap/core';
+const core = coreNs.TwaManifest ? coreNs : coreNs.default; // CJS package: named exports may only exist on .default
 
 const OUT = path.resolve(process.env.WB_OUT || '../.wybuild-out');
 const r = JSON.parse(fs.readFileSync(path.join(OUT, 'twa-resolved.json'), 'utf8'));

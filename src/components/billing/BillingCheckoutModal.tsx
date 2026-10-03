@@ -111,8 +111,8 @@ export const BillingCheckoutModal: React.FC<Props> = ({ isOpen, initialCycle, on
 
       setChargeId(result.chargeId);
       const type = nextActionType(result.nextAction);
-      if (result.redirectUrl || type === 'redirect_url') {
-        window.location.href = result.redirectUrl!;
+      if (result.redirectUrl) {
+        window.location.href = result.redirectUrl;
         return;
       }
       if (result.status === 'succeeded') {
