@@ -1,4 +1,4 @@
-# wybuild-twa-workflow-version: 7
+# wybuild-twa-workflow-version: 8
 name: WyBuild TWA
 concurrency:
   group: wybuild-${{ github.workflow }}-${{ github.ref }}
@@ -121,6 +121,13 @@ jobs:
               echo "::error::Decoded release keystore is only ${BYTES} bytes; it is almost certainly truncated or the wrong secret. Upload the complete .jks/.p12 Base64 value."
               exit 1
             fi
+            # A Base64 TEXT file that was Base64-encoded a second time decodes to text, not a keystore: unwrap it.
+            if ! LC_ALL=C grep -qavE '^[A-Za-z0-9+/=[:space:]]*$' "$KS"; then
+              if tr -d '[:space:]' < "$KS" | base64 --decode > "$KS.inner" 2>/dev/null && [ -s "$KS.inner" ]; then
+                mv "$KS.inner" "$KS"; BYTES="$(wc -c < "$KS" | tr -d ' ')"
+                echo "::notice::The keystore secret was Base64-encoded twice; WyBuild unwrapped it (${BYTES} bytes)."
+              fi
+            fi
             ALIAS="$WB_KEY_ALIAS_SECRET"; SPASS="$WB_KEYSTORE_PASSWORD"; KPASS="${WB_KEY_PASSWORD:-$WB_KEYSTORE_PASSWORD}"
           else
             if [ "$STORE_READY" = "true" ]; then echo "::error::Store-ready mode needs your own release keystore (use_keystore=true). A throw-away key cannot be used for updates."; exit 1; fi
@@ -133,6 +140,8 @@ jobs:
           # Validate the actual container and alias before Bubblewrap/Gradle starts.
           if ! keytool -list -keystore "$KS" -alias "$ALIAS" -storepass "$SPASS" >"$WB_OUT/keytool-check.txt" 2>&1; then
             sed 's/^/keytool: /' "$WB_OUT/keytool-check.txt" | head -5
+            # non-secret facts so you can compare with your local file: size, first bytes, short fingerprint
+            if [ -f "$KS" ]; then echo "::notice::Decoded keystore: $(wc -c < "$KS" | tr -d ' ') bytes, starts with $(head -c4 "$KS" | od -An -tx1 | tr -d ' \n'), sha256 $(sha256sum "$KS" | cut -c1-12). Compare with: sha256sum your.jks | cut -c1-12"; fi
             echo "::error::Release keystore validation failed. The decoded file exists but is not a usable keystore with the supplied store password/alias. If the file is .p12/.pfx, export its complete Base64 and use its store password; if it is .jks, use the exact case-sensitive alias and store password."
             exit 1
           fi

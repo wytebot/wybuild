@@ -126,6 +126,17 @@ export const TwaView: React.FC = () => {
     set('androidPermissions', on ? [...cfg.androidPermissions, permission] : cfg.androidPermissions.filter(p => p !== permission));
   };
 
+  /** Explicit action: overwrite this repo's signing secrets with the WyBuild (Vercel) default key. */
+  const useDefaultKey = async () => {
+    const r = repoFromUrl(repo);
+    if (!r) return;
+    if (!window.confirm(`Replace the signing key stored in ${r} with the WyBuild default key?\n\nApps already published with the old key can only be updated with that old key.`)) return;
+    setBusy(true); setError('');
+    try { await api.resetSigning(r); await discoverRepo(r, true); }
+    catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  };
+
   /** One button: discover anything missing, install the workflow, make sure signing exists, dispatch. */
   const build = async () => {
     setError(''); setNeedKey(false);
@@ -216,6 +227,7 @@ export const TwaView: React.FC = () => {
         <div className="p-2 rounded-lg bg-black/20"><span className="text-slate-600">Workflow</span><b className={`block ${workflow.installed && workflow.upToDate ? 'text-emerald-300' : 'text-amber-300'}`}>{workflow.installed && workflow.upToDate ? 'Installed' : workflow.installed ? 'Updates on build' : 'Installs on build'}</b></div>
         <div className="p-2 rounded-lg bg-black/20"><span className="text-slate-600">Signing</span><b className={`block ${signingReady ? 'text-emerald-300' : 'text-amber-300'}`}>{signing === 'repo' ? 'Repo key' : signingReady ? 'Default key' : 'Key needed'}</b></div>
       </div>}
+      {repoInspection && defaultKeystore && signing === 'repo' && <button type="button" disabled={busy} onClick={useDefaultKey} className="mt-2 text-xs text-emerald-300 underline disabled:opacity-40">Replace this repo's key with the WyBuild default key</button>}
       {inspection && <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">{inspection.checks.map(c => <div key={c.id} className={`rounded-lg px-3 py-2 border ${c.level === 'error' ? 'border-rose-500/20 text-rose-300' : c.level === 'warn' ? 'border-amber-500/20 text-amber-200' : 'border-emerald-400/15 text-emerald-200'}`}><div className="flex gap-2 items-center">{c.level === 'ok' ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0"/> : <AlertTriangle className="w-3.5 h-3.5 shrink-0"/>}{c.msg}</div></div>)}</div>}
     </section>
 
@@ -252,7 +264,7 @@ export const TwaView: React.FC = () => {
 
     {needKey && <section className="rounded-2xl border border-amber-400/25 bg-amber-400/[.04] p-4 sm:p-5 space-y-3">
       <div className="flex items-center gap-2 text-amber-200 font-semibold"><KeyRound className="w-4 h-4"/>One-time signing key for {repo}</div>
-      <p className="text-slate-400">No release keystore is available for this repo yet. Upload it here and the build starts automatically. {defaultKeystore ? '' : 'To skip this for every repo, set WB_KEYSTORE_* in the WyBuild Vercel environment.'}</p>
+      <p className="text-slate-400">No usable release keystore is available for this repo. {repoInspection?.signingProblem ? <span className="text-amber-200">The WyBuild default key was not used: {repoInspection.signingProblem} Fix it in Vercel and redeploy, and no repo will ask again. </span> : defaultKeystore ? '' : 'To skip this for every repo, set WB_KEYSTORE_* in the WyBuild Vercel environment. '}Or upload a key for this repo only; the build then starts automatically.</p>
       <KeystoreForm repos={[repo]} defaultRepo={repo} onCancel={() => setNeedKey(false)} onDone={() => { setNeedKey(false); void discoverRepo(repo, true).then(() => build()); }}/>
     </section>}
 

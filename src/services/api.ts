@@ -68,6 +68,8 @@ export interface RepoInspection {
   workflows?: { flutter: { installed: boolean; upToDate: boolean }; twa: { installed: boolean; upToDate: boolean } };
   /** repo = repo has its own key, default = server default key will be copied in automatically, none = needs an upload */
   signing?: 'repo' | 'default' | 'none';
+  /** why the Vercel default key cannot be used (only set when signing is 'none') */
+  signingProblem?: string;
   homepage?: string;
   canPush?: boolean;
   private?: boolean;
@@ -89,6 +91,7 @@ export const api = {
   inspectRepo: (repo: string, kind: BuildKind = 'flutter') => request<RepoInspection>(`inspect-repo?repo=${enc(repo)}&kind=${kind}`),
   workflow: (repo: string, branch: string, kind: BuildKind = 'flutter') =>
     request<{ installed: boolean; upToDate: boolean }>(`workflow?repo=${enc(repo)}&branch=${enc(branch)}&kind=${kind}`),
+  resetSigning: (repo: string) => post<{ ok: true; signing: 'default' }>('signing/reset', { repo }),
   installWorkflow: (repo: string, branch: string, kind: BuildKind = 'flutter') => post<{ ok: true }>('install-workflow', { repo, branch, kind }),
   twaBuild: (repo: string, branch: string, twa: TwaConfig) => {
     const { output, storeReady, useKeystore, ...rest } = twa;

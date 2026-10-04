@@ -1,4 +1,4 @@
-# wybuild-workflow-version: 2
+# wybuild-workflow-version: 3
 name: WyBuild Build
 concurrency:
   group: wybuild-${{ github.workflow }}-${{ github.ref }}
@@ -97,10 +97,22 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$WB_KEYSTORE_BASE64" || { echo "::error::WB_KEYSTORE_BASE64 secret is missing"; exit 1; }
-          echo "$WB_KEYSTORE_BASE64" | base64 -d > "$GITHUB_WORKSPACE/android/app/wb-release.jks"
+          KS="$GITHUB_WORKSPACE/android/app/wb-release.jks"
+          printf '%s' "$WB_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > "$KS" || { echo "::error::WB_KEYSTORE_BASE64 is not valid Base64. Re-create it with: base64 -w0 your.jks"; exit 1; }
+          # A Base64 TEXT file that was Base64-encoded a second time decodes to text, not a keystore: unwrap it.
+          if ! LC_ALL=C grep -qavE '^[A-Za-z0-9+/=[:space:]]*$' "$KS"; then
+            if tr -d '[:space:]' < "$KS" | base64 --decode > "$KS.inner" 2>/dev/null && [ -s "$KS.inner" ]; then mv "$KS.inner" "$KS"; echo "::notice::The keystore secret was Base64-encoded twice; WyBuild unwrapped it."; fi
+          fi
+          echo "::add-mask::$WB_KEYSTORE_PASSWORD"; echo "::add-mask::${WB_KEY_PASSWORD:-$WB_KEYSTORE_PASSWORD}"
+          if ! keytool -list -keystore "$KS" -alias "$WB_KEY_ALIAS" -storepass "$WB_KEYSTORE_PASSWORD" >"$RUNNER_TEMP/keytool-check.txt" 2>&1; then
+            sed 's/^/keytool: /' "$RUNNER_TEMP/keytool-check.txt" | head -5
+            echo "::notice::Decoded keystore: $(wc -c < "$KS" | tr -d ' ') bytes, starts with $(head -c4 "$KS" | od -An -tx1 | tr -d ' \n'), sha256 $(sha256sum "$KS" | cut -c1-12). Compare with: sha256sum your.jks | cut -c1-12"
+            echo "::error::Release keystore validation failed. Check WB_KEYSTORE_BASE64 is the complete raw .jks/.p12 Base64, and that WB_KEYSTORE_PASSWORD and WB_KEY_ALIAS are exact (the alias is case-sensitive)."
+            exit 1
+          fi
           {
             echo "storePassword=$WB_KEYSTORE_PASSWORD"
-            echo "keyPassword=$WB_KEY_PASSWORD"
+            echo "keyPassword=${WB_KEY_PASSWORD:-$WB_KEYSTORE_PASSWORD}"
             echo "keyAlias=$WB_KEY_ALIAS"
             echo "storeFile=$GITHUB_WORKSPACE/android/app/wb-release.jks"
           } > "$GITHUB_WORKSPACE/android/key.properties"

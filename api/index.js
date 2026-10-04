@@ -3,15 +3,16 @@ import fs from 'node:fs';
 import { kv } from '../lib/kv.js';
 import dns from 'node:dns/promises';
 import net from 'node:net';
+import tls from 'node:tls';
 import nacl from 'tweetnacl';
 import blake from 'blakejs';
 
 const WORKFLOW_FILE = 'wybuild.yml';
 const WORKFLOW_PATH = `.github/workflows/${WORKFLOW_FILE}`;
-const WORKFLOW_VERSION = 2;
+const WORKFLOW_VERSION = 3;
 const TWA_WORKFLOW_FILE = 'wybuild-twa.yml';
 const TWA_WORKFLOW_PATH = `.github/workflows/${TWA_WORKFLOW_FILE}`;
-const TWA_WORKFLOW_VERSION = 7;
+const TWA_WORKFLOW_VERSION = 8;
 // every file committed to a repo for each workflow kind: [path in repo, path in ./workflow]
 const WORKFLOW_KINDS = {
   flutter: { file: WORKFLOW_FILE, path: WORKFLOW_PATH, version: WORKFLOW_VERSION, files: [[WORKFLOW_PATH, 'wybuild.yml']] },
@@ -748,6 +749,76 @@ async function runDetail(session, repo, id) {
   return build;
 }
 
+
+/* ------------------------- keystore file validation ------------------------- */
+// Reads a keystore the way Java would, WITHOUT needing Java: tells apart a complete keystore, a truncated one,
+// a Base64-text file that was Base64-encoded a second time, and a wrong store password. Returns the canonical
+// Base64 of the real keystore bytes so every copy WyBuild installs is clean.
+const B64_TEXT = /^[A-Za-z0-9+/]+={0,2}$/;
+function derTotalLength(b) {
+  if (b.length < 4 || b[0] !== 0x30) return -1;
+  let l = b[1];
+  if (l & 0x80) {
+    const n = l & 0x7f;
+    if (n < 1 || n > 4 || b.length < 2 + n) return -1;
+    l = 0;
+    for (let i = 0; i < n; i++) l = l * 256 + b[2 + i];
+    return 2 + n + l;
+  }
+  return 2 + l;
+}
+const hex4 = (b) => b.subarray(0, 4).toString('hex');
+function jksDigestOk(bytes, password) {
+  const pw = Buffer.alloc(password.length * 2);
+  for (let i = 0; i < password.length; i++) pw.writeUInt16BE(password.charCodeAt(i), i * 2);
+  const h = crypto.createHash('sha1').update(pw).update('Mighty Aphrodite', 'utf8').update(bytes.subarray(0, bytes.length - 20)).digest();
+  return h.equals(bytes.subarray(bytes.length - 20));
+}
+function parseKeystore(input, storePassword) {
+  const bad = (problem, code = 'KEYSTORE_INVALID') => ({ ok: false, problem, code });
+  const text = String(input || '').trim().replace(/^["']|["']$/g, '').replace(/\s+/g, '');
+  if (!text) return bad('is empty.');
+  if (!B64_TEXT.test(text)) return bad('is not valid Base64 (it has characters Base64 never uses, such as quotes, a "data:" prefix or a copy-paste artefact). Re-create it with: base64 -w0 your.jks');
+  let bytes = Buffer.from(text, 'base64');
+  let wraps = 0;
+  const kind = (b) => {
+    if (b.length >= 24 && b.readUInt32BE(0) === 0xfeedfeed) return 'jks';
+    if (b.length >= 24 && b.readUInt32BE(0) === 0xcececece) return 'jceks';
+    if (b.length >= 100 && derTotalLength(b) === b.length) return 'pkcs12';
+    return '';
+  };
+  // a Base64 TEXT file that got Base64-encoded again (e.g. ks.b64 uploaded as if it were the .jks)
+  while (wraps < 2 && !kind(bytes) && bytes.length >= 100 && B64_TEXT.test(bytes.toString('latin1').replace(/\s+/g, ''))) {
+    bytes = Buffer.from(bytes.toString('latin1').replace(/\s+/g, ''), 'base64');
+    wraps++;
+  }
+  const type = kind(bytes);
+  if (!type) {
+    if (bytes[0] === 0x30) {
+      const want = derTotalLength(bytes);
+      if (want > bytes.length) return bad(`is incomplete: the keystore file should be ${want} bytes but only ${bytes.length} arrived (${want - bytes.length} bytes cut off the end). It was truncated while copying; re-create the Base64 and copy it again.`, 'KEYSTORE_TRUNCATED');
+      if (want > 0 && want < bytes.length) return bad(`has ${bytes.length - want} unexpected extra bytes after the end of the keystore. Re-create the Base64 from the original .jks/.p12 file.`);
+    }
+    return bad(`does not contain a keystore (the decoded file starts with ${hex4(bytes) || 'nothing'}; a .jks starts with feedfeed and a .p12 with 30 82). Make sure you encoded the .jks/.p12 file itself.`);
+  }
+  if (storePassword) {
+    if (type === 'jks' && !jksDigestOk(bytes, storePassword)) {
+      return bad('failed its integrity check: either the store password is wrong or the file is damaged/incomplete.', 'KEYSTORE_BAD_PASSWORD');
+    }
+    if (type === 'pkcs12') {
+      try {
+        tls.createSecureContext({ pfx: bytes, passphrase: storePassword });
+      } catch (e) {
+        // only a definite MAC/password failure is reported; exotic-but-valid files (legacy ciphers) are left to Java
+        if (/mac verify|invalid password|bad decrypt|wrong password/i.test(String(e?.message || ''))) {
+          return bad('could not be opened with the store password: the password is wrong, or the file is damaged.', 'KEYSTORE_BAD_PASSWORD');
+        }
+      }
+    }
+  }
+  return { ok: true, type, bytes, b64: bytes.toString('base64'), wraps };
+}
+
 /* -------------------------------- keystores ------------------------------- */
 
 function sealedBox(message, publicKeyB64) {
@@ -783,15 +854,15 @@ const stripEol = (v) => String(v || '').replace(/^\uFEFF/, '').replace(/[\r\n]+$
 // Validates the Vercel env once and says exactly what is wrong, instead of letting GitHub fail later.
 function defaultKeystoreState() {
   if (!SECRET_NAMES.some((n) => env(n))) return { state: 'absent' };
-  const b64 = env('WB_KEYSTORE_BASE64').replace(/^["']|["']$/g, '').replace(/\s+/g, '');
+  const rawB64 = env('WB_KEYSTORE_BASE64');
   const storePassword = stripEol(env('WB_KEYSTORE_PASSWORD'));
   const alias = stripEol(env('WB_KEY_ALIAS'));
   const keyPassword = stripEol(env('WB_KEY_PASSWORD')) || storePassword;
-  const missing = [['WB_KEYSTORE_BASE64', b64], ['WB_KEYSTORE_PASSWORD', storePassword], ['WB_KEY_ALIAS', alias]].filter(([, v]) => !v).map(([n]) => n);
+  const missing = [['WB_KEYSTORE_BASE64', rawB64.trim()], ['WB_KEYSTORE_PASSWORD', storePassword], ['WB_KEY_ALIAS', alias]].filter(([, v]) => !v).map(([n]) => n);
   if (missing.length) return { state: 'incomplete', problem: `The WyBuild Vercel environment is missing ${missing.join(', ')}.` };
-  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(b64) || Buffer.from(b64, 'base64').length < 100) {
-    return { state: 'invalid', problem: 'WB_KEYSTORE_BASE64 in the Vercel environment is not valid Base64 of a keystore file (use: base64 -w0 your.jks).' };
-  }
+  const parsed = parseKeystore(rawB64, storePassword);
+  if (!parsed.ok) return { state: 'invalid', problem: `WB_KEYSTORE_BASE64 in the Vercel environment ${parsed.problem}` };
+  const b64 = parsed.b64;
   if (b64.length > 48000) return { state: 'invalid', problem: "WB_KEYSTORE_BASE64 in the Vercel environment is larger than GitHub's 48 KB secret limit." };
   // HMAC so the stored marker reveals nothing about the key or passwords
   const fingerprint = crypto.createHmac('sha256', env('SESSION_SECRET') || 'wybuild').update([b64, storePassword, alias, keyPassword].join('\0')).digest('hex').slice(0, 32);
@@ -1357,7 +1428,7 @@ async function route(req, res, path, query) {
     return send(res, 200, {
       repo, name: info.name, defaultBranch: branch, framework, flutterVersion, packageId, latestCommitSha,
       workflowInstalled: workflows[kind].installed, workflowUpToDate: workflows[kind].upToDate, workflows,
-      signing, homepage: homepage.startsWith('https://') ? homepage : '',
+      signing, signingProblem: signing === 'none' ? (defaultKeystoreState().problem || undefined) : undefined, homepage: homepage.startsWith('https://') ? homepage : '',
       canPush: !!info.permissions?.push, private: !!info.private,
     });
   }
@@ -1601,6 +1672,19 @@ async function route(req, res, path, query) {
     return redirect(res, loc);
   }
 
+  if (path === 'signing/reset' && post) {
+    // explicit user action: replace this repo's signing secrets with the WyBuild (Vercel) default key
+    const repo = checkRepo(bodyOf(req).repo);
+    const st = defaultKeystoreState();
+    if (st.state !== 'ok') {
+      throw new HttpError(400, st.problem || 'No default keystore is configured in the WyBuild Vercel environment.', 'NO_KEYSTORE', {
+        hint: 'Set WB_KEYSTORE_BASE64, WB_KEYSTORE_PASSWORD, WB_KEY_ALIAS and WB_KEY_PASSWORD in the WyBuild Vercel project and redeploy.',
+      });
+    }
+    await installDefaultKeystore(session, repo, st);
+    return send(res, 200, { ok: true, signing: 'default' });
+  }
+
   if (path === 'keystore' && m === 'GET') {
     const repos = String(query.repos || '').split(',').filter(Boolean).slice(0, 10).map(checkRepo);
     return send(res, 200, { keystores: await keystoresFor(session, repos) });
@@ -1616,13 +1700,16 @@ async function route(req, res, path, query) {
       if (allKeys.length >= 1) throw new HttpError(402, 'Free tier includes 1 release keystore. Upgrade to Pro for unlimited signing profiles.', 'PRO_REQUIRED');
     }
     if (!alias || !storePassword || !fileBase64) throw new HttpError(400, 'Keystore file, alias and password are required');
-    const bytes = Buffer.from(String(fileBase64), 'base64');
-    if (bytes.length < 100 || String(fileBase64).length > 48000) throw new HttpError(400, 'Keystore file is invalid or larger than GitHub\'s 48 KB secret limit');
+    const parsed = parseKeystore(fileBase64, String(storePassword));
+    if (!parsed.ok) throw new HttpError(400, `This keystore ${parsed.problem}`, parsed.code, { hint: 'Upload the .jks / .p12 file itself, not a text copy of it, and check the store password.' });
+    const bytes = parsed.bytes;
+    const cleanB64 = parsed.b64;
+    if (cleanB64.length > 48000) throw new HttpError(400, 'Keystore file is larger than GitHub\'s 48 KB secret limit');
     const pub = await ghJson(session, `/repos/${repo}/actions/secrets/public-key`);
     await putSecret(session, repo, pub, 'WB_KEYSTORE_PASSWORD', String(storePassword));
     await putSecret(session, repo, pub, 'WB_KEY_ALIAS', String(alias));
     await putSecret(session, repo, pub, 'WB_KEY_PASSWORD', String(keyPassword || storePassword));
-    await putSecret(session, repo, pub, 'WB_KEYSTORE_BASE64', String(fileBase64));
+    await putSecret(session, repo, pub, 'WB_KEYSTORE_BASE64', cleanB64);
     await kv.del(defaultMarkerKey(repo)).catch(() => {}); // the repo now has the owner's own key: never rotate over it
     await kv.set(`wb:ks:${session.login}:${repo}`, { name: String(name || '').slice(0, 80), alias: String(alias).slice(0, 80), sha256: crypto.createHash('sha256').update(bytes).digest('hex'), createdAt: new Date().toISOString() });
     return send(res, 200, { ok: true });

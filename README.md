@@ -133,6 +133,10 @@ cleanly). Details:
 - The Vercel values are validated (Base64, <= 48 KB, password and alias present) and a precise error names the problem.
 - Release builds fail with the real reason if the secrets cannot be installed (e.g. no admin access to the repo) instead of
   silently producing an unsigned APK. Debug/profile builds never block on it.
+- The Vercel key is checked like Java would: complete (not truncated), a real .jks/.p12 (a Base64 text file encoded twice is unwrapped automatically), and openable with `WB_KEYSTORE_PASSWORD`. If it fails, the Web -> Android screen shows the exact reason instead of just asking for a key.
+- An upload through WyBuild is checked the same way and the clean file is stored.
+- "Replace this repo's key with the WyBuild default key" (Web -> Android) overwrites a repo's secrets on request, for repos holding a broken key.
+- Workflows v8 (TWA) / v3 (Flutter) unwrap double-encoded secrets, fail fast on a bad key and print the decoded size, first bytes and a short sha256 to compare with `sha256sum your.jks | cut -c1-12`.
 - With no Vercel key and no repo key, the Web -> Android screen asks for a key inline (no page change).
 
 Redeploy after changing Vercel environment variables. One default key means every app built through your WyBuild is signed with
