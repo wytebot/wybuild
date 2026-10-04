@@ -1131,6 +1131,31 @@ async function safeFetch(url, { json = false, maxBytes = 1_000_000 } = {}) {
   throw new HttpError(400, 'Too many redirects');
 }
 
+/* ---- HTML helpers for the site inspector (no dependencies) ---- */
+function htmlAttrs(tag) {
+  const out = {};
+  const re = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/g;
+  let m;
+  while ((m = re.exec(tag))) out[m[1].toLowerCase()] = (m[2] ?? m[3] ?? m[4] ?? '').replace(/&amp;/g, '&').trim();
+  return out;
+}
+const htmlTags = (html, name) => (html.match(new RegExp(`<${name}\\b[^>]*>`, 'gi')) || []).map(htmlAttrs);
+function normHex(v) {
+  const s = String(v || '').trim();
+  if (HEX.test(s)) return s.toLowerCase();
+  const m = /^#([0-9a-fA-F])([0-9a-fA-F])([0-9a-fA-F])$/.exec(s);
+  return m ? `#${m[1]}${m[1]}${m[2]}${m[2]}${m[3]}${m[3]}`.toLowerCase() : '';
+}
+const iconSize = (i) => Math.max(0, ...String(i?.sizes || '').split(/\s+/).map((x) => parseInt(x, 10) || 0));
+
+async function fetchOk(url, opts) {
+  try { return await safeFetch(url, opts); } catch { return null; }
+}
+async function isImage(url) {
+  const r = await fetchOk(url, { maxBytes: 4_000_000 });
+  return !!r && r.status >= 200 && r.status < 300 && /^image\//i.test(r.contentType);
+}
+
 async function inspectSite(rawUrl) {
   const url = cleanHttps(rawUrl, 'Web app URL', true);
   const checks = [];
@@ -1138,50 +1163,120 @@ async function inspectSite(rawUrl) {
   const page = await safeFetch(url);
   add('reachable', page.status >= 200 && page.status < 300, `Start page responded with HTTP ${page.status}`, 'error');
   const finalUrl = new URL(page.finalUrl);
-  const tag = /<link[^>]+rel=["']?[^"'>]*manifest[^"'>]*["']?[^>]*>/i.exec(page.text);
-  const href = tag && /href=["']?([^"'\s>]+)/i.exec(tag[0]);
+  const html = page.text;
+  const links = htmlTags(html, 'link');
+  const metas = htmlTags(html, 'meta');
+  const meta = (key) => metas.find((m) => (m.name || m.property || '').toLowerCase() === key)?.content || '';
+
+  // 1) manifest: every <link rel=manifest>, then the usual file names
+  const candidates = [
+    ...links.filter((l) => /(^|\s)manifest(\s|$)/i.test(l.rel || '') && l.href).map((l) => new URL(l.href, finalUrl).href),
+    ...['/manifest.webmanifest', '/manifest.json', '/site.webmanifest'].map((p) => finalUrl.origin + p),
+  ];
   let manifest = null;
   let manifestUrl = '';
-  if (href) {
-    manifestUrl = new URL(href[1].replace(/&amp;/g, '&'), finalUrl).href;
+  for (const c of [...new Set(candidates)].slice(0, 5)) {
+    const r = await fetchOk(c, { json: true });
+    if (!r || r.status !== 200) continue;
     try {
-      manifest = JSON.parse((await safeFetch(manifestUrl, { json: true })).text);
-    } catch {
-      /* reported below */
+      const j = JSON.parse(r.text.replace(/^﻿/, ''));
+      if (j && typeof j === 'object' && !Array.isArray(j)) { manifest = j; manifestUrl = r.finalUrl; break; }
+    } catch { /* try the next candidate */ }
+  }
+  add('manifest', !!manifest, manifest ? `Web App Manifest found (${new URL(manifestUrl).pathname})` : 'No readable Web App Manifest; WyBuild will use the page title, meta tags and favicons instead (Chrome needs a manifest for the best install experience)');
+  const base = manifestUrl || finalUrl.href;
+  const abs = (u) => { try { return u ? new URL(u, base).href : ''; } catch { return ''; } };
+
+  // 2) icons: manifest first, then apple-touch-icon / <link rel=icon>, then well-known paths
+  const icons = (Array.isArray(manifest?.icons) ? manifest.icons : []).filter((i) => i && i.src);
+  const purposeOf = (i) => String(i.purpose || 'any').toLowerCase();
+  const plain = icons.filter((i) => !/maskable|monochrome/.test(purposeOf(i))).sort((a, b) => iconSize(b) - iconSize(a));
+  let best = plain[0] || [...icons].sort((a, b) => iconSize(b) - iconSize(a))[0];
+  let iconUrl = best ? abs(best.src) : '';
+  let iconPx = best ? iconSize(best) : 0;
+  let iconFrom = best ? 'manifest' : '';
+  if (!iconUrl) {
+    const linkIcons = links
+      .filter((l) => /(^|\s)(apple-touch-icon(-precomposed)?|icon|shortcut icon)(\s|$)/i.test(l.rel || '') && l.href && !/\.svg(\?|$)/i.test(l.href))
+      .map((l) => ({ src: new URL(l.href, finalUrl).href, sizes: l.sizes, apple: /apple/i.test(l.rel) }))
+      .sort((a, b) => iconSize(b) - iconSize(a) || Number(b.apple) - Number(a.apple));
+    const wellKnown = ['/apple-touch-icon.png', '/icon-512.png', '/icon-192.png', '/favicon.png', '/favicon.ico'].map((p) => ({ src: finalUrl.origin + p, sizes: '' }));
+    for (const c of [...linkIcons, ...wellKnown].slice(0, 6)) {
+      if (await isImage(c.src)) { iconUrl = c.src; iconPx = iconSize(c); iconFrom = 'page'; break; }
     }
   }
-  add('manifest', !!manifest, manifest ? 'Web App Manifest found and valid JSON' : 'No readable Web App Manifest; fill the form manually (Chrome needs a manifest for a good install experience)');
-  const icons = Array.isArray(manifest?.icons) ? manifest.icons : [];
-  const size = (i) => Math.max(0, ...String(i.sizes || '').split(/\s+/).map((x) => parseInt(x, 10) || 0));
-  const abs = (u) => (u ? new URL(u, manifestUrl || finalUrl).href : '');
-  const best = icons.filter((i) => !/maskable|monochrome/.test(i.purpose || '')).sort((a, b) => size(b) - size(a))[0] || icons.sort((a, b) => size(b) - size(a))[0];
-  const maskable = icons.find((i) => /maskable/.test(i.purpose || ''));
-  add('icon-512', !!best && size(best) >= 512, best ? `Largest icon is ${size(best) || '?'}px` : 'No icons in manifest');
+  if (!iconUrl) { const og = meta('og:image'); if (og && (await isImage(abs(og)))) { iconUrl = abs(og); iconFrom = 'og'; } }
+  const maskable = icons.find((i) => /maskable/.test(purposeOf(i)));
+  const mono = icons.find((i) => /monochrome/.test(purposeOf(i)));
+  const iconReachable = iconUrl ? await isImage(iconUrl) : false;
+  if (iconUrl && !iconReachable) { add('icon-reachable', false, `The icon address does not return an image: ${iconUrl}`, 'error'); }
+  add('icon-512', !!iconUrl && iconPx >= 512, iconUrl ? (iconPx ? `Largest icon is ${iconPx}px${iconFrom === 'page' ? ' (from page tags, not the manifest)' : ''}${iconPx < 512 ? '; 512px or larger is recommended' : ''}` : `Icon found from ${iconFrom === 'og' ? 'the social preview image' : 'the page'} (size unknown)`) : 'No icon found: add a 512×512 PNG to your manifest');
   add('maskable', !!maskable, maskable ? 'Maskable icon present' : 'No maskable icon: Android will pad the icon on a white tile');
+
+  // 3) colors, names, start page, scope
+  const metaTheme = normHex(metas.filter((m) => (m.name || '').toLowerCase() === 'theme-color').map((m) => m.content).find((c) => normHex(c)) || '');
+  const themeColor = normHex(manifest?.theme_color) || metaTheme;
+  const backgroundColor = normHex(manifest?.background_color);
+  const titleTag = /<title[^>]*>([^<]{1,120})<\/title>/i.exec(html)?.[1]?.replace(/\s+/g, ' ').trim() || '';
+  const siteName = manifest?.name || meta('og:site_name') || meta('application-name') || meta('apple-mobile-web-app-title') || titleTag.split(/\s[|\-–—·]\s/)[0] || '';
+  const shortName = manifest?.short_name || meta('apple-mobile-web-app-title') || meta('application-name') || siteName;
+  add('viewport', /width=device-width/i.test(meta('viewport')), /width=device-width/i.test(meta('viewport')) ? 'Mobile viewport meta tag present' : 'No <meta name="viewport" content="width=device-width, initial-scale=1">: the app may render like a desktop page');
+  let startUrl = null;
+  try { startUrl = manifest?.start_url ? new URL(manifest.start_url, manifestUrl || finalUrl) : null; } catch { /* ignore */ }
+  const crossOrigin = !!startUrl && startUrl.origin !== finalUrl.origin;
+  if (crossOrigin) add('start-origin', false, `start_url is on ${startUrl.origin}, a different site. Add it as a trusted domain and publish assetlinks.json there too`);
+  const display = ['fullscreen', 'minimal-ui', 'standalone'].includes(manifest?.display) ? manifest.display : (Array.isArray(manifest?.display_override) ? manifest.display_override.find((d) => ['fullscreen', 'standalone', 'minimal-ui'].includes(d)) : '') || 'standalone';
+  const orientation = /portrait/.test(manifest?.orientation || '') ? 'portrait' : /landscape/.test(manifest?.orientation || '') ? 'landscape' : 'default';
+  const shortcuts = (Array.isArray(manifest?.shortcuts) ? manifest.shortcuts : []).slice(0, 4).map((s) => {
+    try {
+      const u = new URL(s.url, manifestUrl || finalUrl);
+      if (u.origin !== finalUrl.origin) return null;
+      return { name: String(s.name || '').slice(0, 40), shortName: String(s.short_name || s.name || '').slice(0, 12), url: (u.pathname + u.search).slice(0, 300) };
+    } catch { return null; }
+  }).filter((s) => s && s.name && s.url.startsWith('/'));
+
+  // 4) assetlinks (does the site already trust an Android package?)
   let assetlinks = null;
-  try {
-    const al = await safeFetch(`${finalUrl.origin}/.well-known/assetlinks.json`, { json: true });
-    assetlinks = al.status === 200 ? JSON.parse(al.text) : null;
-  } catch {
-    /* none yet */
-  }
+  const al = await fetchOk(`${finalUrl.origin}/.well-known/assetlinks.json`, { json: true });
+  try { assetlinks = al && al.status === 200 ? JSON.parse(al.text) : null; } catch { assetlinks = null; }
+
+  // 5) native features the site's own code appears to use (suggestions only; the user decides)
+  const scriptUrls = [...new Set([
+    ...htmlTags(html, 'script').map((s) => s.src),
+    ...links.filter((l) => /modulepreload|preload/.test(l.rel || '') && /\.m?js(\?|$)/.test(l.href || '')).map((l) => l.href),
+  ].filter(Boolean).map((s) => { try { return new URL(s, finalUrl); } catch { return null; } }).filter((u) => u && u.origin === finalUrl.origin).map((u) => u.href))].slice(0, 5);
+  const code = [html, ...(await Promise.all(scriptUrls.map(async (u) => (await fetchOk(u, { maxBytes: 3_000_000 }))?.text || '')))].join('\n');
+  const swSeen = /serviceWorker\s*\.\s*register|navigator\.serviceWorker/.test(code);
+  const featureHints = [
+    /Notification\s*\.\s*requestPermission|PushManager|pushManager\s*\.\s*subscribe|showNotification/.test(code) && 'notifications',
+    /geolocation\s*\.\s*(getCurrentPosition|watchPosition)/.test(code) && 'location',
+    /getUserMedia/.test(code) && /video\s*:/.test(code) && 'camera',
+    /getUserMedia/.test(code) && /audio\s*:/.test(code) && 'microphone',
+    /navigator\s*\.\s*vibrate/.test(code) && 'vibration',
+  ].filter(Boolean);
+  add('service-worker', swSeen, swSeen ? 'Service worker registered (offline support)' : 'No service worker found: the app needs a network connection to open', 'warn');
+  if (featureHints.length) add('feature-hints', true, `Your site's code uses: ${featureHints.join(', ')}. Enable the matching Native features below.`);
+
   const host = finalUrl.hostname.replace(/^www\./, '');
-  const startUrl = manifest?.start_url ? new URL(manifest.start_url, manifestUrl || finalUrl) : null;
   return {
     detected: {
       webUrl: finalUrl.origin + (finalUrl.pathname === '/' ? '/' : finalUrl.pathname),
       webManifestUrl: manifestUrl || undefined,
-      name: manifest?.name || '',
-      launcherName: (manifest?.short_name || manifest?.name || '').slice(0, 30),
-      themeColor: HEX.test(manifest?.theme_color || '') ? manifest.theme_color : '',
-      backgroundColor: HEX.test(manifest?.background_color || '') ? manifest.background_color : '',
+      name: String(siteName).slice(0, 50),
+      launcherName: String(shortName || siteName).slice(0, 30),
+      themeColor,
+      backgroundColor,
       startUrl: startUrl ? startUrl.pathname + startUrl.search : '/',
-      display: ['fullscreen', 'minimal-ui'].includes(manifest?.display) ? manifest.display : 'standalone',
-      orientation: /portrait/.test(manifest?.orientation || '') ? 'portrait' : /landscape/.test(manifest?.orientation || '') ? 'landscape' : 'default',
-      iconUrl: best ? abs(best.src) : '',
+      display,
+      orientation,
+      iconUrl: iconReachable ? iconUrl : '',
       maskableIconUrl: maskable ? abs(maskable.src) : '',
+      monochromeIconUrl: mono ? abs(mono.src) : '',
+      additionalTrustedOrigins: crossOrigin ? [startUrl.origin] : undefined,
+      shortcuts: shortcuts.length ? shortcuts : undefined,
       packageId: host.split('.').reverse().map((x) => x.replace(/[^a-z0-9]/gi, '').toLowerCase()).filter(Boolean).map((x) => (/^[a-z]/.test(x) ? x : `a${x}`)).join('.'),
     },
+    featureHints,
     checks,
     assetlinks: assetlinks ? { present: true, packages: assetlinks.map((e) => e?.target?.package_name).filter(Boolean) } : { present: false, packages: [] },
   };
@@ -1415,11 +1510,15 @@ async function route(req, res, path, query) {
       const f = await r.json();
       return Buffer.from(f.content || '', 'base64').toString('utf8');
     };
-    const [packageJson, gradle, manifest, twaWf, latest, signing] = await Promise.all([
+    const MANIFEST_PATHS = ['public/manifest.webmanifest', 'public/manifest.json', 'manifest.webmanifest', 'manifest.json', 'static/manifest.json', 'src/manifest.json', 'docs/manifest.json'];
+    const CNAME_PATHS = ['CNAME', 'public/CNAME', 'docs/CNAME', 'static/CNAME'];
+    const [packageJson, gradle, manifest, twaWf, latest, signing, repoManifestFiles, cnameFiles] = await Promise.all([
       readFile('package.json'), readFile('android/app/build.gradle'),
       readFile('android/app/src/main/AndroidManifest.xml'), readFile(WORKFLOW_KINDS.twa.path),
       ghJson(session, `/repos/${repo}/commits?sha=${encodeURIComponent(branch)}&per_page=1`).catch(() => []),
       signingStatus(session, repo),
+      Promise.all(MANIFEST_PATHS.map((f) => readFile(f).catch(() => ''))),
+      Promise.all(CNAME_PATHS.map((f) => readFile(f).catch(() => ''))),
     ]);
     let framework = 'unknown';
     if (packageJson) {
@@ -1435,12 +1534,37 @@ async function route(req, res, path, query) {
     // best guess at the live website for web repos: GitHub "Website" field, else GitHub Pages
     let homepage = String(info.homepage || '').trim();
     if (homepage && !/^https?:\/\//i.test(homepage)) homepage = `https://${homepage}`;
+    // more places a live address hides: package.json "homepage", a CNAME file, then GitHub Pages
+    let pkgMeta = {};
+    try { pkgMeta = packageJson ? JSON.parse(packageJson) : {}; } catch { pkgMeta = {}; }
+    if (!homepage && typeof pkgMeta.homepage === 'string' && /^https?:\/\/[^\s]+$/i.test(pkgMeta.homepage.trim()) && !/github\.com\//i.test(pkgMeta.homepage)) homepage = pkgMeta.homepage.trim();
+    const cname = cnameFiles.map((t) => String(t).trim().split(/\s+/)[0]).find((t) => /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(t || ''));
+    if (!homepage && cname) homepage = `https://${cname.toLowerCase()}/`;
+    // the web app manifest that lives in the repo (used to fill anything the live site does not publish)
+    let repoWeb;
+    for (let i = 0; i < repoManifestFiles.length && !repoWeb; i++) {
+      try {
+        const j = JSON.parse(String(repoManifestFiles[i]).replace(/^\uFEFF/, ''));
+        if (!j || typeof j !== 'object' || Array.isArray(j)) continue;
+        const hex = (v) => (HEX.test(String(v || '')) ? String(v).toLowerCase() : '');
+        repoWeb = {
+          source: MANIFEST_PATHS[i],
+          name: typeof j.name === 'string' ? j.name.slice(0, 50) : '',
+          launcherName: typeof (j.short_name || j.name) === 'string' ? String(j.short_name || j.name).slice(0, 30) : '',
+          themeColor: hex(j.theme_color), backgroundColor: hex(j.background_color),
+          display: ['fullscreen', 'minimal-ui', 'standalone'].includes(j.display) ? j.display : '',
+          orientation: /portrait/.test(j.orientation || '') ? 'portrait' : /landscape/.test(j.orientation || '') ? 'landscape' : '',
+          startUrl: typeof j.start_url === 'string' && j.start_url.startsWith('/') ? j.start_url.slice(0, 300) : '',
+        };
+      } catch { /* not a manifest */ }
+    }
+    if (!repoWeb && (pkgMeta.name || info.description)) repoWeb = { source: 'package.json', name: String(pkgMeta.displayName || info.description || '').slice(0, 50), launcherName: '', themeColor: '', backgroundColor: '', display: '', orientation: '', startUrl: '' };
     if (!homepage && info.has_pages) homepage = /\.github\.io$/i.test(info.name) ? `https://${info.name.toLowerCase()}/` : `https://${info.owner.login.toLowerCase()}.github.io/${info.name}/`;
     return send(res, 200, {
       repo, name: info.name, defaultBranch: branch, framework, flutterVersion: 'n/a', packageId, latestCommitSha,
       workflowInstalled: workflows.twa.installed, workflowUpToDate: workflows.twa.upToDate, workflows,
       signing, signingProblem: signing === 'none' ? (defaultKeystoreState().problem || undefined) : undefined, homepage: homepage.startsWith('https://') ? homepage : '',
-      canPush: !!info.permissions?.push, private: !!info.private,
+      canPush: !!info.permissions?.push, private: !!info.private, web: repoWeb, homepageFrom: info.homepage ? 'github' : homepage ? 'repo' : '',
     });
   }
 

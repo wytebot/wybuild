@@ -50,7 +50,9 @@ const post = <T,>(path: string, body: unknown) => request<T>(path, { method: 'PO
 const enc = encodeURIComponent;
 
 export interface TwaInspection {
-  detected: Partial<Pick<TwaConfig, 'webUrl' | 'webManifestUrl' | 'name' | 'launcherName' | 'themeColor' | 'backgroundColor' | 'startUrl' | 'display' | 'orientation' | 'iconUrl' | 'maskableIconUrl' | 'packageId'>>;
+  detected: Partial<Pick<TwaConfig, 'webUrl' | 'webManifestUrl' | 'name' | 'launcherName' | 'themeColor' | 'backgroundColor' | 'startUrl' | 'display' | 'orientation' | 'iconUrl' | 'maskableIconUrl' | 'monochromeIconUrl' | 'packageId' | 'additionalTrustedOrigins' | 'shortcuts'>>;
+  /** native features the live site's code appears to use (suggestions) */
+  featureHints?: ('notifications' | 'location' | 'camera' | 'microphone' | 'vibration')[];
   checks: { id: string; ok: boolean; level: 'ok' | 'warn' | 'error'; msg: string }[];
   assetlinks: { present: boolean; packages: string[] };
 }
@@ -71,6 +73,8 @@ export interface RepoInspection {
   /** why the Vercel default key cannot be used (only set when signing is 'none') */
   signingProblem?: string;
   homepage?: string;
+  /** values read from a web manifest / package.json inside the repo; used only to fill blanks the live site does not publish */
+  web?: { source: string; name: string; launcherName: string; themeColor: string; backgroundColor: string; display: string; orientation: string; startUrl: string };
   canPush?: boolean;
   private?: boolean;
   latestCommitSha?: string;

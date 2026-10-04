@@ -76,10 +76,28 @@ export const TwaView: React.FC = () => {
       const next: Record<string, unknown> = { ...c };
       for (const [k, v] of Object.entries(detected)) {
         const cur = (c as unknown as Record<string, unknown>)[k];
-        if (fresh || cur === '' || cur === undefined) next[k] = v;
+        if (fresh || cur === '' || cur === undefined || (Array.isArray(cur) && !cur.length)) next[k] = v;
       }
       next.fallbackType = 'customtabs';
       return next as unknown as TwaConfig;
+    });
+  };
+
+  /** fill only the blanks from the manifest/package.json that lives in the repo */
+  const fillFromRepo = (ri: RepoInspection) => {
+    const w = ri.web;
+    if (!w) return;
+    setCfg(c => {
+      const next: TwaConfig = { ...c };
+      const blank = (v: unknown) => v === '' || v === undefined;
+      if (blank(c.name) && w.name) next.name = w.name;
+      if (blank(c.launcherName) && (w.launcherName || w.name)) next.launcherName = w.launcherName || w.name;
+      if (blank(c.themeColor) || (editingId == null && c.themeColor === EMPTY.themeColor && w.themeColor)) next.themeColor = w.themeColor || c.themeColor;
+      if (editingId == null && c.backgroundColor === EMPTY.backgroundColor && w.backgroundColor) next.backgroundColor = w.backgroundColor;
+      if (editingId == null && c.display === EMPTY.display && (w.display === 'fullscreen' || w.display === 'minimal-ui')) next.display = w.display;
+      if (editingId == null && c.orientation === 'default' && (w.orientation === 'portrait' || w.orientation === 'landscape')) next.orientation = w.orientation;
+      if (editingId == null && c.startUrl === '/' && w.startUrl) next.startUrl = w.startUrl;
+      return next;
     });
   };
 
@@ -93,9 +111,11 @@ export const TwaView: React.FC = () => {
       const url = cfgRef.current.webUrl || ri.homepage || '';
       if (url) {
         if (!cfgRef.current.webUrl) setCfg(c => ({ ...c, webUrl: url }));
-        applyInspection(await api.twaInspect(url), url);
+        try { applyInspection(await api.twaInspect(url), url); }
+        catch (e: any) { setError(`Repository found, but the live site could not be read (${e?.message || 'unreachable'}). Check the address and tap Discover again.`); }
       }
-      if (!url) setError('Repository found. Enter the address of your live web app (for example https://yourapp.com) and tap Discover again.');
+      fillFromRepo(ri);
+      if (!url) setError('Repository found, but no live address was found (GitHub website field, package.json homepage, CNAME or Pages). Enter the address of your live web app (for example https://yourapp.com) and tap Discover again.');
     } catch (e: any) { setError(e?.message || 'Could not discover this repository.'); }
     finally { setBusy(false); setStage(''); }
   };
@@ -152,6 +172,7 @@ export const TwaView: React.FC = () => {
     if (!cfg.webUrl.startsWith('https://')) return setError('Your web app must use HTTPS.');
     setBusy(true);
     try {
+      if (cfg.packageId && !/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/.test(cfg.packageId)) throw new Error('Package ID must look like com.yourbrand.app (lowercase letters, digits, underscores, at least two parts).');
       let twaCfg = cfg;
       if (!cfg.packageId) {
         setStage('Reading your web app…');
@@ -168,7 +189,7 @@ export const TwaView: React.FC = () => {
       const installedNow = !wf.installed || !wf.upToDate;
       if (installedNow) { setStage('Installing the WyBuild workflow…'); await api.installWorkflow(r, ri.defaultBranch, 'twa'); }
       const branch = ri.defaultBranch;
-      const project = { name: twaCfg.name || new URL(twaCfg.webUrl).hostname, description: 'Trusted Web Activity build', repoUrl: `https://github.com/${r}`, branch, kind: 'twa' as const, twa: { ...twaCfg, fallbackType: 'customtabs' as const, useKeystore: true, storeReady: true }, config: { target: 'apk' as const, mode: 'release' as const, flutterVersion: 'stable', dartDefines: [], obfuscate: false, splitDebugInfo: false, runTests: false, customArgs: '' } };
+      const project = { name: twaCfg.name || new URL(twaCfg.webUrl).hostname, description: 'Trusted Web Activity build', repoUrl: `https://github.com/${r}`, branch, kind: 'twa' as const, twa: { ...twaCfg, shortcuts: twaCfg.shortcuts.filter(x => x.name && x.url), fallbackType: 'customtabs' as const, useKeystore: true, storeReady: true }, config: { target: 'apk' as const, mode: 'release' as const, flutterVersion: 'stable', dartDefines: [], obfuscate: false, splitDebugInfo: false, runTests: false, customArgs: '' } };
       let id = editingId;
       if (id) updateProject(id, project);
       else { const res = addProject(project); if (!res.success || !res.id) throw new Error(res.error || 'Could not save the project.'); id = res.id; setEditingId(id); }
@@ -238,21 +259,23 @@ export const TwaView: React.FC = () => {
     </section>
 
     <section className={card}>
-      <div className="flex items-center justify-between gap-2"><div className="flex items-center gap-2 text-white font-semibold"><Package className="w-4 h-4 text-emerald-300"/>Automatic app identity</div><span className="text-[10px] text-emerald-300">PACKAGE ID IS FREE</span></div>
+      <div className="flex items-center justify-between gap-2"><div className="flex items-center gap-2 text-white font-semibold"><Package className="w-4 h-4 text-emerald-300"/>Automatic app identity</div><span className="text-[10px] text-emerald-300">{editingId ? `EDITING ${(savedProject?.name || cfg.name || 'APP').toUpperCase()}` : 'PACKAGE ID IS FREE'}</span></div>
       <div className="grid sm:grid-cols-2 gap-3 mt-3">
         <div><label className="text-slate-500">App name</label><input className={input} value={cfg.name} onChange={e => set('name', e.target.value)} placeholder="Detected automatically"/></div>
-        <div><label className="text-slate-500">Package ID</label><input className={`${input} font-mono text-emerald-200`} value={cfg.packageId} readOnly placeholder="Generated from your domain"/></div>
+        <div><label className="text-slate-500">Package ID</label><input className={`${input} font-mono text-emerald-200`} value={cfg.packageId} onChange={e => set('packageId', e.target.value.toLowerCase().replace(/[^a-z0-9_.]/g, ''))} placeholder="Generated from your domain" autoCapitalize="none" spellCheck={false}/></div>
         <div><label className="text-slate-500">Version</label><input className={input} value={cfg.versionName} onChange={e => set('versionName', e.target.value)}/></div>
         <div><label className="text-slate-500">Minimum version code <span className="text-slate-600">(optional)</span></label><input className={`${input} font-mono`} inputMode="numeric" value={cfg.versionCode ?? ''} onChange={e => { const n = Number(e.target.value.replace(/\D/g, '')); set('versionCode', n > 0 ? n : undefined); }} placeholder="Auto: always higher than before"/></div>
-        <div><label className="text-slate-500">Icon</label><input className={input} value={cfg.iconUrl} onChange={e => set('iconUrl', e.target.value)} placeholder="Detected from manifest"/></div>
+        <div><label className="text-slate-500">Launcher name <span className="text-slate-600">(under the icon)</span></label><input className={input} value={cfg.launcherName} onChange={e => set('launcherName', e.target.value)} placeholder="Same as app name"/></div>
+        <div><label className="text-slate-500">Icon</label><div className="flex gap-2">{cfg.iconUrl && /^https:\/\//.test(cfg.iconUrl) && <img src={cfg.iconUrl} alt="" className="h-11 w-11 rounded-lg bg-black/40 object-contain shrink-0" onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}/>}<input className={input} value={cfg.iconUrl} onChange={e => set('iconUrl', e.target.value)} placeholder="Detected from manifest"/></div></div>
       </div>
-      <p className="text-slate-600 mt-2">The package ID is generated from the domain and reused on future builds so updates keep the same Android identity. The version code rises automatically on every build (time-based), so Google Play never rejects an upload as "version code already used". Set a minimum only if Play reports a higher one.</p>
+      <p className="text-slate-600 mt-2">The package ID is generated from the domain and reused on future builds so updates keep the same Android identity. You can set your own (like com.yourbrand.app), but changing it on a published app makes Android treat the new build as a different app, so users cannot update to it. The version code rises automatically on every build (time-based), so Google Play never rejects an upload as "version code already used". Set a minimum only if Play reports a higher one.</p>
     </section>
 
     <section className={card}>
       <div className="flex items-center gap-2 text-white font-semibold"><Wrench className="w-4 h-4 text-emerald-300"/>Native features</div>
       <p className="text-slate-500 mt-1">Tick only what your website needs. WyBuild adds the required Android permissions/configuration.</p>
       <div className="grid sm:grid-cols-2 gap-2 mt-3">{FEATURES.map(f => { const checked = featureState(cfg, f.id); return <button key={f.id} type="button" onClick={() => toggleFeature(f.id)} className={`text-left rounded-xl border p-3 flex gap-3 ${checked ? 'border-emerald-400/30 bg-emerald-400/[.06]' : 'border-white/[.06] bg-black/20'}`}><span className={`w-5 h-5 rounded border flex items-center justify-center shrink-0 ${checked ? 'bg-emerald-400 border-emerald-400 text-black' : 'border-slate-600'}`}>{checked && <Check className="w-3.5 h-3.5"/>}</span><span><b className="text-slate-200 block">{f.label}</b><span className="text-[11px] text-slate-500">{f.hint}</span></span></button>; })}</div>
+      {(() => { const hints = (inspection?.featureHints || []).filter(id => !featureState(cfg, id)); return hints.length > 0 && <div className="mt-3 p-3 rounded-xl border border-emerald-400/20 bg-emerald-400/[.04] text-emerald-200 flex flex-wrap items-center gap-2"><span>Your site's code appears to use:</span>{hints.map(id => <button key={id} type="button" onClick={() => toggleFeature(id)} className="px-2.5 py-1 rounded-full border border-emerald-400/30 hover:bg-emerald-400/10">+ {FEATURES.find(f => f.id === id)?.label}</button>)}</div>; })()}
     </section>
 
     <section className={card}>
@@ -262,6 +285,29 @@ export const TwaView: React.FC = () => {
       <button type="button" onClick={() => set('predictiveBack', !cfg.predictiveBack)} className={`mt-2 w-full text-left rounded-xl border p-3 flex gap-3 ${cfg.predictiveBack ? 'border-emerald-400/30 bg-emerald-400/[.06]' : 'border-white/[.06] bg-black/20'}`}><span className={`w-5 h-5 rounded border flex items-center justify-center shrink-0 ${cfg.predictiveBack ? 'bg-emerald-400 border-emerald-400 text-black' : 'border-slate-600'}`}>{cfg.predictiveBack && <Check className="w-3.5 h-3.5"/>}</span><span><b className="text-slate-200 block">Predictive back gesture</b><span className="text-[11px] text-slate-500">Android 13+ shows the back-swipe preview animation. Older phones ignore it.</span></span></button>
       <div className="mt-3"><label className="text-slate-500">Google Play app-signing SHA-256 <span className="text-slate-600">(optional)</span></label><input className={`${input} font-mono`} value={cfg.playSigningFingerprint || ''} onChange={e => set('playSigningFingerprint', e.target.value.trim())} placeholder="Play Console → Setup → App signing → SHA-256"/></div>
       <p className="text-slate-600 mt-2">Fullscreen only works when Android can verify your site. Publish the build's assetlinks.json at /.well-known/assetlinks.json; if the app is installed from Google Play, add the Play app-signing fingerprint above, otherwise the browser address bar comes back.</p>
+    </section>
+
+    <section className={card}>
+      <div className="flex items-center gap-2 text-white font-semibold"><Wrench className="w-4 h-4 text-emerald-300"/>More app info</div>
+      <p className="text-slate-500 mt-1">Colors, start page, orientation, Android version support, extra trusted domains and shortcuts. Change anything, then rebuild.</p>
+      <div className="grid sm:grid-cols-2 gap-3 mt-3">
+        <div><label className="text-slate-500">Theme color</label><div className="flex gap-2"><input type="color" className="h-11 w-12 bg-[#050707] border border-white/[.08] rounded-lg p-1" value={/^#[0-9a-fA-F]{6}$/.test(cfg.themeColor) ? cfg.themeColor : '#0f172a'} onChange={e => set('themeColor', e.target.value)}/><input className={`${input} font-mono`} value={cfg.themeColor} onChange={e => set('themeColor', e.target.value)}/></div></div>
+        <div><label className="text-slate-500">Background (splash) color</label><div className="flex gap-2"><input type="color" className="h-11 w-12 bg-[#050707] border border-white/[.08] rounded-lg p-1" value={/^#[0-9a-fA-F]{6}$/.test(cfg.backgroundColor) ? cfg.backgroundColor : '#ffffff'} onChange={e => set('backgroundColor', e.target.value)}/><input className={`${input} font-mono`} value={cfg.backgroundColor} onChange={e => set('backgroundColor', e.target.value)}/></div></div>
+        <div><label className="text-slate-500">Start URL</label><input className={`${input} font-mono`} value={cfg.startUrl} onChange={e => set('startUrl', e.target.value)} placeholder="/"/></div>
+        <div><label className="text-slate-500">Orientation</label><select className={input} value={cfg.orientation} onChange={e => set('orientation', e.target.value as TwaConfig['orientation'])}><option value="default">Any (follow the phone)</option><option value="portrait">Portrait</option><option value="landscape">Landscape</option></select></div>
+        <div><label className="text-slate-500">Minimum Android version</label><select className={input} value={cfg.minSdkVersion} onChange={e => set('minSdkVersion', Number(e.target.value))}>{[[21, 'Android 5.0 (API 21)'], [23, 'Android 6.0 (API 23)'], [26, 'Android 8.0 (API 26)'], [29, 'Android 10 (API 29)'], [31, 'Android 12 (API 31)']].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
+        <div><label className="text-slate-500">Output</label><select className={input} value={cfg.output} onChange={e => set('output', e.target.value as TwaConfig['output'])}><option value="both">APK + AAB</option><option value="apk">APK only</option><option value="aab">AAB only (Google Play)</option></select></div>
+      </div>
+      <div className="mt-3"><label className="text-slate-500">Extra trusted domains <span className="text-slate-600">(one per line, https://…)</span></label><textarea rows={2} className="w-full bg-[#050707] border border-white/[.08] rounded-lg px-3 py-2 text-white font-mono focus:border-emerald-400/50 focus:outline-none" value={cfg.additionalTrustedOrigins.join('\n')} onChange={e => set('additionalTrustedOrigins', e.target.value.split('\n').map(x => x.trim()).filter(Boolean))} placeholder="https://auth.yourapp.com"/></div>
+      <div className="mt-3">
+        <div className="flex items-center justify-between"><label className="text-slate-500">App shortcuts <span className="text-slate-600">(long-press the icon)</span></label>{cfg.shortcuts.length < 4 && <button type="button" onClick={() => set('shortcuts', [...cfg.shortcuts, { name: '', shortName: '', url: '/' }])} className="text-emerald-300">+ Add</button>}</div>
+        {cfg.shortcuts.map((sc, i) => <div key={i} className="grid grid-cols-[1fr_1fr_1fr_auto] gap-2 mt-2">
+          <input className={input} placeholder="Name" value={sc.name} onChange={e => set('shortcuts', cfg.shortcuts.map((x, j) => j === i ? { ...x, name: e.target.value } : x))}/>
+          <input className={input} placeholder="Short name" value={sc.shortName} onChange={e => set('shortcuts', cfg.shortcuts.map((x, j) => j === i ? { ...x, shortName: e.target.value } : x))}/>
+          <input className={`${input} font-mono`} placeholder="/path" value={sc.url} onChange={e => set('shortcuts', cfg.shortcuts.map((x, j) => j === i ? { ...x, url: e.target.value } : x))}/>
+          <button type="button" onClick={() => set('shortcuts', cfg.shortcuts.filter((_, j) => j !== i))} className="px-2 text-slate-500 hover:text-rose-400"><XCircle className="w-4 h-4"/></button>
+        </div>)}
+      </div>
     </section>
 
     {repoInspection && latestBuild && <section className={card}>
