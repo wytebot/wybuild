@@ -69,7 +69,7 @@ jobs:
           set -euo pipefail
           mkdir -p "$WB_TOOLS" "$WB_OUT"
           cd "$WB_TOOLS"
-          npm init -y --name wybuild-tools >/dev/null
+          printf '%s\n' '{"name":"wybuild-tools","version":"1.0.0","private":true}' > package.json
           npm install --no-audit --no-fund "@bubblewrap/cli@${{ inputs.bubblewrap_version }}"
           for f in twa-prepare.mjs twa-generate.mjs twa-verify.sh; do
             test -f "$GITHUB_WORKSPACE/.github/wybuild/$f" || { echo "::error::.github/wybuild/$f is missing in this repo/branch. Reinstall the WyBuild TWA workflow (WyBuild > Web to Android > Update workflow) so all four files are committed."; exit 1; }
