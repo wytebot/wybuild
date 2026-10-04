@@ -1,4 +1,4 @@
-# wybuild-twa-workflow-version: 6
+# wybuild-twa-workflow-version: 7
 name: WyBuild TWA
 concurrency:
   group: wybuild-${{ github.workflow }}-${{ github.ref }}
@@ -28,7 +28,7 @@ on:
         default: "true"
       bubblewrap_version:
         type: string
-        default: latest
+        default: "1.25.0"
       timeout_minutes:
         description: 15 minutes on Free, 60 minutes on Pro
         type: string
@@ -51,15 +51,15 @@ jobs:
       WB_KEY_PASSWORD: ${{ secrets.WB_KEY_PASSWORD }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "20"
 
       - name: Set up Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
@@ -69,8 +69,17 @@ jobs:
           set -euo pipefail
           mkdir -p "$WB_TOOLS" "$WB_OUT"
           cd "$WB_TOOLS"
-          printf '%s\n' '{"name":"wybuild-tools","version":"1.0.0","private":true}' > package.json
-          npm install --no-audit --no-fund "@bubblewrap/cli@${{ inputs.bubblewrap_version }}"
+          # Do not use `npm init --name ...` here. Modern npm interprets that
+          # form as an initializer and tries to download `create-wybuild-tools`.
+          # WyBuild does not publish such a package; create the local manifest directly.
+          cat > package.json <<'JSON'
+          {
+            "name": "wybuild-tools",
+            "private": true,
+            "version": "0.0.0"
+          }
+          JSON
+          npm install --no-audit --no-fund --package-lock=false "@bubblewrap/cli@${{ inputs.bubblewrap_version }}"
           for f in twa-prepare.mjs twa-generate.mjs twa-verify.sh; do
             test -f "$GITHUB_WORKSPACE/.github/wybuild/$f" || { echo "::error::.github/wybuild/$f is missing in this repo/branch. Reinstall the WyBuild TWA workflow (WyBuild > Web to Android > Update workflow) so all four files are committed."; exit 1; }
           done
@@ -164,7 +173,7 @@ jobs:
           # keystore path/alias come from twa-manifest.json (signingKey); passwords come from BUBBLEWRAP_* env vars.
           # stdin is closed and a hard timeout is applied so a surprise prompt fails with a message instead of hanging forever.
           BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"; echo "$BT" >> "$GITHUB_PATH"; export PATH="$BT:$PATH"
-          if ! timeout 20m bubblewrap build --skipPwaValidation --manifest="$P/twa-manifest.json" < /dev/null; then
+          if ! timeout 20m bubblewrap build --skipPwaValidation --manifest="$P/twa-manifest.json" --signingKeyPath="$WB_KEYSTORE_PATH" --signingKeyAlias="$WB_KEY_ALIAS" < /dev/null; then
             echo "::warning::bubblewrap build did not finish (error or timeout). Trying to sign the Gradle output directly."
             pkill -f gradle 2>/dev/null || true
             UNSIGNED="$(ls "$P"/app/build/outputs/apk/release/*unsigned*.apk 2>/dev/null | head -1 || true)"
@@ -181,7 +190,11 @@ jobs:
                 "$P/app-release-bundle.aab" "$WB_KEY_ALIAS" < /dev/null
             fi
           fi
-          test -f app-release-signed.apk || { echo "::error::No signed APK was produced. See the Bubblewrap output above."; exit 1; }
+          NEED_APK=false; NEED_AAB=false
+          case "$OUTPUT" in apk|both) NEED_APK=true ;; esac
+          case "$OUTPUT" in aab|both) NEED_AAB=true ;; esac
+          if [ "$NEED_APK" = "true" ] && [ ! -f app-release-signed.apk ]; then echo "::error::No signed APK was produced. See the Bubblewrap output above."; exit 1; fi
+          if [ "$NEED_AAB" = "true" ] && [ ! -f app-release-bundle.aab ]; then echo "::error::No signed App Bundle (.aab) was produced. See the Bubblewrap output above."; exit 1; fi
           NAME="${WYBUILD_PACKAGE}_${WYBUILD_VERSION}_${WYBUILD_VERSION_CODE}"
           case "$OUTPUT" in
             apk|both) cp app-release-signed.apk "$DIST/$NAME.apk" ;;
@@ -190,8 +203,8 @@ jobs:
             aab|both) test -f app-release-bundle.aab || { echo "::error::No app bundle (.aab) was produced"; exit 1; }
                       cp app-release-bundle.aab "$DIST/$NAME.aab" ;;
           esac
-          # the verification below always runs against an APK, even for aab-only output
-          cp app-release-signed.apk "$WB_OUT/verify.apk"
+          # Verify whichever signed artifact was requested. AAB-only builds do not require an APK.
+          if [ -f app-release-signed.apk ]; then cp app-release-signed.apk "$WB_OUT/verify.apk"; else cp app-release-bundle.aab "$WB_OUT/verify.aab"; fi
           ls -la "$DIST"
 
       - name: Digital Asset Links and store-readiness checks
@@ -216,7 +229,8 @@ jobs:
           JSON
           cp "$WB_OUT/twa-resolved.json" "$DIST/twa-config.json"
           cp "$WB_OUT/project/twa-manifest.json" "$DIST/twa-manifest.json"
-          bash .github/wybuild/twa-verify.sh "$WB_OUT/verify.apk" "$DIST" "$STORE_READY"
+          VERIFY="$WB_OUT/verify.apk"; [ -f "$VERIFY" ] || VERIFY="$WB_OUT/verify.aab"
+          bash .github/wybuild/twa-verify.sh "$VERIFY" "$DIST" "$STORE_READY"
           RC=$?
           { echo "## WyBuild TWA: $WYBUILD_PACKAGE $WYBUILD_VERSION ($WYBUILD_VERSION_CODE)"; cat "$DIST/store-readiness.md"
             echo; echo "### Digital Asset Links"; echo "Publish \`assetlinks.json\` at \`https://$WYBUILD_SOURCE_HOST/.well-known/assetlinks.json\`:"; echo '```json'; cat "$DIST/assetlinks.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

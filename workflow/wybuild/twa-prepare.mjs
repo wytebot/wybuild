@@ -15,7 +15,9 @@ const html = await page.text();
 const manifestTag = html.match(/<link[^>]+rel=["'][^"']*manifest[^"']*["'][^>]+href=["']([^"']+)["']/i) || html.match(/<link[^>]+href=["']([^"']+)["'][^>]+rel=["'][^"']*manifest[^"']*["']/i);
 const manifestUrl = raw.webManifestUrl || (manifestTag ? new URL(manifestTag[1], page.url || pageUrl).href : '');
 if (!manifestUrl) throw new Error('No Web App Manifest was found. A quality TWA needs a valid manifest.');
-const mr = await fetch(manifestUrl, { redirect: 'follow', headers: { Accept: 'application/manifest+json,application/json' } });
+const manifestParsed = new URL(manifestUrl);
+if (manifestParsed.protocol !== 'https:') throw new Error('Web App Manifest URL must use HTTPS.');
+const mr = await fetch(manifestParsed, { redirect: 'follow', headers: { Accept: 'application/manifest+json,application/json' } });
 if (!mr.ok) throw new Error(`Web App Manifest returned HTTP ${mr.status}.`);
 const web = await mr.json();
 
@@ -32,9 +34,10 @@ const generatedPackage = host.split('.').filter(Boolean).reverse().map(x => x.re
 const packageId = raw.packageId || generatedPackage;
 if (!/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/.test(packageId)) throw new Error(`Could not generate a valid free package ID from ${host}.`);
 
-const start = new URL(raw.startUrl || web.start_url || '/', manifestUrl);
+const start = new URL(raw.startUrl || web.start_url || '/', manifestParsed);
+if (start.protocol !== 'https:' || start.hostname.replace(/^www\./, '').toLowerCase() !== host) throw new Error('start_url must remain on the same HTTPS site as the wrapped web app.');
 const display = ['standalone','fullscreen','minimal-ui','fullscreen-sticky'].includes(raw.display || web.display) ? (raw.display || web.display) : 'standalone';
-const orientation = raw.orientation || web.orientation || 'default';
+const orientation = ['default','portrait','landscape'].includes(raw.orientation || web.orientation) ? (raw.orientation || web.orientation) : 'default';
 const themeColor = /^#[0-9a-f]{6}$/i.test(raw.themeColor || web.theme_color || '') ? (raw.themeColor || web.theme_color) : '#FFFFFF';
 const backgroundColor = /^#[0-9a-f]{6}$/i.test(raw.backgroundColor || web.background_color || '') ? (raw.backgroundColor || web.background_color) : '#FFFFFF';
 const shortcuts = Array.isArray(web.shortcuts) ? web.shortcuts.slice(0,4).filter(s => s?.name && s?.url).map(s => ({ name: s.name, shortName: (s.short_name || s.name).slice(0,12), url: new URL(s.url, manifestUrl).pathname + new URL(s.url, manifestUrl).search, chosenIconUrl: s.icons?.[0]?.src ? abs(s.icons[0].src) : undefined })) : [];

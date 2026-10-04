@@ -10,7 +10,7 @@ export const TwaBuildPanel: React.FC<{ build: BuildRecord }> = ({ build }) => {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ published: boolean; fingerprintMatches: boolean | null } | null>(null);
 
-  const proj = projects.find((p) => p.id === build.projectId && p.twa);
+  const proj = projects.find((p) => p.id === build.projectId && p.twa) || projects.find((p) => p.twa && build.repo && p.repoUrl.replace(/^https?:\/\//, '').replace(/\.git$/, '').replace(/\/$/, '') === build.repo);
   const pkg = build.twa?.packageId;
   const fp = build.twa?.fingerprint;
   if (build.kind !== 'twa' || !pkg) return null;
