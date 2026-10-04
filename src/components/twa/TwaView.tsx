@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { takePendingTwaRepo } from '../../services/handoff';
 import { useApp } from '../../context/AppContext';
 import { api, repoFromUrl, RepoInspection, TwaInspection } from '../../services/api';
 import { Project, TwaConfig } from '../../types';
@@ -33,7 +34,7 @@ export const TwaView: React.FC = () => {
   const { projects, builds, repos, keystores, addProject, updateProject, setCurrentTab, subscription } = useApp();
   const saved = projects.filter(p => p.kind === 'twa' && p.twa);
   const [cfg, setCfg] = useState<TwaConfig>(EMPTY);
-  const [repo, setRepo] = useState('');
+  const [repo, setRepo] = useState(() => takePendingTwaRepo());
   const [inspection, setInspection] = useState<TwaInspection | null>(null);
   const [repoInspection, setRepoInspection] = useState<RepoInspection | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);

@@ -251,7 +251,7 @@ async function diagnoseWriteFailure(session, repo, branch, original) {
     const info = await ri.json();
     facts.private = !!info.private; facts.archived = !!info.archived; facts.canPush = info.permissions ? !!info.permissions.push : 'unknown'; facts.defaultBranch = info.default_branch; facts.empty = info.size === 0;
     if (info.archived) return fail('REPO_ARCHIVED', `${repo} is archived, so it is read-only.`, 'Unarchive it in the repository settings, then retry.');
-    if (info.permissions && !info.permissions.push) return fail('NO_PUSH_ACCESS', `You only have read access to ${repo} (no push permission), so the workflow cannot be committed there.`, 'Ask the owner for write access, or fork the repo and connect your fork.');
+    if (info.permissions && !info.permissions.push) return fail('NO_PUSH_ACCESS', `You are signed in to WyBuild as "${session.login}", and GitHub says that account only has read access to ${repo} (no push permission), so the workflow cannot be committed there.`, `A personal access token will not help unless it is created by an account that has write access. Use the menu → Sign out, then sign in with the GitHub account that owns ${repo} (it is under "${repo.split('/')[0]}"). Or ask that owner to add "${session.login}" as a collaborator with Write access, or fork the repo and connect your fork.`);
     const br = await gh(session, `/repos/${repo}/branches/${encodeURIComponent(branch)}`);
     facts.branchExists = br.ok;
     if (br.status === 404 && !facts.empty) return fail('BRANCH_NOT_FOUND', `Branch "${branch}" does not exist in ${repo} (default branch is "${info.default_branch}").`, `Create the branch first or reconnect the project on "${info.default_branch}".`);
@@ -1023,6 +1023,32 @@ async function route(req, res, path, query) {
     const u = await ghJson({ token: t.access_token }, '/user');
     const session = { token: t.access_token, login: u.login, name: u.name || u.login, avatar: u.avatar_url, email: u.email || '', exp: Date.now() + 7 * 24 * 3600 * 1000 };
     return redirect(res, '/', [cookie(SESSION_COOKIE, seal(session), 7 * 24 * 3600)]);
+  }
+
+  if (path === 'auth/token' && post) {
+    // Sign in with a GitHub personal access token (for accounts where OAuth cannot be granted enough access).
+    // A token never gives more access than the account that created it; we verify it before creating a session.
+    const raw = String(bodyOf(req).token || '').trim();
+    if (!/^[A-Za-z0-9_]{20,255}$/.test(raw)) throw new HttpError(400, 'That does not look like a GitHub token.', 'BAD_TOKEN_FORMAT', { hint: 'Paste the whole token, starting with ghp_ (classic) or github_pat_ (fine-grained), with no spaces or quotes.' });
+    const probe = await gh({ token: raw }, '/user');
+    if (probe.status === 401) throw new HttpError(401, 'GitHub rejected this token (401 Bad credentials).', 'TOKEN_REJECTED', { hint: 'The token is mistyped, expired or revoked. Create a new one at github.com/settings/tokens.' });
+    if (!probe.ok) throw new HttpError(502, `GitHub could not verify the token (HTTP ${probe.status}).`, 'TOKEN_UNVERIFIED', { hint: 'Retry in a moment.' });
+    const u = await probe.json();
+    const scopeHeader = probe.headers.get('x-oauth-scopes');
+    const fine = raw.startsWith('github_pat_') || scopeHeader === null;
+    if (!fine) {
+      const have = scopeHeader.split(/,\s*/).filter(Boolean);
+      const missing = ['repo', 'workflow'].filter((x) => !have.includes(x));
+      if (missing.length) {
+        throw new HttpError(400, `This token (for ${u.login}) is missing the ${missing.map((x) => `"${x}"`).join(' and ')} scope${missing.length > 1 ? 's' : ''}. It has: ${have.join(', ') || 'none'}.`, 'TOKEN_SCOPES', {
+          hint: 'Create a classic token with both "repo" and "workflow" ticked: github.com/settings/tokens/new?scopes=repo,workflow&description=WyBuild',
+          details: { login: u.login, scopes: have.join(', ') || 'none' },
+        });
+      }
+    }
+    const session = { token: raw, login: u.login, name: u.name || u.login, avatar: u.avatar_url, email: u.email || '', exp: Date.now() + 7 * 24 * 3600 * 1000 };
+    res.setHeader('Set-Cookie', cookie(SESSION_COOKIE, seal(session), 7 * 24 * 3600));
+    return send(res, 200, { ok: true, login: u.login, tokenType: fine ? 'fine-grained' : 'classic' });
   }
 
   if (path === 'auth/logout' && post) {

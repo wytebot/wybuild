@@ -78,6 +78,7 @@ export interface UsageInfo {
 export const api = {
   me: () => request<{ user: AuthUser; subscription: SubscriptionInfo | null; usage: UsageInfo }>('me'),
   logout: () => post<{ ok: true }>('auth/logout', {}),
+  loginWithToken: (token: string) => post<{ ok: true; login: string; tokenType: 'classic' | 'fine-grained' }>('auth/token', { token }),
   repos: () => request<{ repos: RepoInfo[] }>('repos').then((r) => r.repos),
   inspectRepo: (repo: string, kind: BuildKind = 'flutter') => request<RepoInspection>(`inspect-repo?repo=${enc(repo)}&kind=${kind}`),
   workflow: (repo: string, branch: string, kind: BuildKind = 'flutter') =>
