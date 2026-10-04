@@ -82,7 +82,7 @@ export interface UsageInfo {
 }
 
 export const api = {
-  me: () => request<{ user: AuthUser; subscription: SubscriptionInfo | null; usage: UsageInfo; defaultKeystore?: boolean }>('me'),
+  me: () => request<{ user: AuthUser; subscription: SubscriptionInfo | null; usage: UsageInfo; defaultKeystore?: boolean; defaultKeystoreProblem?: string }>('me'),
   logout: () => post<{ ok: true }>('auth/logout', {}),
   loginWithToken: (token: string) => post<{ ok: true; login: string; tokenType: 'classic' | 'fine-grained' }>('auth/token', { token }),
   repos: () => request<{ repos: RepoInfo[] }>('repos').then((r) => r.repos),

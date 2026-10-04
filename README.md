@@ -123,9 +123,20 @@ four variables in the WyBuild **Vercel environment** (same names as the repo sec
 
 `WB_KEYSTORE_BASE64`, `WB_KEYSTORE_PASSWORD`, `WB_KEY_ALIAS`, `WB_KEY_PASSWORD`
 
-On a repo's first build WyBuild copies them into that repo's encrypted Actions secrets. A repo that already has its own
-`WB_KEYSTORE_*` secrets keeps using them. With neither, the Web → Android screen asks for a key inline (no page change).
-Note: one default key means every app built through your WyBuild is signed with the same identity.
+Before **every** build (Flutter and TWA, any mode) and when a workflow is installed, WyBuild reads these variables and makes sure
+the target repo's Actions secrets exist, copying them in if not (keystore secret written last, so a failed attempt is retried
+cleanly). Details:
+
+- A repo that already has its own `WB_KEYSTORE_*` secrets keeps using them; WyBuild never overwrites a key it did not install.
+- If you rotate the key in Vercel, repos where WyBuild installed the default are updated on their next build. Repos with their own
+  uploaded key are left alone.
+- The Vercel values are validated (Base64, <= 48 KB, password and alias present) and a precise error names the problem.
+- Release builds fail with the real reason if the secrets cannot be installed (e.g. no admin access to the repo) instead of
+  silently producing an unsigned APK. Debug/profile builds never block on it.
+- With no Vercel key and no repo key, the Web -> Android screen asks for a key inline (no page change).
+
+Redeploy after changing Vercel environment variables. One default key means every app built through your WyBuild is signed with
+the same identity.
 
 ## Flow
 

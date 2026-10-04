@@ -763,53 +763,121 @@ async function putSecret(session, repo, pub, name, value) {
     method: 'PUT',
     body: JSON.stringify({ encrypted_value: sealedBox(value, pub.key), key_id: pub.key_id }),
   });
-  if (!r.ok) throw new HttpError(502, `Could not store secret ${name} (GitHub ${r.status})`);
+  if (!r.ok) {
+    throw new HttpError(502, `Could not store secret ${name} in ${repo} (GitHub ${r.status})`, 'SECRET_WRITE_FAILED', {
+      hint: r.status === 403 || r.status === 404
+        ? `Your GitHub account needs admin access to ${repo} (and the "repo" permission) so WyBuild can add its signing secrets. Ask the owner for admin access, or sign out and back in to WyBuild.`
+        : 'GitHub refused the secret. Retry in a minute.',
+    });
+  }
 }
 
 /* A server-wide default keystore (Vercel env: same names as the repo secrets).
    GitHub secrets are write-only and are scoped to ONE repository, so a build running in
    another repo can never read secrets stored in the WyBuild repo. WyBuild therefore reads the
    default key from its own environment and copies it into a repo's Actions secrets
-   automatically the first time that repo is built. */
-function defaultKeystore() {
-  const b64 = env('WB_KEYSTORE_BASE64').replace(/\s+/g, '');
-  const storePassword = env('WB_KEYSTORE_PASSWORD');
-  const alias = env('WB_KEY_ALIAS');
-  if (!b64 || !storePassword || !alias) return null;
-  return { b64, storePassword, alias, keyPassword: env('WB_KEY_PASSWORD') || storePassword };
+   automatically before every build (and when a workflow is installed), so nobody has to add
+   keystore variables to a repo by hand. */
+const stripEol = (v) => String(v || '').replace(/^\uFEFF/, '').replace(/[\r\n]+$/, '');
+
+// Validates the Vercel env once and says exactly what is wrong, instead of letting GitHub fail later.
+function defaultKeystoreState() {
+  if (!SECRET_NAMES.some((n) => env(n))) return { state: 'absent' };
+  const b64 = env('WB_KEYSTORE_BASE64').replace(/^["']|["']$/g, '').replace(/\s+/g, '');
+  const storePassword = stripEol(env('WB_KEYSTORE_PASSWORD'));
+  const alias = stripEol(env('WB_KEY_ALIAS'));
+  const keyPassword = stripEol(env('WB_KEY_PASSWORD')) || storePassword;
+  const missing = [['WB_KEYSTORE_BASE64', b64], ['WB_KEYSTORE_PASSWORD', storePassword], ['WB_KEY_ALIAS', alias]].filter(([, v]) => !v).map(([n]) => n);
+  if (missing.length) return { state: 'incomplete', problem: `The WyBuild Vercel environment is missing ${missing.join(', ')}.` };
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(b64) || Buffer.from(b64, 'base64').length < 100) {
+    return { state: 'invalid', problem: 'WB_KEYSTORE_BASE64 in the Vercel environment is not valid Base64 of a keystore file (use: base64 -w0 your.jks).' };
+  }
+  if (b64.length > 48000) return { state: 'invalid', problem: "WB_KEYSTORE_BASE64 in the Vercel environment is larger than GitHub's 48 KB secret limit." };
+  // HMAC so the stored marker reveals nothing about the key or passwords
+  const fingerprint = crypto.createHmac('sha256', env('SESSION_SECRET') || 'wybuild').update([b64, storePassword, alias, keyPassword].join('\0')).digest('hex').slice(0, 32);
+  return { state: 'ok', ks: { b64, storePassword, alias, keyPassword }, fingerprint };
 }
 
-// true / false, or null when the secret list cannot be read (no admin access, etc.)
-async function repoHasKeystore(session, repo) {
+function defaultKeystore() {
+  const s = defaultKeystoreState();
+  return s.state === 'ok' ? s.ks : null;
+}
+
+// Set of secret names in the repo, or null when the list cannot be read (no admin access, etc.)
+async function repoSecretNames(session, repo) {
   try {
-    const data = await ghJson(session, `/repos/${repo}/actions/secrets?per_page=100`);
-    return (data.secrets || []).some((s) => s.name === 'WB_KEYSTORE_BASE64');
+    const names = new Set();
+    for (let page = 1; page <= 5; page++) {
+      const data = await ghJson(session, `/repos/${repo}/actions/secrets?per_page=100&page=${page}`);
+      const list = data.secrets || [];
+      list.forEach((s) => names.add(s.name));
+      if (list.length < 100) break;
+    }
+    return names;
   } catch {
     return null;
   }
 }
 
-async function signingStatus(session, repo) {
-  const has = await repoHasKeystore(session, repo);
-  if (has) return 'repo';
-  return defaultKeystore() ? 'default' : 'none';
+const CORE_SECRETS = ['WB_KEYSTORE_BASE64', 'WB_KEYSTORE_PASSWORD', 'WB_KEY_ALIAS'];
+const hasCoreSecrets = (names) => !!names && CORE_SECRETS.every((n) => names.has(n));
+const defaultMarkerKey = (repo) => `wb:dks:${String(repo).toLowerCase()}`;
+// fingerprint of the default key WyBuild last copied into this repo (absent => the repo's key is the owner's own)
+async function defaultMarker(repo) {
+  try { return (await kv.get(defaultMarkerKey(repo))) || null; } catch { return null; }
 }
 
-// Guarantees the repo has signing secrets: its own, or a copy of the server default.
+async function repoHasKeystore(session, repo) {
+  const names = await repoSecretNames(session, repo);
+  return names ? hasCoreSecrets(names) : null;
+}
+
+async function signingStatus(session, repo) {
+  const names = await repoSecretNames(session, repo);
+  if (hasCoreSecrets(names)) return (await defaultMarker(repo)) ? 'default' : 'repo';
+  if (names && names.has('WB_KEYSTORE_BASE64')) return 'none'; // someone's half-finished key: ask for a complete one
+  return defaultKeystoreState().state === 'ok' ? 'default' : 'none';
+}
+
+async function installDefaultKeystore(session, repo, st) {
+  const { ks, fingerprint } = st;
+  const pub = await ghJson(session, `/repos/${repo}/actions/secrets/public-key`, undefined, `reading the Actions secret key of ${repo}`);
+  // the keystore goes LAST: if anything fails midway, the repo still looks "not installed" and the next build retries cleanly
+  await putSecret(session, repo, pub, 'WB_KEYSTORE_PASSWORD', ks.storePassword);
+  await putSecret(session, repo, pub, 'WB_KEY_ALIAS', ks.alias);
+  await putSecret(session, repo, pub, 'WB_KEY_PASSWORD', ks.keyPassword);
+  await putSecret(session, repo, pub, 'WB_KEYSTORE_BASE64', ks.b64);
+  try { await kv.set(defaultMarkerKey(repo), fingerprint); } catch { /* marker only enables rotation; the secrets are already in place */ }
+}
+
+// Guarantees the repo has signing secrets: its own, or a copy of the Vercel default
+// (re-copied when the Vercel key is rotated, but only for repos where WyBuild installed the default).
 async function ensureSigning(session, repo) {
-  if (await repoHasKeystore(session, repo)) return 'repo';
-  const d = defaultKeystore();
-  if (!d) {
-    throw new HttpError(400, `No release keystore is available for ${repo}.`, 'NO_KEYSTORE', {
-      hint: 'Upload a keystore for this repo, or set WB_KEYSTORE_BASE64, WB_KEYSTORE_PASSWORD, WB_KEY_ALIAS and WB_KEY_PASSWORD in the WyBuild Vercel environment so every repo is signed automatically.',
+  const st = defaultKeystoreState();
+  const names = await repoSecretNames(session, repo);
+  const marker = await defaultMarker(repo);
+
+  if (hasCoreSecrets(names)) {
+    if (marker && st.state === 'ok' && marker !== st.fingerprint) {
+      await installDefaultKeystore(session, repo, st);
+      return 'default';
+    }
+    return marker ? 'default' : 'repo';
+  }
+  if (names && names.has('WB_KEYSTORE_BASE64') && !marker) {
+    throw new HttpError(409, `${repo} has a WB_KEYSTORE_BASE64 secret but is missing its password or alias secret.`, 'KEYSTORE_INCOMPLETE', {
+      hint: 'WyBuild will not overwrite a key it did not install. Upload the complete keystore in WyBuild, or add WB_KEYSTORE_PASSWORD and WB_KEY_ALIAS to the repo secrets.',
     });
   }
-  const pub = await ghJson(session, `/repos/${repo}/actions/secrets/public-key`, undefined, `reading the Actions secret key of ${repo}`);
-  await putSecret(session, repo, pub, 'WB_KEYSTORE_BASE64', d.b64);
-  await putSecret(session, repo, pub, 'WB_KEYSTORE_PASSWORD', d.storePassword);
-  await putSecret(session, repo, pub, 'WB_KEY_ALIAS', d.alias);
-  await putSecret(session, repo, pub, 'WB_KEY_PASSWORD', d.keyPassword);
-  return 'default';
+  if (st.state === 'ok') {
+    await installDefaultKeystore(session, repo, st);
+    return 'default';
+  }
+  throw new HttpError(400, st.problem || `No release keystore is available for ${repo}.`, 'NO_KEYSTORE', {
+    hint: st.problem
+      ? 'Fix the WB_KEYSTORE_* variables in the WyBuild Vercel project settings and redeploy; every repo is then signed automatically.'
+      : 'Upload a keystore for this repo, or set WB_KEYSTORE_BASE64, WB_KEYSTORE_PASSWORD, WB_KEY_ALIAS and WB_KEY_PASSWORD in the WyBuild Vercel environment so every repo is signed automatically.',
+  });
 }
 
 async function keystoresFor(session, repos) {
@@ -1228,7 +1296,7 @@ async function route(req, res, path, query) {
       const now = new Date();
       usage = { monthlyBuildsUsed: 0, monthlyLimit: PLANS.free.monthlyLimit, concurrentLimit: PLANS.free.concurrentLimit, resetsAt: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)).toISOString() };
     }
-    return send(res, 200, { user: { login: session.login, name: session.name, avatar: session.avatar, email: session.email }, subscription: sub, usage, pricing: PRICING, defaultKeystore: !!defaultKeystore() });
+    return send(res, 200, { user: { login: session.login, name: session.name, avatar: session.avatar, email: session.email }, subscription: sub, usage, pricing: PRICING, defaultKeystore: !!defaultKeystore(), defaultKeystoreProblem: defaultKeystoreState().problem || undefined });
   }
 
   if (path === 'repos' && m === 'GET') {
@@ -1348,7 +1416,10 @@ async function route(req, res, path, query) {
         throw e;
       }
     }
-    return send(res, 200, { ok: true, branch: target });
+    // install the keystore variables together with the workflow so the repo is ready for its first build
+    let signing = 'none';
+    try { await ensureSigning(session, repo); signing = await signingStatus(session, repo); } catch { /* reported at build time with a precise reason */ }
+    return send(res, 200, { ok: true, branch: target, signing });
   }
 
   if (path === 'build' && post) {
@@ -1370,11 +1441,15 @@ async function route(req, res, path, query) {
       if (have < WORKFLOW_VERSION) throw new HttpError(409, `The WyBuild workflow in ${repo} is outdated (v${have}, current v${WORKFLOW_VERSION}).`, 'WORKFLOW_OUTDATED', { hint: 'WyBuild reinstalls it automatically; if you see this, press Build again.' });
     }
 
-    // sign release builds automatically when the repo (or the server default) has a key; never block on it unless the user asked for signing
-    let useKs = !!c.useKeystore;
-    if (useKs) await ensureSigning(session, repo);
-    else if (c.mode === 'release') {
-      try { await ensureSigning(session, repo); useKs = true; } catch { /* no key available: build unsigned as before */ }
+    // Every build first makes sure the repo has the keystore secrets (own key, or a copy of the Vercel default).
+    // Release builds are then signed. A failure to install is only tolerated for debug/profile builds, or when
+    // no key exists anywhere (release then builds unsigned as before); any other failure is shown, never hidden.
+    let useKs = false;
+    try {
+      await ensureSigning(session, repo);
+      useKs = !!c.useKeystore || c.mode === 'release';
+    } catch (e) {
+      if (c.useKeystore || (c.mode === 'release' && e.code !== 'NO_KEYSTORE')) throw e;
     }
 
     const reservation = await reserveBuildSlot(session, repo);
@@ -1462,6 +1537,7 @@ async function route(req, res, path, query) {
     }
     if (missingHelpers.length) throw new HttpError(409, `The TWA workflow is installed but these helper files are missing on branch "${branch}": ${missingHelpers.join(', ')}.`, 'MISSING_HELPER_FILES', { hint: 'The build would fail with "No such file". Use Update workflow to commit all four WyBuild TWA files, then retry.', details: { missing: missingHelpers } });
     if (useKeystore) await ensureSigning(session, repo);
+    else await ensureSigning(session, repo).catch(() => {}); // still leave the secrets in place for later builds
 
     const reservation = await reserveBuildSlot(session, repo);
     const inflightKey = reservation.inflightKey;
@@ -1543,10 +1619,11 @@ async function route(req, res, path, query) {
     const bytes = Buffer.from(String(fileBase64), 'base64');
     if (bytes.length < 100 || String(fileBase64).length > 48000) throw new HttpError(400, 'Keystore file is invalid or larger than GitHub\'s 48 KB secret limit');
     const pub = await ghJson(session, `/repos/${repo}/actions/secrets/public-key`);
-    await putSecret(session, repo, pub, 'WB_KEYSTORE_BASE64', String(fileBase64));
     await putSecret(session, repo, pub, 'WB_KEYSTORE_PASSWORD', String(storePassword));
     await putSecret(session, repo, pub, 'WB_KEY_ALIAS', String(alias));
     await putSecret(session, repo, pub, 'WB_KEY_PASSWORD', String(keyPassword || storePassword));
+    await putSecret(session, repo, pub, 'WB_KEYSTORE_BASE64', String(fileBase64));
+    await kv.del(defaultMarkerKey(repo)).catch(() => {}); // the repo now has the owner's own key: never rotate over it
     await kv.set(`wb:ks:${session.login}:${repo}`, { name: String(name || '').slice(0, 80), alias: String(alias).slice(0, 80), sha256: crypto.createHash('sha256').update(bytes).digest('hex'), createdAt: new Date().toISOString() });
     return send(res, 200, { ok: true });
   }
@@ -1555,6 +1632,7 @@ async function route(req, res, path, query) {
     const repo = checkRepo(query.repo);
     await Promise.all(SECRET_NAMES.map((n) => gh(session, `/repos/${repo}/actions/secrets/${n}`, { method: 'DELETE' })));
     await kv.del(`wb:ks:${session.login}:${repo}`);
+    await kv.del(defaultMarkerKey(repo)).catch(() => {});
     return send(res, 200, { ok: true });
   }
 
