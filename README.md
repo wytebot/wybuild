@@ -113,3 +113,21 @@ Included utilities:
 - Gradle/Android release configuration audit
 
 The APK/AAB inspector and checksum generator process the selected files locally in the browser.
+
+
+## Signing without per-repo setup
+
+Builds run inside the *target* repo, and GitHub Actions secrets are write-only and scoped to a single repository, so keystore
+secrets saved on the WyBuild repo itself are never visible to another repo's build. To sign every repo automatically, set these
+four variables in the WyBuild **Vercel environment** (same names as the repo secrets; `base64 -w0 your.jks` for the file):
+
+`WB_KEYSTORE_BASE64`, `WB_KEYSTORE_PASSWORD`, `WB_KEY_ALIAS`, `WB_KEY_PASSWORD`
+
+On a repo's first build WyBuild copies them into that repo's encrypted Actions secrets. A repo that already has its own
+`WB_KEYSTORE_*` secrets keeps using them. With neither, the Web → Android screen asks for a key inline (no page change).
+Note: one default key means every app built through your WyBuild is signed with the same identity.
+
+## Flow
+
+Sign in with GitHub, all repos load automatically, tap one (discovery runs once and is cached), press Build. The build step
+installs or updates the workflow if needed, provisions signing secrets, then dispatches.
