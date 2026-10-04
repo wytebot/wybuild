@@ -12,7 +12,7 @@ const WORKFLOW_PATH = `.github/workflows/${WORKFLOW_FILE}`;
 const WORKFLOW_VERSION = 3;
 const TWA_WORKFLOW_FILE = 'wybuild-twa.yml';
 const TWA_WORKFLOW_PATH = `.github/workflows/${TWA_WORKFLOW_FILE}`;
-const TWA_WORKFLOW_VERSION = 8;
+const TWA_WORKFLOW_VERSION = 9;
 // every file committed to a repo for each workflow kind: [path in repo, path in ./workflow]
 const WORKFLOW_KINDS = {
   flutter: { file: WORKFLOW_FILE, path: WORKFLOW_PATH, version: WORKFLOW_VERSION, files: [[WORKFLOW_PATH, 'wybuild.yml']] },
@@ -646,6 +646,7 @@ const STEP_STATUS = (s) => {
 };
 
 const DIAGNOSES = [
+  { re: /provided androidSdk isn'?t correct|given androidSdk isn'?t correct/i, category: 'twa_config', title: 'Bubblewrap rejected the Android SDK folder', fix: 'Bubblewrap needs an Android SDK folder with a top-level bin/ or tools/ directory, which the GitHub runner does not have. Reinstall the TWA workflow (v9 builds a compatible SDK folder automatically) and rebuild.' },
   { re: /Unexpected EOF|stdin|EOF.*prompt|Is a terminal|inquirer|Cannot read.*(?:password|input)/i, category: 'twa_config', title: 'Bubblewrap asked a question and nobody could answer', fix: 'Bubblewrap needed input (usually the keystore password or "update project?"). Check WB_KEYSTORE_PASSWORD and WB_KEY_PASSWORD and re-run the updated TWA workflow.' },
   { re: /exceeded the maximum execution time|timed out|The operation was canceled|timeout.*bubblewrap|Terminated/i, category: 'twa_config', title: 'Build hung and was stopped (timeout)', fix: 'The failed step ran out of time, most often while signing. Reinstall the TWA workflow (v5 closes stdin and times out with a clear error) and verify the keystore alias/passwords.' },
   { re: /Cannot open the keystore|java\.io\.EOFException|keystore was tampered|Keystore was tampered|password was incorrect|Cannot recover key|UnrecoverableKeyException|Invalid keystore format/i, category: 'keystore', title: 'Release keystore is invalid, truncated, or credentials are wrong', fix: 'WyBuild decoded the secret but Java could not read it. Replace WB_KEYSTORE_BASE64 with the complete raw .jks/.p12 Base64, then verify the exact case-sensitive alias and store password. WyBuild now checks the decoded file before Bubblewrap.' },
