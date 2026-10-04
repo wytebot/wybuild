@@ -10,7 +10,7 @@ const EMPTY: TwaConfig = {
   themeColor: '#0f172a', backgroundColor: '#ffffff', startUrl: '/', iconUrl: '', maskableIconUrl: '', monochromeIconUrl: '',
   display: 'standalone', orientation: 'default', fallbackType: 'customtabs', enableNotifications: false,
   enableSiteSettingsShortcut: true, locationDelegation: false, playBilling: false, additionalTrustedOrigins: [],
-  androidPermissions: [], shortcuts: [], minSdkVersion: 21, expectedFingerprint: '', output: 'both', storeReady: true, useKeystore: true,
+  androidPermissions: [], shortcuts: [], minSdkVersion: 21, expectedFingerprint: '', predictiveBack: false, playSigningFingerprint: '', output: 'both', storeReady: true, useKeystore: true,
 };
 
 const FEATURES = [
@@ -19,6 +19,12 @@ const FEATURES = [
   { id: 'camera', label: 'Camera', hint: 'Allow the site to request the camera', permission: 'CAMERA' },
   { id: 'microphone', label: 'Microphone', hint: 'Allow the site to request the microphone', permission: 'RECORD_AUDIO' },
   { id: 'vibration', label: 'Vibration', hint: 'Allow vibration from supported web APIs', permission: 'VIBRATE' },
+] as const;
+
+const SCREEN_MODES = [
+  { id: 'standalone', label: 'Standard', hint: 'Status and navigation bars stay visible' },
+  { id: 'fullscreen', label: 'Fullscreen', hint: 'Hides the status and navigation bars; swipe from an edge to peek at them' },
+  { id: 'fullscreen-sticky', label: 'Sticky fullscreen', hint: 'Bars stay hidden and re-hide on their own after a peek (games, readers, video)' },
 ] as const;
 
 const input = 'w-full h-11 bg-[#050707] border border-white/[.08] rounded-lg px-3 text-white focus:border-emerald-400/50 focus:outline-none';
@@ -237,15 +243,25 @@ export const TwaView: React.FC = () => {
         <div><label className="text-slate-500">App name</label><input className={input} value={cfg.name} onChange={e => set('name', e.target.value)} placeholder="Detected automatically"/></div>
         <div><label className="text-slate-500">Package ID</label><input className={`${input} font-mono text-emerald-200`} value={cfg.packageId} readOnly placeholder="Generated from your domain"/></div>
         <div><label className="text-slate-500">Version</label><input className={input} value={cfg.versionName} onChange={e => set('versionName', e.target.value)}/></div>
+        <div><label className="text-slate-500">Minimum version code <span className="text-slate-600">(optional)</span></label><input className={`${input} font-mono`} inputMode="numeric" value={cfg.versionCode ?? ''} onChange={e => { const n = Number(e.target.value.replace(/\D/g, '')); set('versionCode', n > 0 ? n : undefined); }} placeholder="Auto: always higher than before"/></div>
         <div><label className="text-slate-500">Icon</label><input className={input} value={cfg.iconUrl} onChange={e => set('iconUrl', e.target.value)} placeholder="Detected from manifest"/></div>
       </div>
-      <p className="text-slate-600 mt-2">The package ID is generated from the domain and reused on future builds so updates keep the same Android identity.</p>
+      <p className="text-slate-600 mt-2">The package ID is generated from the domain and reused on future builds so updates keep the same Android identity. The version code rises automatically on every build (time-based), so Google Play never rejects an upload as "version code already used". Set a minimum only if Play reports a higher one.</p>
     </section>
 
     <section className={card}>
       <div className="flex items-center gap-2 text-white font-semibold"><Wrench className="w-4 h-4 text-emerald-300"/>Native features</div>
       <p className="text-slate-500 mt-1">Tick only what your website needs. WyBuild adds the required Android permissions/configuration.</p>
       <div className="grid sm:grid-cols-2 gap-2 mt-3">{FEATURES.map(f => { const checked = featureState(cfg, f.id); return <button key={f.id} type="button" onClick={() => toggleFeature(f.id)} className={`text-left rounded-xl border p-3 flex gap-3 ${checked ? 'border-emerald-400/30 bg-emerald-400/[.06]' : 'border-white/[.06] bg-black/20'}`}><span className={`w-5 h-5 rounded border flex items-center justify-center shrink-0 ${checked ? 'bg-emerald-400 border-emerald-400 text-black' : 'border-slate-600'}`}>{checked && <Check className="w-3.5 h-3.5"/>}</span><span><b className="text-slate-200 block">{f.label}</b><span className="text-[11px] text-slate-500">{f.hint}</span></span></button>; })}</div>
+    </section>
+
+    <section className={card}>
+      <div className="flex items-center gap-2 text-white font-semibold"><Smartphone className="w-4 h-4 text-emerald-300"/>Screen &amp; gestures</div>
+      <p className="text-slate-500 mt-1">Built into the APK and AAB at build time.</p>
+      <div className="grid sm:grid-cols-3 gap-2 mt-3">{SCREEN_MODES.map(m => { const on = (cfg.display === 'minimal-ui' ? 'standalone' : cfg.display) === m.id; return <button key={m.id} type="button" onClick={() => set('display', m.id)} className={`text-left rounded-xl border p-3 ${on ? 'border-emerald-400/30 bg-emerald-400/[.06]' : 'border-white/[.06] bg-black/20'}`}><b className="text-slate-200 block">{m.label}</b><span className="text-[11px] text-slate-500">{m.hint}</span></button>; })}</div>
+      <button type="button" onClick={() => set('predictiveBack', !cfg.predictiveBack)} className={`mt-2 w-full text-left rounded-xl border p-3 flex gap-3 ${cfg.predictiveBack ? 'border-emerald-400/30 bg-emerald-400/[.06]' : 'border-white/[.06] bg-black/20'}`}><span className={`w-5 h-5 rounded border flex items-center justify-center shrink-0 ${cfg.predictiveBack ? 'bg-emerald-400 border-emerald-400 text-black' : 'border-slate-600'}`}>{cfg.predictiveBack && <Check className="w-3.5 h-3.5"/>}</span><span><b className="text-slate-200 block">Predictive back gesture</b><span className="text-[11px] text-slate-500">Android 13+ shows the back-swipe preview animation. Older phones ignore it.</span></span></button>
+      <div className="mt-3"><label className="text-slate-500">Google Play app-signing SHA-256 <span className="text-slate-600">(optional)</span></label><input className={`${input} font-mono`} value={cfg.playSigningFingerprint || ''} onChange={e => set('playSigningFingerprint', e.target.value.trim())} placeholder="Play Console → Setup → App signing → SHA-256"/></div>
+      <p className="text-slate-600 mt-2">Fullscreen only works when Android can verify your site. Publish the build's assetlinks.json at /.well-known/assetlinks.json; if the app is installed from Google Play, add the Play app-signing fingerprint above, otherwise the browser address bar comes back.</p>
     </section>
 
     {repoInspection && latestBuild && <section className={card}>
@@ -272,7 +288,7 @@ export const TwaView: React.FC = () => {
     <div className="sticky bottom-0 -mx-3 sm:mx-0 px-3 sm:px-0 py-3 bg-gradient-to-t from-[#030505] via-[#030505]/95 to-transparent flex flex-col sm:flex-row sm:items-center sm:justify-end gap-2">
       {!busy && missing && <span className="text-slate-500 sm:mr-2">{missing} to build.</span>}
       {busy && stage && <span className="text-emerald-300 sm:mr-2 flex items-center gap-2"><Loader2 className="w-3.5 h-3.5 animate-spin"/>{stage}</span>}
-      <button onClick={build} disabled={busy || !!missing} className="px-5 h-12 rounded-lg bg-emerald-400 text-black font-bold flex items-center justify-center gap-2 disabled:opacity-40">{busy ? <Loader2 className="w-4 h-4 animate-spin"/> : <Play className="w-4 h-4 fill-current"/>}Build TWA APK</button>
+      <button onClick={build} disabled={busy || !!missing} className="px-5 h-12 rounded-lg bg-emerald-400 text-black font-bold flex items-center justify-center gap-2 disabled:opacity-40">{busy ? <Loader2 className="w-4 h-4 animate-spin"/> : <Play className="w-4 h-4 fill-current"/>}Build {cfg.output === 'aab' ? 'AAB' : cfg.output === 'apk' ? 'APK' : 'APK + AAB'}</button>
     </div>
   </div>;
 };

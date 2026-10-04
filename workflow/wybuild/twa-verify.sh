@@ -3,11 +3,11 @@ set -euo pipefail
 ARTIFACT="${1:?APK or AAB path required}"
 DIST="${2:?dist path required}"
 STORE_READY="${3:-true}"
+MODE="${4:-write}" # write = start a new report, append = add to it (used when both APK and AAB are built)
 mkdir -p "$DIST"
 command -v apksigner >/dev/null 2>&1 || true
-cat > "$DIST/store-readiness.md" <<REPORT
-# WyBuild TWA readiness
-
+if [[ "$MODE" == "write" ]]; then echo "# WyBuild TWA readiness" > "$DIST/store-readiness.md"; echo >> "$DIST/store-readiness.md"; fi
+cat >> "$DIST/store-readiness.md" <<REPORT
 - Artifact: \`$(basename "$ARTIFACT")\`
 - TWA build path: Bubblewrap Trusted Web Activity
 - WebView wrapper: **not used**

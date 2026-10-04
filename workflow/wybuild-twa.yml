@@ -1,4 +1,4 @@
-# wybuild-twa-workflow-version: 9
+# wybuild-twa-workflow-version: 11
 name: WyBuild TWA
 concurrency:
   group: wybuild-${{ github.workflow }}-${{ github.ref }}
@@ -196,20 +196,53 @@ jobs:
           if [ -d wybuild/android-overrides ]; then
             echo "Applying wybuild/android-overrides/"; cp -a wybuild/android-overrides/. "$P/"
           fi
-          # 2) Extra <uses-permission> entries requested in WyBuild (or wybuild/twa.json)
-          python3 - "$P/app/src/main/AndroidManifest.xml" <<'PY'
+          # 2) Permissions + display/gesture features chosen in WyBuild (read from the resolved config)
+          python3 - "$P" <<'PY'
           import json, os, re, sys
-          perms = json.load(open(os.environ["WB_OUT"] + "/twa-resolved.json")).get("androidPermissions", [])
-          path = sys.argv[1]
+          proj = sys.argv[1]
+          out = os.environ["WB_OUT"]
+          cfg = json.load(open(out + "/twa-resolved.json"))
+          extras = json.load(open(out + "/wybuild-extras.json")) if os.path.exists(out + "/wybuild-extras.json") else {}
+          path = proj + "/app/src/main/AndroidManifest.xml"
           xml = open(path, encoding="utf8").read()
+          applied = []
+
+          # 2a) extra <uses-permission> entries
           add = ""
-          for p in perms:
+          for p in cfg.get("androidPermissions", []):
               p = p if "." in p else "android.permission." + p
               if not re.fullmatch(r"[A-Za-z0-9_.]+", p): raise SystemExit("bad permission: " + p)
               if p not in xml: add += '    <uses-permission android:name="%s" />\n' % p
           if add:
               xml = re.sub(r"(<application\b)", lambda m: add + "    " + m.group(1), xml, count=1)
-              open(path, "w", encoding="utf8").write(xml); print("Added permissions:", perms)
+              applied.append("permissions")
+
+          # 2b) fullscreen / immersive. Bubblewrap writes the DISPLAY_MODE meta-data itself; verify it and add it if missing.
+          want = {"fullscreen": "immersive", "fullscreen-sticky": "sticky-immersive"}.get(cfg.get("display"))
+          if want:
+              if "trusted.DISPLAY_MODE" not in xml:
+                  meta = '\n            <meta-data android:name="android.support.customtabs.trusted.DISPLAY_MODE" android:value="%s" />' % want
+                  xml, n = re.subn(r'(<activity\b(?:(?!/>)[^>])*LauncherActivity(?:(?!/>)[^>])*>)', lambda m: m.group(1) + meta, xml, count=1)
+                  if not n: raise SystemExit("Could not add the fullscreen display mode: LauncherActivity not found in AndroidManifest.xml")
+              applied.append("display=" + want)
+
+          # 2c) predictive back gesture (Android 13+ back-swipe preview animation)
+          if extras.get("predictiveBack"):
+              gradle = ""
+              for g in ("app/build.gradle", "app/build.gradle.kts"):
+                  if os.path.exists(proj + "/" + g): gradle += open(proj + "/" + g, encoding="utf8").read()
+              m = re.search(r"compileSdk(?:Version)?\s*(?:=\s*)?(\d+)", gradle)
+              if m and int(m.group(1)) < 33:
+                  print("::warning::Predictive back skipped: this project compiles against API %s (needs 33+)." % m.group(1))
+              elif "enableOnBackInvokedCallback" not in xml:
+                  xml = re.sub(r"<application\b", '<application android:enableOnBackInvokedCallback="true"', xml, count=1)
+                  applied.append("predictive-back")
+
+          open(path, "w", encoding="utf8").write(xml)
+          assert "<application" in xml
+          print("Android features applied:", ", ".join(applied) or "none")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("### Android features baked into this build\n- " + ("\n- ".join(applied) or "none") + "\n")
           PY
           # 3) Optional hook for anything else: runs inside the generated project
           if [ -f wybuild/twa-patch.sh ]; then
@@ -260,7 +293,9 @@ jobs:
                       cp app-release-bundle.aab "$DIST/$NAME.aab" ;;
           esac
           # Verify whichever signed artifact was requested. AAB-only builds do not require an APK.
-          if [ -f app-release-signed.apk ]; then cp app-release-signed.apk "$WB_OUT/verify.apk"; else cp app-release-bundle.aab "$WB_OUT/verify.aab"; fi
+          rm -f "$WB_OUT/verify.apk" "$WB_OUT/verify.aab"
+          case "$OUTPUT" in apk|both) cp app-release-signed.apk "$WB_OUT/verify.apk" ;; esac
+          case "$OUTPUT" in aab|both) cp app-release-bundle.aab "$WB_OUT/verify.aab" ;; esac
           ls -la "$DIST"
 
       - name: Digital Asset Links and store-readiness checks
@@ -269,25 +304,38 @@ jobs:
           DIST="$WB_OUT/dist"
           BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"; export PATH="$BT:$PATH"
           # Certificate fingerprint -> assetlinks.json (host this at https://<site>/.well-known/assetlinks.json)
-          FP="$(keytool -list -v -keystore "$WB_KEYSTORE_PATH" -alias "$WB_KEY_ALIAS" -storepass "$BUBBLEWRAP_KEYSTORE_PASSWORD" 2>/dev/null | sed -n 's/^ *SHA256: *//p' | head -1)"
-          test -n "$FP" || { echo "::error::Could not read the release certificate SHA-256 fingerprint from the configured keystore."; exit 1; }
+          # keytool indents with a TAB on JDK 17, so match any whitespace (a plain space-only pattern silently finds nothing)
+          KT_OUT="$(keytool -list -v -keystore "$WB_KEYSTORE_PATH" -alias "$WB_KEY_ALIAS" -storepass "$BUBBLEWRAP_KEYSTORE_PASSWORD" 2>&1 || true)"
+          FP="$(printf '%s\n' "$KT_OUT" | sed -n 's/^[[:space:]]*SHA-\{0,1\}256:[[:space:]]*//p' | head -1 | tr -d '\r')"
+          if [ -z "$FP" ]; then
+            # fallback: hash the certificate itself
+            FP="$(keytool -exportcert -keystore "$WB_KEYSTORE_PATH" -alias "$WB_KEY_ALIAS" -storepass "$BUBBLEWRAP_KEYSTORE_PASSWORD" 2>/dev/null | openssl dgst -sha256 -binary | od -An -tx1 | tr -d ' \n' | tr 'a-f' 'A-F' | sed 's/../&:/g; s/:$//')"
+          fi
+          test -n "$FP" || { printf '%s\n' "$KT_OUT" | sed 's/^/keytool: /' | head -8; echo "::error::Could not read the release certificate SHA-256 fingerprint from the configured keystore."; exit 1; }
           echo "WYBUILD_FINGERPRINT=$FP" >> "$WB_OUT/prepare.log"
           echo "WYBUILD_FINGERPRINT=$FP" >> "$GITHUB_STEP_SUMMARY"
+          # Google Play re-signs installs with its own app-signing key: list that fingerprint too, otherwise the address bar returns for Play installs
+          PLAY_FP="$(python3 -c 'import json,os;print(json.load(open(os.environ["WB_OUT"]+"/wybuild-extras.json")).get("playSigningFingerprint",""))' 2>/dev/null || true)"
+          FPS="\"$FP\""; [ -n "$PLAY_FP" ] && [ "$PLAY_FP" != "$FP" ] && FPS="$FPS, \"$PLAY_FP\""
           cat > "$DIST/assetlinks.json" <<JSON
           [{
             "relation": ["delegate_permission/common.handle_all_urls"],
             "target": {
               "namespace": "android_app",
               "package_name": "$WYBUILD_PACKAGE",
-              "sha256_cert_fingerprints": ["$FP"]
+              "sha256_cert_fingerprints": [$FPS]
             }
           }]
           JSON
           cp "$WB_OUT/twa-resolved.json" "$DIST/twa-config.json"
           cp "$WB_OUT/project/twa-manifest.json" "$DIST/twa-manifest.json"
-          VERIFY="$WB_OUT/verify.apk"; [ -f "$VERIFY" ] || VERIFY="$WB_OUT/verify.aab"
-          bash .github/wybuild/twa-verify.sh "$VERIFY" "$DIST" "$STORE_READY"
-          RC=$?
+          RC=0
+          if [ -f "$WB_OUT/verify.apk" ]; then bash .github/wybuild/twa-verify.sh "$WB_OUT/verify.apk" "$DIST" "$STORE_READY" write || RC=$?; fi
+          if [ -f "$WB_OUT/verify.aab" ]; then bash .github/wybuild/twa-verify.sh "$WB_OUT/verify.aab" "$DIST" "$STORE_READY" append || RC=$?; fi
+          # Play Store needs the .aab, a unique versionCode and a recent target API
+          TSDK="$(grep -rhoE 'targetSdk(Version)?[[:space:]]*(=[[:space:]]*)?[0-9]+' "$WB_OUT/project/app/build.gradle" "$WB_OUT/project/build.gradle" 2>/dev/null | grep -oE '[0-9]+$' | head -1 || true)"
+          { echo "- Target SDK: ${TSDK:-unknown}"; echo "- versionCode: $WYBUILD_VERSION_CODE (must be higher than every build already uploaded to Play)"; } >> "$DIST/store-readiness.md"
+          if [ -n "$TSDK" ] && [ "$TSDK" -lt 35 ]; then echo "::warning::targetSdk $TSDK is below what Google Play currently accepts for new uploads. Update Bubblewrap (bubblewrap_version input) if Play Console rejects the bundle."; fi
           { echo "## WyBuild TWA: $WYBUILD_PACKAGE $WYBUILD_VERSION ($WYBUILD_VERSION_CODE)"; cat "$DIST/store-readiness.md"
             echo; echo "### Digital Asset Links"; echo "Publish \`assetlinks.json\` at \`https://$WYBUILD_SOURCE_HOST/.well-known/assetlinks.json\`:"; echo '```json'; cat "$DIST/assetlinks.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           exit $RC

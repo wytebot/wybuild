@@ -12,7 +12,7 @@ const WORKFLOW_PATH = `.github/workflows/${WORKFLOW_FILE}`;
 const WORKFLOW_VERSION = 3;
 const TWA_WORKFLOW_FILE = 'wybuild-twa.yml';
 const TWA_WORKFLOW_PATH = `.github/workflows/${TWA_WORKFLOW_FILE}`;
-const TWA_WORKFLOW_VERSION = 9;
+const TWA_WORKFLOW_VERSION = 11;
 // every file committed to a repo for each workflow kind: [path in repo, path in ./workflow]
 const WORKFLOW_KINDS = {
   flutter: { file: WORKFLOW_FILE, path: WORKFLOW_PATH, version: WORKFLOW_VERSION, files: [[WORKFLOW_PATH, 'wybuild.yml']] },
@@ -1055,7 +1055,7 @@ function cleanTwaConfig(c = {}) {
   }
   for (const k of ['iconUrl', 'maskableIconUrl', 'monochromeIconUrl', 'webManifestUrl']) if (c[k]) out[k] = cleanHttps(c[k], k);
   if (c.display) {
-    if (!['standalone', 'fullscreen', 'minimal-ui'].includes(c.display)) throw new HttpError(400, 'Invalid display mode');
+    if (!['standalone', 'fullscreen', 'fullscreen-sticky', 'minimal-ui'].includes(c.display)) throw new HttpError(400, 'Invalid display mode');
     out.display = c.display;
   }
   if (c.orientation) {
@@ -1065,7 +1065,7 @@ function cleanTwaConfig(c = {}) {
   // WyBuild web-to-Android is always a Trusted Web Activity. A WebView fallback is
   // deliberately not exposed because it changes the product into a WebView wrapper.
   out.fallbackType = 'customtabs';
-  for (const k of ['enableNotifications', 'enableSiteSettingsShortcut', 'locationDelegation', 'playBilling', 'isChromeOSOnly']) if (k in c) out[k] = !!c[k];
+  for (const k of ['enableNotifications', 'enableSiteSettingsShortcut', 'locationDelegation', 'playBilling', 'isChromeOSOnly', 'predictiveBack']) if (k in c) out[k] = !!c[k];
   if (c.minSdkVersion) {
     out.minSdkVersion = Number(c.minSdkVersion);
     if (!Number.isInteger(out.minSdkVersion) || out.minSdkVersion < 21 || out.minSdkVersion > 35) throw new HttpError(400, 'minSdkVersion must be between 21 and 35');
@@ -1077,6 +1077,10 @@ function cleanTwaConfig(c = {}) {
   if (c.expectedFingerprint) {
     out.expectedFingerprint = str(c.expectedFingerprint, 120);
     if (!/^([0-9A-Fa-f]{2}:?){32}$/.test(out.expectedFingerprint)) throw new HttpError(400, 'Fingerprint must be a SHA-256 value (64 hex characters)');
+  }
+  if (c.playSigningFingerprint) {
+    out.playSigningFingerprint = str(c.playSigningFingerprint, 120);
+    if (!/^([0-9A-Fa-f]{2}:?){32}$/.test(out.playSigningFingerprint)) throw new HttpError(400, 'Play signing fingerprint must be a SHA-256 value (64 hex characters)');
   }
   return out;
 }

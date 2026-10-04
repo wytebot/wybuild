@@ -45,6 +45,14 @@ const features = {};
 if (raw.locationDelegation) features.locationDelegation = { enabled: true };
 if (raw.playBilling) features.playBilling = { enabled: true };
 const perms = Array.isArray(raw.androidPermissions) ? raw.androidPermissions : [];
+// Google Play rejects any upload whose versionCode is not higher than every code it has seen for this package
+// (including ones from earlier tools or deleted drafts). So the code is the HIGHEST of:
+//   - the minimum you set in WyBuild (raw.versionCode), 
+//   - the CI run number, 
+//   - minutes since the Unix epoch (~29 million today; always rising, far above any hand-picked code).
+// Android's ceiling is 2,100,000,000, which minutes-since-epoch will not reach for thousands of years.
+const minutesNow = Math.floor(Date.now() / 60000);
+const versionCode = Math.min(2100000000, Math.max(Number(raw.versionCode) || 0, Number(process.env.GITHUB_RUN_NUMBER) || 0, minutesNow));
 const json = {
   packageId,
   host: new URL(page.url || pageUrl).host,
@@ -61,7 +69,7 @@ const json = {
   iconUrl: abs(raw.iconUrl || best.src),
   maskableIconUrl: abs(raw.maskableIconUrl || maskable?.src),
   monochromeIconUrl: abs(raw.monochromeIconUrl || mono?.src),
-  appVersionCode: Number(raw.versionCode) || Number(process.env.GITHUB_RUN_NUMBER) || 1,
+  appVersionCode: versionCode,
   appVersion: String(raw.versionName || '1.0.0'),
   splashScreenFadeOutDuration: 300,
   signingKey: { path: `${out}/wybuild-release.jks`, alias: process.env.WB_KEY_ALIAS || process.env.WB_KEY_ALIAS_SECRET || 'wybuild' },
@@ -79,6 +87,12 @@ const json = {
   generatorApp: 'WyBuild',
   androidPermissions: perms,
 };
+// WyBuild-only options (not Bubblewrap manifest fields): applied by the "Apply manual Android features" step
+const extras = {
+  predictiveBack: raw.predictiveBack === true,
+  playSigningFingerprint: /^([0-9A-Fa-f]{2}:?){32}$/.test(String(raw.playSigningFingerprint || '')) ? String(raw.playSigningFingerprint).replace(/:/g, '').toUpperCase().match(/.{2}/g).join(':') : '',
+};
+await fs.writeFile(`${out}/wybuild-extras.json`, JSON.stringify(extras, null, 2));
 await fs.writeFile(`${out}/twa-resolved.json`, JSON.stringify(json, null, 2));
 await fs.writeFile(`${out}/twa-manifest.json`, JSON.stringify(json, null, 2));
 const snapshot = crypto.createHash('sha256').update(JSON.stringify({ web, json })).digest('hex');

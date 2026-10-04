@@ -42,7 +42,7 @@ export interface TwaConfig {
   maskableIconUrl: string;
   monochromeIconUrl: string;
   webManifestUrl?: string;
-  display: 'standalone' | 'fullscreen' | 'minimal-ui';
+  display: 'standalone' | 'fullscreen' | 'fullscreen-sticky' | 'minimal-ui';
   orientation: 'default' | 'portrait' | 'landscape';
   fallbackType: 'customtabs';
   enableNotifications: boolean;
@@ -54,6 +54,10 @@ export interface TwaConfig {
   shortcuts: { name: string; shortName: string; url: string }[];
   minSdkVersion: number;
   expectedFingerprint: string;
+  /** Android 13+ back-swipe preview animation (native, baked into the APK/AAB) */
+  predictiveBack?: boolean;
+  /** SHA-256 of Google Play's app-signing key; added to assetlinks.json so Play installs stay fullscreen with no address bar */
+  playSigningFingerprint?: string;
   // build options
   output: TwaOutput;
   storeReady: boolean;
