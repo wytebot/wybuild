@@ -1364,6 +1364,11 @@ async function route(req, res, path, query) {
 
     const wf = await gh(session, `/repos/${repo}/contents/${WORKFLOW_PATH}?ref=${encodeURIComponent(branch)}`);
     if (wf.status === 404) throw new HttpError(409, `The WyBuild workflow (${WORKFLOW_PATH}) is not on branch "${branch}" of ${repo}.`, 'NO_WORKFLOW', { hint: 'Reconnect the project to install the workflow, or commit it to that branch.' });
+    {
+      const wfText = Buffer.from(((await wf.json().catch(() => ({}))).content || ''), 'base64').toString('utf8');
+      const have = Number((/wybuild-workflow-version:\s*(\d+)/.exec(wfText) || [])[1] || 0);
+      if (have < WORKFLOW_VERSION) throw new HttpError(409, `The WyBuild workflow in ${repo} is outdated (v${have}, current v${WORKFLOW_VERSION}).`, 'WORKFLOW_OUTDATED', { hint: 'WyBuild reinstalls it automatically; if you see this, press Build again.' });
+    }
 
     // sign release builds automatically when the repo (or the server default) has a key; never block on it unless the user asked for signing
     let useKs = !!c.useKeystore;
@@ -1444,6 +1449,11 @@ async function route(req, res, path, query) {
 
     const wf = await gh(session, `/repos/${repo}/contents/${TWA_WORKFLOW_PATH}?ref=${encodeURIComponent(branch)}`);
     if (wf.status === 404) throw new HttpError(409, `The WyBuild TWA workflow (${TWA_WORKFLOW_PATH}) is not on branch "${branch}" of ${repo}.`, 'NO_WORKFLOW', { hint: 'Open Web to Android, pick this repo and use Update workflow to install it.' });
+    {
+      const wfText = Buffer.from(((await wf.json().catch(() => ({}))).content || ''), 'base64').toString('utf8');
+      const have = Number((/wybuild-twa-workflow-version:\s*(\d+)/.exec(wfText) || [])[1] || 0);
+      if (have < TWA_WORKFLOW_VERSION) throw new HttpError(409, `The WyBuild TWA workflow in ${repo} is outdated (v${have}, current v${TWA_WORKFLOW_VERSION}).`, 'WORKFLOW_OUTDATED', { hint: 'WyBuild reinstalls it automatically; if you see this, press Build again.' });
+    }
     const missingHelpers = [];
     for (const [repoPath] of WORKFLOW_KINDS.twa.files.slice(1)) {
       const hr = await gh(session, `/repos/${repo}/contents/${repoPath}?ref=${encodeURIComponent(branch)}`);

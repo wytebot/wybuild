@@ -156,7 +156,7 @@ export const TwaView: React.FC = () => {
       if (id) updateProject(id, project);
       else { const res = addProject(project); if (!res.success || !res.id) throw new Error(res.error || 'Could not save the project.'); id = res.id; setEditingId(id); }
       setStage('Starting the build…');
-      const transient = ['NO_WORKFLOW', 'MISSING_HELPER_FILES', 'WORKFLOW_NOT_DISPATCHABLE', 'GITHUB_NOT_FOUND', 'GITHUB_VALIDATION', 'GITHUB_ERROR'];
+      const transient = ['NO_WORKFLOW', 'MISSING_HELPER_FILES', 'WORKFLOW_OUTDATED', 'WORKFLOW_NOT_DISPATCHABLE', 'GITHUB_NOT_FOUND', 'GITHUB_VALIDATION', 'GITHUB_ERROR'];
       expectNewBuild(r);
       for (let attempt = 0; ; attempt++) {
         try { await api.twaBuild(r, branch, project.twa); break; }
