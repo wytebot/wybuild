@@ -1,4 +1,4 @@
-# wybuild-twa-workflow-version: 11
+# wybuild-twa-workflow-version: 12
 name: WyBuild TWA
 concurrency:
   group: wybuild-${{ github.workflow }}-${{ github.ref }}
@@ -80,8 +80,8 @@ jobs:
           }
           JSON
           npm install --no-audit --no-fund --package-lock=false "@bubblewrap/cli@${{ inputs.bubblewrap_version }}"
-          for f in twa-prepare.mjs twa-generate.mjs twa-verify.sh; do
-            test -f "$GITHUB_WORKSPACE/.github/wybuild/$f" || { echo "::error::.github/wybuild/$f is missing in this repo/branch. Reinstall the WyBuild TWA workflow (WyBuild > Web to Android > Update workflow) so all four files are committed."; exit 1; }
+          for f in twa-prepare.mjs twa-generate.mjs twa-verify.sh twa-native.py; do
+            test -f "$GITHUB_WORKSPACE/.github/wybuild/$f" || { echo "::error::.github/wybuild/$f is missing in this repo/branch. Reinstall the WyBuild TWA workflow (WyBuild > Web to Android > Update workflow) so all the WyBuild files are committed."; exit 1; }
           done
           cp "$GITHUB_WORKSPACE/.github/wybuild/twa-generate.mjs" .
           echo "$WB_TOOLS/node_modules/.bin" >> "$GITHUB_PATH"
@@ -196,54 +196,8 @@ jobs:
           if [ -d wybuild/android-overrides ]; then
             echo "Applying wybuild/android-overrides/"; cp -a wybuild/android-overrides/. "$P/"
           fi
-          # 2) Permissions + display/gesture features chosen in WyBuild (read from the resolved config)
-          python3 - "$P" <<'PY'
-          import json, os, re, sys
-          proj = sys.argv[1]
-          out = os.environ["WB_OUT"]
-          cfg = json.load(open(out + "/twa-resolved.json"))
-          extras = json.load(open(out + "/wybuild-extras.json")) if os.path.exists(out + "/wybuild-extras.json") else {}
-          path = proj + "/app/src/main/AndroidManifest.xml"
-          xml = open(path, encoding="utf8").read()
-          applied = []
-
-          # 2a) extra <uses-permission> entries
-          add = ""
-          for p in cfg.get("androidPermissions", []):
-              p = p if "." in p else "android.permission." + p
-              if not re.fullmatch(r"[A-Za-z0-9_.]+", p): raise SystemExit("bad permission: " + p)
-              if p not in xml: add += '    <uses-permission android:name="%s" />\n' % p
-          if add:
-              xml = re.sub(r"(<application\b)", lambda m: add + "    " + m.group(1), xml, count=1)
-              applied.append("permissions")
-
-          # 2b) fullscreen / immersive. Bubblewrap writes the DISPLAY_MODE meta-data itself; verify it and add it if missing.
-          want = {"fullscreen": "immersive", "fullscreen-sticky": "sticky-immersive"}.get(cfg.get("display"))
-          if want:
-              if "trusted.DISPLAY_MODE" not in xml:
-                  meta = '\n            <meta-data android:name="android.support.customtabs.trusted.DISPLAY_MODE" android:value="%s" />' % want
-                  xml, n = re.subn(r'(<activity\b(?:(?!/>)[^>])*LauncherActivity(?:(?!/>)[^>])*>)', lambda m: m.group(1) + meta, xml, count=1)
-                  if not n: raise SystemExit("Could not add the fullscreen display mode: LauncherActivity not found in AndroidManifest.xml")
-              applied.append("display=" + want)
-
-          # 2c) predictive back gesture (Android 13+ back-swipe preview animation)
-          if extras.get("predictiveBack"):
-              gradle = ""
-              for g in ("app/build.gradle", "app/build.gradle.kts"):
-                  if os.path.exists(proj + "/" + g): gradle += open(proj + "/" + g, encoding="utf8").read()
-              m = re.search(r"compileSdk(?:Version)?\s*(?:=\s*)?(\d+)", gradle)
-              if m and int(m.group(1)) < 33:
-                  print("::warning::Predictive back skipped: this project compiles against API %s (needs 33+)." % m.group(1))
-              elif "enableOnBackInvokedCallback" not in xml:
-                  xml = re.sub(r"<application\b", '<application android:enableOnBackInvokedCallback="true"', xml, count=1)
-                  applied.append("predictive-back")
-
-          open(path, "w", encoding="utf8").write(xml)
-          assert "<application" in xml
-          print("Android features applied:", ", ".join(applied) or "none")
-          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
-              f.write("### Android features baked into this build\n- " + ("\n- ".join(applied) or "none") + "\n")
-          PY
+          # 2) Permissions, notification delegation, fullscreen, predictive back, notification icon, push kit
+          python3 .github/wybuild/twa-native.py "$P"
           # 3) Optional hook for anything else: runs inside the generated project
           if [ -f wybuild/twa-patch.sh ]; then
             echo "Running wybuild/twa-patch.sh"; (cd "$P" && bash "$GITHUB_WORKSPACE/wybuild/twa-patch.sh")
@@ -337,8 +291,49 @@ jobs:
           { echo "- Target SDK: ${TSDK:-unknown}"; echo "- versionCode: $WYBUILD_VERSION_CODE (must be higher than every build already uploaded to Play)"; } >> "$DIST/store-readiness.md"
           if [ -n "$TSDK" ] && [ "$TSDK" -lt 35 ]; then echo "::warning::targetSdk $TSDK is below what Google Play currently accepts for new uploads. Update Bubblewrap (bubblewrap_version input) if Play Console rejects the bundle."; fi
           { echo "## WyBuild TWA: $WYBUILD_PACKAGE $WYBUILD_VERSION ($WYBUILD_VERSION_CODE)"; cat "$DIST/store-readiness.md"
-            echo; echo "### Digital Asset Links"; echo "Publish \`assetlinks.json\` at \`https://$WYBUILD_SOURCE_HOST/.well-known/assetlinks.json\`:"; echo '```json'; cat "$DIST/assetlinks.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            echo; echo "### Digital Asset Links"; echo "Publish \`assetlinks.json\` at \`https://$WYBUILD_SOURCE_HOST/.well-known/assetlinks.json\` (no redirect):"; echo '```json'; cat "$DIST/assetlinks.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           exit $RC
+
+      - name: Check the live site trusts this app (what makes fullscreen hide the address bar)
+        continue-on-error: true
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request, urllib.parse
+          out = os.environ["WB_OUT"]
+          cfg = json.load(open(out + "/twa-resolved.json"))
+          fps = []
+          for line in open(out + "/prepare.log"):
+              if line.startswith("WYBUILD_FINGERPRINT="): fps.append(line.split("=", 1)[1].strip())
+          extra = json.load(open(out + "/wybuild-extras.json")).get("playSigningFingerprint", "")
+          if extra: fps.append(extra)
+          hosts = [cfg["host"]] + [h.replace("https://", "").strip("/") for h in cfg.get("additionalTrustedOrigins", [])]
+          lines, bad = [], False
+          for h in dict.fromkeys(hosts):
+              site = "https://" + h
+              # 1) the file itself, with no redirect (Android refuses redirected asset links)
+              try:
+                  class NoRedirect(urllib.request.HTTPRedirectHandler):
+                      def redirect_request(self, *a, **k): return None
+                  op = urllib.request.build_opener(NoRedirect)
+                  r = op.open(urllib.request.Request(site + "/.well-known/assetlinks.json", headers={"User-Agent": "WyBuild"}), timeout=15)
+                  body = json.loads(r.read().decode("utf8"))
+                  mine = [e for e in body if e.get("target", {}).get("package_name") == cfg["packageId"]]
+                  have = {x.upper() for e in mine for x in e.get("target", {}).get("sha256_cert_fingerprints", [])}
+                  ok = bool(mine) and any(f.upper() in have for f in fps[:1])
+                  lines.append("- %s %s: assetlinks.json %s" % ("OK" if ok else "FIX", h, "lists this app and signing key" if ok else ("is published but does NOT list package %s with this key" % cfg["packageId"])))
+                  bad |= not ok
+                  continue
+              except Exception as e:
+                  lines.append("- FIX %s: https://%s/.well-known/assetlinks.json is not reachable as a plain 200 response (%s)" % (h, h, str(e)[:80]))
+                  bad = True
+          report = "### Fullscreen check: does the live site trust this app?\n" + "\n".join(lines) + "\n"
+          if bad:
+              report += "\nUntil the file is fixed, Android shows the browser address bar inside the app. Publish the `assetlinks.json` from this build's artifact at `/.well-known/assetlinks.json` (HTTPS, no redirect, `application/json`).\n"
+              print("::warning::The live site does not trust this app yet, so the address bar will show. See the run summary.")
+          open(os.environ["GITHUB_STEP_SUMMARY"], "a").write(report)
+          os.makedirs(out + "/dist", exist_ok=True)
+          open(out + "/dist/fullscreen-check.md", "w").write(report)
+          PY
 
       - name: Upload artifacts
         if: ${{ always() }}

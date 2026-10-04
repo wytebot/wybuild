@@ -127,41 +127,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [repos, setRepos] = useState<RepoInfo[]>([]);
   const [reposLoading, setReposLoading] = useState(false);
   const [defaultKeystore, setDefaultKeystore] = useState(false);
-  const [selectedRepo, setSelectedRepoState] = useState<string>(() => localStorage.getItem('wybuild_selected_repo') || '');
+  const [selectedRepo, setSelectedRepoState] = useState<string>('');
   const [inspections, setInspections] = useState<Record<string, RepoInspection>>({});
   const [usage, setUsage] = useState<UsageInfo>({ monthlyBuildsUsed: 0, monthlyLimit: 5, concurrentLimit: 1, resetsAt: '' });
   const [subscription, setSubscription] = useState<SubscriptionInfo>(EMPTY_SUB);
   const [lifetimeFree, setLifetimeFree] = useState(false);
 
-  const [projects, setProjects] = useState<Project[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.PROJECTS);
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [projects, setProjects] = useState<Project[]>([]);
 
   const [builds, setBuilds] = useState<BuildRecord[]>([]);
   const [activeBuildId, setActiveBuildId] = useState<string | null>(null);
   const [currentTab, setCurrentTab] = useState<string>('dashboard');
   const [keystores, setKeystores] = useState<Keystore[]>([]);
 
-  const [teamMembers, setTeamMembers] = useState<TeamMember[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.MEMBERS);
-    return saved ? JSON.parse(saved) : INITIAL_MEMBERS;
-  });
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>(INITIAL_MEMBERS);
 
-  const [auditLogs, setAuditLogs] = useState<AuditLog[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.LOGS);
-    return saved ? JSON.parse(saved) : INITIAL_AUDIT_LOGS;
-  });
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>(INITIAL_AUDIT_LOGS);
 
-  const [webhooks, setWebhooks] = useState<GitHubWebhook[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.WEBHOOKS);
-    return saved ? JSON.parse(saved) : INITIAL_WEBHOOKS;
-  });
+  const [webhooks, setWebhooks] = useState<GitHubWebhook[]>(INITIAL_WEBHOOKS);
 
-  const [webhookDeliveries, setWebhookDeliveries] = useState<WebhookDelivery[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.DELIVERIES);
-    return saved ? JSON.parse(saved) : INITIAL_DELIVERIES;
-  });
+  const [webhookDeliveries, setWebhookDeliveries] = useState<WebhookDelivery[]>(INITIAL_DELIVERIES);
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -172,12 +157,57 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }, 4000);
   };
 
-  // Local-only data (projects, team, audit log, webhook UI) persists in the browser
-  useEffect(() => { localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(projects)); }, [projects]);
-  useEffect(() => { localStorage.setItem(STORAGE_KEYS.MEMBERS, JSON.stringify(teamMembers)); }, [teamMembers]);
-  useEffect(() => { localStorage.setItem(STORAGE_KEYS.LOGS, JSON.stringify(auditLogs)); }, [auditLogs]);
-  useEffect(() => { localStorage.setItem(STORAGE_KEYS.WEBHOOKS, JSON.stringify(webhooks)); }, [webhooks]);
-  useEffect(() => { localStorage.setItem(STORAGE_KEYS.DELIVERIES, JSON.stringify(webhookDeliveries)); }, [webhookDeliveries]);
+  // Local-only data (projects, team, audit log, webhook UI) is stored per GitHub account, so signing in
+  // as someone else on the same browser never shows the previous account's repos, builds or logs.
+  const [hydratedFor, setHydratedFor] = useState<string | null>(null);
+  const loginKey = user?.login ? user.login.toLowerCase() : null;
+  const ownKey = (k: string, login: string) => `${k}:${login}`;
+  const readOwn = <T,>(k: string, login: string, fallback: T): T => {
+    try { const v = localStorage.getItem(ownKey(k, login)); return v ? (JSON.parse(v) as T) : fallback; } catch { return fallback; }
+  };
+
+  const resetSessionData = () => {
+    setBuilds([]);
+    setActiveBuildId(null);
+    setKeystores([]);
+    setInspections({});
+    setRepos([]);
+    setSelectedRepoState('');
+    setProjects([]);
+    setTeamMembers(INITIAL_MEMBERS);
+    setAuditLogs(INITIAL_AUDIT_LOGS);
+    setWebhooks(INITIAL_WEBHOOKS);
+    setWebhookDeliveries(INITIAL_DELIVERIES);
+  };
+
+  useEffect(() => {
+    if (!loginKey) return;
+    if (hydratedFor === loginKey) return;
+    resetSessionData();
+    // data saved before accounts were separated cannot be attributed to anyone: remove it
+    try {
+      Object.values(STORAGE_KEYS).forEach((k) => localStorage.removeItem(k));
+      localStorage.removeItem('wybuild_selected_repo');
+    } catch { /* storage unavailable */ }
+    setProjects(readOwn<Project[]>(STORAGE_KEYS.PROJECTS, loginKey, []));
+    setTeamMembers(readOwn<TeamMember[]>(STORAGE_KEYS.MEMBERS, loginKey, INITIAL_MEMBERS));
+    setAuditLogs(readOwn<AuditLog[]>(STORAGE_KEYS.LOGS, loginKey, INITIAL_AUDIT_LOGS));
+    setWebhooks(readOwn<GitHubWebhook[]>(STORAGE_KEYS.WEBHOOKS, loginKey, INITIAL_WEBHOOKS));
+    setWebhookDeliveries(readOwn<WebhookDelivery[]>(STORAGE_KEYS.DELIVERIES, loginKey, INITIAL_DELIVERIES));
+    setSelectedRepoState(readOwn<string>('wybuild_selected_repo', loginKey, ''));
+    setHydratedFor(loginKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loginKey]);
+
+  const persist = (k: string, v: unknown) => {
+    if (!loginKey || hydratedFor !== loginKey) return;
+    try { localStorage.setItem(ownKey(k, loginKey), JSON.stringify(v)); } catch { /* storage full or blocked */ }
+  };
+  useEffect(() => { persist(STORAGE_KEYS.PROJECTS, projects); }, [projects, hydratedFor]);
+  useEffect(() => { persist(STORAGE_KEYS.MEMBERS, teamMembers); }, [teamMembers, hydratedFor]);
+  useEffect(() => { persist(STORAGE_KEYS.LOGS, auditLogs); }, [auditLogs, hydratedFor]);
+  useEffect(() => { persist(STORAGE_KEYS.WEBHOOKS, webhooks); }, [webhooks, hydratedFor]);
+  useEffect(() => { persist(STORAGE_KEYS.DELIVERIES, webhookDeliveries); }, [webhookDeliveries, hydratedFor]);
 
   const buildsRef = useRef(builds);
   buildsRef.current = builds;
@@ -218,9 +248,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const selectRepo = useCallback((repo: string) => {
     setSelectedRepoState(repo);
-    if (repo) localStorage.setItem('wybuild_selected_repo', repo);
-    else localStorage.removeItem('wybuild_selected_repo');
-  }, []);
+    if (!loginKey) return;
+    try {
+      if (repo) localStorage.setItem(`wybuild_selected_repo:${loginKey}`, JSON.stringify(repo));
+      else localStorage.removeItem(`wybuild_selected_repo:${loginKey}`);
+    } catch { /* storage blocked */ }
+  }, [loginKey]);
 
   const refreshRepos = useCallback(async () => {
     setReposLoading(true);
@@ -611,9 +644,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       await api.logout();
     } finally {
       setUser(null);
-      setBuilds([]);
-      setKeystores([]);
+      setHydratedFor(null);
+      resetSessionData();
       setSubscription(EMPTY_SUB);
+      setUsage({ monthlyBuildsUsed: 0, monthlyLimit: 5, concurrentLimit: 1, resetsAt: '' });
+      setLifetimeFree(false);
       setAuthState('anon');
     }
   };

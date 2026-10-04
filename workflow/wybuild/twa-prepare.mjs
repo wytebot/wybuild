@@ -61,7 +61,7 @@ const json = {
   display,
   themeColor,
   themeColorDark: themeColor,
-  navigationColor: themeColor,
+  navigationColor: /^#[0-9a-f]{6}$/i.test(raw.navigationColor || '') ? raw.navigationColor : themeColor,
   backgroundColor,
   enableNotifications: raw.enableNotifications !== false,
   enableSiteSettingsShortcut: raw.enableSiteSettingsShortcut !== false,
@@ -102,4 +102,4 @@ console.log(`WYBUILD_VERSION=${json.appVersion}`);
 console.log(`WYBUILD_VERSION_CODE=${json.appVersionCode}`);
 console.log(`WYBUILD_WEB_MANIFEST=${manifestUrl}`);
 console.log(`WYBUILD_SNAPSHOT=${snapshot}`);
-console.log(`WYBUILD_SOURCE_HOST=${host}`);
+console.log(`WYBUILD_SOURCE_HOST=${json.host}`);
