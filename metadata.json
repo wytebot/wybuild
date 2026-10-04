@@ -1,0 +1,6 @@
+{
+  "name": "WyBuild - Flutter & Web-to-Android (TWA) Cloud Builder",
+  "description": "Cloud CI/CD for Flutter and Web-to-Android (TWA) builds using GitHub Actions, with server-enforced build quotas, release signing, store-readiness checks, testing and build diagnostics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
