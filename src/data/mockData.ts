@@ -10,7 +10,7 @@ export const INITIAL_PROJECTS: Project[] = [
     config: {
       target: 'apk',
       mode: 'release',
-      web appVersion: '3.29.0',
+      flutterVersion: '3.29.0',
       dartDefines: [
         { key: 'API_BASE_URL', value: 'https://api.finflow.io/v2' },
         { key: 'ENV', value: 'production' },
@@ -36,7 +36,7 @@ export const INITIAL_PROJECTS: Project[] = [
     config: {
       target: 'appbundle',
       mode: 'release',
-      web appVersion: '3.27.4',
+      flutterVersion: '3.27.4',
       dartDefines: [
         { key: 'MAPS_API_KEY', value: 'AIzaSyDemoMapsPlatformKey' },
       ],
@@ -56,12 +56,12 @@ export const INITIAL_PROJECTS: Project[] = [
     id: 'proj-3',
     name: 'PulseTrack Wearable Companion',
     description: 'Health and heart-rate telemetry tracking via Bluetooth Low Energy',
-    repoUrl: 'https://github.com/pulsetrack/companion-web app',
+    repoUrl: 'https://github.com/pulsetrack/companion-flutter',
     branch: 'dev',
     config: {
       target: 'apk',
       mode: 'debug',
-      web appVersion: '3.29.0',
+      flutterVersion: '3.29.0',
       dartDefines: [],
       obfuscate: false,
       splitDebugInfo: false,
@@ -118,7 +118,7 @@ export const INITIAL_BUILDS: BuildRecord[] = [
     durationSeconds: 232,
     target: 'apk',
     mode: 'release',
-    web appVersion: '3.29.0',
+    flutterVersion: '3.29.0',
     runnerType: 'priority-dedicated',
     steps: [
       {
@@ -149,18 +149,18 @@ export const INITIAL_BUILDS: BuildRecord[] = [
       },
       {
         id: 's3',
-        name: 'Resolve dependencies (web app pub get)',
+        name: 'Resolve dependencies (flutter pub get)',
         status: 'success',
         durationMs: 14500,
         logs: [
-          'Running \'web app pub get\' in /workspace/repo...',
+          'Running \'flutter pub get\' in /workspace/repo...',
           'Resolving dependencies...',
           'Got dependencies! (48 packages analyzed in 3.4s)',
         ],
       },
       {
         id: 's4',
-        name: 'Automated test suite (web app test --coverage)',
+        name: 'Automated test suite (flutter test --coverage)',
         status: 'success',
         durationMs: 28400,
         logs: [
@@ -179,9 +179,9 @@ export const INITIAL_BUILDS: BuildRecord[] = [
         logs: [
           'Running Gradle task \'assembleRelease\'...',
           'Font asset "MaterialIcons-Regular.otf" was tree-shaken (optimized 1.2MB -> 34KB)',
-          'Compiling web app_assets to DEX...',
+          'Compiling flutter_assets to DEX...',
           'R8 obfuscation: symbol obfuscation active (mapping output saved)',
-          'Built build/app/outputs/web app-apk/app-release.apk (31.4MB)',
+          'Built build/app/outputs/flutter-apk/app-release.apk (31.4MB)',
         ],
       },
       {
@@ -237,7 +237,7 @@ export const INITIAL_BUILDS: BuildRecord[] = [
     projectName: 'PulseTrack Wearable Companion',
     branch: 'dev',
     commitHash: '2c918a3',
-    commitMessage: 'fix: update web app_blue_plus to 1.34.0',
+    commitMessage: 'fix: update flutter_blue_plus to 1.34.0',
     author: 'ilemobayo@finflow.io',
     status: 'failed',
     startedAt: '2026-10-02T09:15:02Z',
@@ -245,7 +245,7 @@ export const INITIAL_BUILDS: BuildRecord[] = [
     durationSeconds: 202,
     target: 'apk',
     mode: 'debug',
-    web appVersion: '3.29.0',
+    flutterVersion: '3.29.0',
     runnerType: 'shared-standard',
     steps: [
       {
@@ -264,7 +264,7 @@ export const INITIAL_BUILDS: BuildRecord[] = [
       },
       {
         id: 's3',
-        name: 'Resolve dependencies (web app pub get)',
+        name: 'Resolve dependencies (flutter pub get)',
         status: 'success',
         durationMs: 12100,
         logs: ['Got 32 dependencies'],
@@ -278,15 +278,15 @@ export const INITIAL_BUILDS: BuildRecord[] = [
           'Running Gradle task \'assembleDebug\'...',
           'FAILURE: Build failed with an exception.',
           '* What went wrong:',
-          'Execution failed for task \':web app_blue_plus:compileDebugKotlin\'.',
+          'Execution failed for task \':flutter_blue_plus:compileDebugKotlin\'.',
           '> Compilation error. See log for more details.',
-          'e: /workspace/repo/.pub-cache/hosted/pub.dev/web app_blue_plus/android/src/main/kotlin/BluetoothDevice.kt: (48, 19):',
+          'e: /workspace/repo/.pub-cache/hosted/pub.dev/flutter_blue_plus/android/src/main/kotlin/BluetoothDevice.kt: (48, 19):',
           'Cannot find a parameter with this name: requiresBluetoothScanPermission',
           '* Try:',
           '> In your android/app/build.gradle, ensure compileSdkVersion is at least 34 or higher.',
           '> Ensure Kotlin Gradle Plugin version is compatible with kotlin 1.9.20+.',
         ],
-        error: 'Execution failed for task \':web app_blue_plus:compileDebugKotlin\'. Minimum compileSdkVersion is 34.',
+        error: 'Execution failed for task \':flutter_blue_plus:compileDebugKotlin\'. Minimum compileSdkVersion is 34.',
       },
     ],
     artifacts: [],
@@ -297,7 +297,7 @@ export const INITIAL_BUILDS: BuildRecord[] = [
       severity: 'critical',
       matchedPattern: 'compileDebugKotlin.*requiresBluetoothScanPermission',
       description: 'The updated Bluetooth plugin requires Android SDK 34 (Android 14) or higher for bluetooth scanning runtime permissions. Your android/app/build.gradle is currently configured for compileSdkVersion 33.',
-      suggestedFix: 'In android/app/build.gradle, change compileSdkVersion web app.compileSdkVersion to compileSdkVersion 35 (or set web app.compileSdkVersion in local.properties).',
+      suggestedFix: 'In android/app/build.gradle, change compileSdkVersion flutter.compileSdkVersion to compileSdkVersion 35 (or set flutter.compileSdkVersion in local.properties).',
       autoFixAvailable: true,
       autoFixAction: 'Update compileSdkVersion to 35 in project build config',
     },
@@ -426,7 +426,7 @@ export const INITIAL_WEBHOOKS: GitHubWebhook[] = [
     id: 'wh-3',
     projectId: 'proj-3',
     projectName: 'PulseTrack Wearable Companion',
-    repoUrl: 'https://github.com/pulsetrack/companion-web app',
+    repoUrl: 'https://github.com/pulsetrack/companion-flutter',
     webhookUrl: 'https://api.wybuild.app/v1/webhooks/github/proj-3?sig=wh_8812f0a',
     secret: 'whsec_7b39a4f2c918a38a12f9b3c40d1e5f92a0ce182b',
     branches: ['dev', 'feature/**'],
@@ -475,7 +475,7 @@ export const INITIAL_DELIVERIES: WebhookDelivery[] = [
     event: 'push',
     branch: 'dev',
     commitHash: '2c918a3',
-    commitMessage: 'fix: update web app_blue_plus to 1.34.0',
+    commitMessage: 'fix: update flutter_blue_plus to 1.34.0',
     author: 'sarah-chen',
     timestamp: '2026-10-02T09:12:00Z',
     httpStatus: 200,
