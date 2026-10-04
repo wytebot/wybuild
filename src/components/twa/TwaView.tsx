@@ -33,7 +33,7 @@ function featureState(cfg: TwaConfig, id: string) {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export const TwaView: React.FC = () => {
-  const { projects, builds, repos, addProject, updateProject, setCurrentTab, subscription, selectedRepo, selectRepo, inspections, discoverRepo, notifyBuildStarted, openFlutterwaveCheckout, defaultKeystore } = useApp();
+  const { projects, builds, repos, addProject, updateProject, setCurrentTab, subscription, selectedRepo, selectRepo, inspections, discoverRepo, notifyBuildStarted, expectNewBuild, cancelExpectNewBuild, openFlutterwaveCheckout, defaultKeystore } = useApp();
   const saved = projects.filter(p => p.kind === 'twa' && p.twa);
   const [cfg, setCfg] = useState<TwaConfig>(EMPTY);
   const repo = selectedRepo;
@@ -157,6 +157,7 @@ export const TwaView: React.FC = () => {
       else { const res = addProject(project); if (!res.success || !res.id) throw new Error(res.error || 'Could not save the project.'); id = res.id; setEditingId(id); }
       setStage('Starting the build…');
       const transient = ['NO_WORKFLOW', 'MISSING_HELPER_FILES', 'WORKFLOW_NOT_DISPATCHABLE', 'GITHUB_NOT_FOUND', 'GITHUB_VALIDATION', 'GITHUB_ERROR'];
+      expectNewBuild(r);
       for (let attempt = 0; ; attempt++) {
         try { await api.twaBuild(r, branch, project.twa); break; }
         catch (e) {
@@ -169,6 +170,7 @@ export const TwaView: React.FC = () => {
       notifyBuildStarted();
       setCurrentTab('builds');
     } catch (e: any) {
+      cancelExpectNewBuild();
       if (e instanceof ApiError && e.code === 'LIMIT') openFlutterwaveCheckout('monthly');
       setError(e?.message || 'Build could not be started.');
     } finally { setBusy(false); setStage(''); }

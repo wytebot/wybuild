@@ -54,6 +54,10 @@ interface AppContextType {
   openRepo: (repo: string) => Promise<{ ok: boolean; error?: string }>;
   defaultKeystore: boolean;
   notifyBuildStarted: () => void;
+  /** true between pressing Build/Re-run and the new GitHub run showing up: the UI shows a clean "waiting" state instead of the old logs */
+  awaitingNewBuild: boolean;
+  expectNewBuild: (repo: string) => void;
+  cancelExpectNewBuild: () => void;
   addProject: (newProj: Omit<Project, 'id' | 'createdAt' | 'updatedAt' | 'buildCount'>) => { success: boolean; error?: string; id?: string };
   updateProject: (id: string, updates: Partial<Project>) => void;
   deleteProject: (id: string) => void;
@@ -179,6 +183,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   projectsRef.current = projects;
   const inspectionsRef = useRef(inspections);
   inspectionsRef.current = inspections;
+  const [awaitingNewBuild, setAwaitingNewBuild] = useState(false);
+  const awaitingRef = useRef(false);
+  const awaitRepoRef = useRef('');
+  const knownIdsRef = useRef<Set<string>>(new Set());
+  const awaitTimerRef = useRef(0);
+
+  const cancelExpectNewBuild = useCallback(() => {
+    awaitingRef.current = false;
+    window.clearTimeout(awaitTimerRef.current);
+    setAwaitingNewBuild(false);
+  }, []);
+
+  // Called right before a build is dispatched: remember what exists now, clear the selection and old logs
+  const expectNewBuild = useCallback((repo: string) => {
+    knownIdsRef.current = new Set(buildsRef.current.filter((b) => b.repo === repo).map((b) => b.id));
+    awaitRepoRef.current = repo;
+    awaitingRef.current = true;
+    setAwaitingNewBuild(true);
+    setActiveBuildId(null);
+    window.clearTimeout(awaitTimerRef.current);
+    // GitHub normally lists the run within seconds; never wait forever
+    awaitTimerRef.current = window.setTimeout(cancelExpectNewBuild, 90000);
+  }, [cancelExpectNewBuild]);
 
   const repoList = useMemo(
     () => Array.from(new Set(projects.map((p) => repoFromUrl(p.repoUrl)).filter((r): r is string => !!r))),
@@ -234,6 +261,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     try {
       const list = await api.runs(repoList);
+      if (awaitingRef.current) {
+        const fresh = list.find((b) => b.repo === awaitRepoRef.current && !knownIdsRef.current.has(b.id));
+        if (fresh) {
+          awaitingRef.current = false;
+          window.clearTimeout(awaitTimerRef.current);
+          setAwaitingNewBuild(false);
+          setActiveBuildId(fresh.id);
+        }
+      }
       setBuilds((prev) => {
         const detailed = new Map<string, BuildRecord>(prev.filter((b) => b.steps.length > 0).map((b): [string, BuildRecord] => [b.id, b]));
         return list.map((b) => {
@@ -307,7 +343,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const tick = async () => {
       if (!document.hidden) await refreshRuns();
       if (stop) return;
-      const active = buildsRef.current.some((b) => b.status === 'running' || b.status === 'queued');
+      const active = awaitingRef.current || buildsRef.current.some((b) => b.status === 'running' || b.status === 'queued');
       timer = window.setTimeout(tick, active ? 3500 : 30000);
     };
     tick();
@@ -322,8 +358,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [authState, refreshKeystores]);
 
   useEffect(() => {
-    if (!activeBuildId && builds.length) setActiveBuildId(builds[0].id);
-  }, [builds, activeBuildId]);
+    if (!activeBuildId && builds.length && !awaitingNewBuild) setActiveBuildId(builds[0].id);
+  }, [builds, activeBuildId, awaitingNewBuild]);
 
   // Steps, logs and artifacts for the selected build
   useEffect(() => {
@@ -443,6 +479,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       } catch { /* dispatch below returns the useful error if GitHub inspection is unavailable */ }
     }
+    expectNewBuild(repo);
     const dispatch = () => (kind === 'twa' ? api.twaBuild(repo, ref, liveProject.twa!) : api.build(repo, ref, liveProject.config));
 
     try {
@@ -487,6 +524,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       window.setTimeout(refreshRuns, 4500);
       return { success: true };
     } catch (e) {
+      cancelExpectNewBuild();
       const msg = errMsg(e);
       showToast(msg);
       if (e instanceof ApiError && e.code === 'LIMIT') openFlutterwaveCheckout('monthly');
@@ -797,6 +835,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         openRepo,
         defaultKeystore,
         notifyBuildStarted,
+        awaitingNewBuild,
+        expectNewBuild,
+        cancelExpectNewBuild,
         addProject,
         updateProject,
         deleteProject,

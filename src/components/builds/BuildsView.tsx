@@ -20,11 +20,12 @@ import {
 } from 'lucide-react';
 
 export const BuildsView: React.FC = () => {
-  const { builds, activeBuildId, setActiveBuildId, cancelBuild, applyAutoFix, triggerBuild } = useApp();
+  const { builds, activeBuildId, setActiveBuildId, cancelBuild, applyAutoFix, triggerBuild, awaitingNewBuild } = useApp();
   const [filterProject, setFilterProject] = useState<string>('all');
   const [showQrModal, setShowQrModal] = useState<boolean>(false);
 
-  const selectedBuild = builds.find((b) => b.id === activeBuildId) || builds[0];
+  // while a new run is being created the old build (and its logs) must not stay on screen
+  const selectedBuild = awaitingNewBuild ? undefined : builds.find((b) => b.id === activeBuildId) || builds[0];
 
   const allLogs = selectedBuild
     ? selectedBuild.steps.flatMap((s) => s.logs)
@@ -45,7 +46,7 @@ export const BuildsView: React.FC = () => {
 
         <div className="divide-y divide-slate-800/80">
           {builds.map((build) => {
-            const isSelected = build.id === selectedBuild?.id;
+            const isSelected = !awaitingNewBuild && build.id === selectedBuild?.id;
             return (
               <button
                 key={build.id}
@@ -291,6 +292,12 @@ export const BuildsView: React.FC = () => {
               buildId={selectedBuild.id}
             />
           </>
+        ) : awaitingNewBuild ? (
+          <div className="text-center py-20 text-slate-400 space-y-3">
+            <div className="mx-auto w-8 h-8 rounded-full border-2 border-emerald-400/30 border-t-emerald-400 animate-spin" />
+            <div className="text-sm font-semibold text-white">Starting a new build…</div>
+            <p className="text-xs text-slate-500">Previous logs cleared. The new run's logs appear here as soon as GitHub starts it.</p>
+          </div>
         ) : (
           <div className="text-center py-20 text-slate-500">No builds selected.</div>
         )}
