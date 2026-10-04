@@ -67,7 +67,7 @@ export const ErrorTelemetryView: React.FC = () => {
             All Errors
           </button>
           <button
-            onClick={() => setSelectedCategory('gradle')}
+            onClick={() => setSelectedCategory('build')}
             className={`px-3 py-1.5 text-xs rounded transition cursor-pointer ${
               selectedCategory === 'gradle'
                 ? 'bg-rose-950 text-rose-300 font-medium'
