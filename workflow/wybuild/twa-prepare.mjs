@@ -41,6 +41,30 @@ const orientation = ['default','portrait','landscape'].includes(raw.orientation 
 const themeColor = /^#[0-9a-f]{6}$/i.test(raw.themeColor || web.theme_color || '') ? (raw.themeColor || web.theme_color) : '#FFFFFF';
 const backgroundColor = /^#[0-9a-f]{6}$/i.test(raw.backgroundColor || web.background_color || '') ? (raw.backgroundColor || web.background_color) : '#FFFFFF';
 const shortcuts = Array.isArray(web.shortcuts) ? web.shortcuts.slice(0,4).filter(s => s?.name && s?.url).map(s => ({ name: s.name, shortName: (s.short_name || s.name).slice(0,12), url: new URL(s.url, manifestUrl).pathname + new URL(s.url, manifestUrl).search, chosenIconUrl: s.icons?.[0]?.src ? abs(s.icons[0].src) : undefined })) : [];
+// Link handling rules (already validated by the WyBuild API; re-parsed here so a hand-edited config cannot break the build)
+const linkRules = [];
+for (const r of Array.isArray(raw.linkRules) ? raw.linkRules.slice(0, 30) : []) {
+  const mode = ['internal', 'external', 'other'].includes(r?.mode) ? r.mode : '';
+  const orig = String(r?.pattern || '').trim();
+  const t = orig.toLowerCase();
+  if (!mode || !t) continue;
+  const bare = t.replace(/:\/\/$/, ':').replace(/:$/, '');
+  if (!/[/.]/.test(bare) && /^[a-z][a-z0-9+.-]*$/.test(bare)) {
+    if (mode === 'other' && !['http', 'https', 'javascript', 'data', 'file', 'blob', 'about', 'vbscript', 'content', 'intent'].includes(bare)) linkRules.push({ kind: 'scheme', scheme: bare, mode });
+    continue;
+  }
+  const rest = orig.replace(/^https?:\/\//i, '');
+  const slash = rest.indexOf('/');
+  const h = (slash === -1 ? rest : rest.slice(0, slash)).toLowerCase();
+  let path = slash === -1 ? '' : rest.slice(slash).replace(/[?#].*$/, '').replace(/\*+$/, '');
+  if (path === '/') path = '';
+  if (!/^(\*\.)?([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/.test(h) || (path && !/^\/[A-Za-z0-9\-._~%/]*$/.test(path))) continue;
+  linkRules.push({ kind: 'host', host: h.replace(/^\*\./, ''), wildcard: h.startsWith('*.'), path, mode });
+}
+// A custom domain set to "internal" must be a trusted origin too, or Chrome shows the address bar over it.
+// (Wildcards cannot be trusted origins: list each subdomain you want fullscreen.)
+const trusted = new Set((Array.isArray(raw.additionalTrustedOrigins) ? raw.additionalTrustedOrigins : []).map(String));
+for (const r of linkRules) if (r.kind === 'host' && r.mode === 'internal' && !r.wildcard && r.host.replace(/^www\./, '') !== host) trusted.add(`https://${r.host}`);
 const features = {};
 if (raw.locationDelegation) features.locationDelegation = { enabled: true };
 if (raw.playBilling) features.playBilling = { enabled: true };
@@ -79,7 +103,7 @@ const json = {
   features,
   minSdkVersion: Math.max(21, Number(raw.minSdkVersion) || 21),
   orientation,
-  additionalTrustedOrigins: Array.isArray(raw.additionalTrustedOrigins) ? raw.additionalTrustedOrigins : [],
+  additionalTrustedOrigins: [...trusted],
   fingerprints: raw.expectedFingerprint ? [{ value: String(raw.expectedFingerprint).replace(/:/g,'').toUpperCase() }] : [],
   fileHandlers: web.file_handlers || [],
   protocolHandlers: web.protocol_handlers || [],
@@ -89,6 +113,7 @@ const json = {
 };
 // WyBuild-only options (not Bubblewrap manifest fields): applied by the "Apply manual Android features" step
 const extras = {
+  linkRules,
   predictiveBack: raw.predictiveBack === true,
   playSigningFingerprint: /^([0-9A-Fa-f]{2}:?){32}$/.test(String(raw.playSigningFingerprint || '')) ? String(raw.playSigningFingerprint).replace(/:/g, '').toUpperCase().match(/.{2}/g).join(':') : '',
 };

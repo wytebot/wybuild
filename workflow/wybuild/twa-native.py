@@ -100,6 +100,55 @@ if extras.get("predictiveBack"):
         xml = re.sub(r"<application\b", '<application android:enableOnBackInvokedCallback="true"', xml, count=1)
         applied.append("predictive-back")
 
+# ---------------------------------------------------------------- 4b. link handling
+# Rules come from the "Link handling" panel: internal (stay in the app), external (system browser), other (hand to Android).
+link_rules = [r for r in (extras.get("linkRules") or []) if isinstance(r, dict)]
+own_host = (cfg.get("host") or "").split(":")[0].lower()
+deep_hosts = []
+for r in link_rules:
+    if r.get("kind") != "host" or r.get("mode") != "internal":
+        continue
+    host = ("*." if r.get("wildcard") else "") + r["host"]
+    if not re.fullmatch(r"(\*\.)?[a-z0-9.-]+", host) or not re.fullmatch(r"(/[A-Za-z0-9._~%/-]*)?", r.get("path", "")):
+        raise SystemExit("bad link rule: " + host + r.get("path", ""))
+    if host.replace("www.", "", 1) == own_host.replace("www.", "", 1) and not r.get("path"):
+        continue  # the app's own site already opens in the app
+    deep_hosts.append((host, r.get("path", "")))
+    if r.get("wildcard"):
+        deep_hosts.append((r["host"], r.get("path", "")))  # Android's *.example.com does not match example.com itself
+deep_hosts = list(dict.fromkeys(deep_hosts))
+if deep_hosts:
+    filters = ""
+    for host, path in deep_hosts:
+        key = 'android:host="%s"' % host
+        if key in xml and ('android:pathPrefix="%s"' % path in xml if path else True):
+            continue
+        filters += (
+            '            <intent-filter android:autoVerify="true">\n'
+            '                <action android:name="android.intent.action.VIEW" />\n'
+            '                <category android:name="android.intent.category.DEFAULT" />\n'
+            '                <category android:name="android.intent.category.BROWSABLE" />\n'
+            '                <data android:scheme="https" android:host="%s"%s />\n'
+            '            </intent-filter>\n' % (host, (' android:pathPrefix="%s"' % path) if path else "")
+        )
+    if filters:
+        start = re.search(r'<activity\b(?:(?!/>)[^>])*LauncherActivity(?:(?!/>)[^>])*>', xml)
+        if not start:
+            raise SystemExit("Could not add link handling: LauncherActivity not found in AndroidManifest.xml")
+        end = xml.find("</activity>", start.end())
+        if end == -1:
+            raise SystemExit("Could not add link handling: LauncherActivity is not closed in AndroidManifest.xml")
+        line_start = xml.rfind("\n", 0, end) + 1  # insert on its own lines, keeping the closing tag indented
+        xml = xml[:line_start] + filters + xml[line_start:]
+        applied.append("links to %s open in the app (%d domain%s)" % (", ".join(h + p for h, p in deep_hosts), len(deep_hosts), "" if len(deep_hosts) == 1 else "s"))
+    if any(h.startswith("*.") for h, _ in deep_hosts):
+        notes.append("Wildcard domains open the app only after Android verifies the root domain: publish assetlinks.json on it too. Wildcards cannot be trusted origins, so list each subdomain you want without the address bar.")
+n_ext = sum(1 for r in link_rules if r.get("mode") == "external")
+n_other = sum(1 for r in link_rules if r.get("mode") == "other")
+if n_ext or n_other:
+    applied.append("link rules for the website: %d external, %d handed to Android (wybuild-links.js)" % (n_ext, n_other))
+    notes.append("External / Other link rules are applied by wybuild-links.js on your website: add it to your site (see NATIVE-FEATURES.md in the build artifact). A Trusted Web Activity cannot intercept those links natively.")
+
 open(manifest_path, "w", encoding="utf8").write(xml)
 assert "<application" in xml
 
@@ -270,6 +319,114 @@ If the app was installed from Google Play, also add the Play app-signing SHA-256
 Camera, microphone and location are declared with optional hardware so Google Play does not hide your app
 from phones without them. The website still asks the user at the moment it uses them.
 """ % {"pkg": pkg, "host": host, "display": cfg.get("display", "standalone")})
+
+# ---------------------------------------------------------------- 7. link handling kit (ships in the build artifact)
+def js_rule(r):
+    if r.get("kind") == "scheme":
+        return {"k": "s", "s": r["scheme"], "m": r["mode"]}
+    return {"k": "h", "h": r["host"], "w": bool(r.get("wildcard")), "p": r.get("path", ""), "m": r["mode"]}
+
+own = [own_host] if own_host else []
+for o in cfg.get("additionalTrustedOrigins", []):
+    h = re.sub(r"^https?://", "", str(o)).strip("/").split(":")[0].lower()
+    if h and h not in own:
+        own.append(h)
+open(kit + "/wybuild-links.json", "w", encoding="utf8").write(json.dumps({"ownHosts": own, "rules": link_rules}, indent=2))
+links_js = r"""/*! WyBuild link handling. Add to your website: <script src="/wybuild-links.js" defer></script>
+ * Decides what happens when a link is tapped inside the Android app (and the installed PWA):
+ *   internal  stays in the app            external  opens in the phone's browser
+ *   other     handed to Android (dialer, mail, WhatsApp, Maps ...)
+ * Links on your own site always stay internal. The first matching rule wins. "*.domain" covers the domain and its
+ * subdomains. Plain browsers are left alone.
+ * Generated from the rules in WyBuild: rebuild to change them (wybuild-links.json lists them).
+ */
+(function () {
+  var OWN = __OWN__;
+  var RULES = __RULES__;
+  var KEY = 'wybuild_in_app';
+  var nativeOpen = window.open;
+  function norm(h) { return String(h || '').toLowerCase().replace(/^www\./, ''); }
+  function inApp() {
+    try {
+      if (document.referrer && document.referrer.indexOf('android-app://') === 0) localStorage.setItem(KEY, '1');
+      if (localStorage.getItem(KEY) === '1') return true;
+    } catch (e) {}
+    return !!(window.matchMedia && (matchMedia('(display-mode: standalone)').matches || matchMedia('(display-mode: fullscreen)').matches || matchMedia('(display-mode: minimal-ui)').matches));
+  }
+  function parse(url) { try { return new URL(String(url), location.href); } catch (e) { return null; } }
+  function resolve(url) {
+    var u = parse(url); if (!u) return null;
+    var scheme = u.protocol.replace(':', '').toLowerCase();
+    var web = scheme === 'http' || scheme === 'https';
+    var h = norm(u.hostname);
+    for (var i = 0; i < RULES.length; i++) {
+      var r = RULES[i];
+      if (r.k === 's') { if (!web && r.s === scheme) return r.m; continue; }
+      if (!web) continue;
+      var rh = norm(r.h);
+      var hostOk = h === rh || (r.w && h.slice(-(rh.length + 1)) === '.' + rh);
+      if (hostOk && (!r.p || u.pathname.indexOf(r.p) === 0)) return r.m;
+    }
+    if (web && OWN.indexOf(h) !== -1) return 'internal';
+    return null;
+  }
+  function viaAndroid(u) {
+    return 'intent://' + u.host + u.pathname + u.search + u.hash + '#Intent;scheme=' + u.protocol.replace(':', '') +
+      ';action=android.intent.action.VIEW;category=android.intent.category.BROWSABLE;end';
+  }
+  function go(url, mode) {
+    var u = parse(url); if (!u) return;
+    var web = u.protocol === 'http:' || u.protocol === 'https:';
+    if (mode === 'internal') { location.assign(u.href); return; }
+    if (!inApp()) { if (web) nativeOpen.call(window, u.href, '_blank', 'noopener'); else location.href = u.href; return; }
+    location.href = web ? viaAndroid(u) : u.href;
+  }
+  document.addEventListener('click', function (e) {
+    if (e.defaultPrevented || e.button > 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+    if (!a || a.hasAttribute('download')) return;
+    var mode = resolve(a.href); if (!mode) return;
+    var t = a.getAttribute('target');
+    if (mode === 'internal') {
+      if (t && t !== '_self' && inApp()) { e.preventDefault(); location.assign(a.href); }  // no stray blank tab for your own pages
+      return;
+    }
+    if (mode === 'other' && !inApp() && !(t && t !== '_self')) return;  // in a browser tab tel:, mailto: etc. already behave normally
+    e.preventDefault();
+    go(a.href, mode);
+  }, true);
+  window.open = function (url) {
+    if (url) {
+      var mode = resolve(url);
+      if (mode === 'external' || mode === 'other') { go(url, mode); return null; }
+      if (mode === 'internal' && inApp()) { location.assign(String(url)); return null; }
+    }
+    return nativeOpen.apply(window, arguments);
+  };
+  window.WyBuildLinks = { rules: RULES, ownHosts: OWN, isApp: inApp, resolve: resolve, open: function (url) { go(url, resolve(url) || 'internal'); } };
+})();
+"""
+open(kit + "/wybuild-links.js", "w", encoding="utf8").write(
+    links_js.replace("__OWN__", json.dumps(own)).replace("__RULES__", json.dumps([js_rule(r) for r in link_rules]))
+)
+doc = "\n## Link handling\n"
+if link_rules:
+    doc += "Rules in this build (first match wins; your own site always stays internal; `*.domain` covers the domain and its subdomains):\n\n"
+    for r in link_rules:
+        who = r["scheme"] + ":" if r.get("kind") == "scheme" else ("*." if r.get("wildcard") else "") + r["host"] + r.get("path", "")
+        doc += "- `%s` -> **%s**\n" % (who, {"internal": "internal (stays in the app)", "external": "external (phone browser)", "other": "other (handed to Android)"}[r["mode"]])
+    doc += "\n"
+else:
+    doc += "No link rules were set, so links behave like a normal Trusted Web Activity: your site stays in the app, other sites open in an in-app browser tab.\n\n"
+doc += (
+    "- **Internal** domains are added as trusted origins and as verified app links, so tapping a link to them anywhere on the phone opens this app.\n"
+    "  Publish `assetlinks.json` (in this artifact) at `/.well-known/assetlinks.json` on **every** internal domain, with no redirect.\n"
+    "- **External** and **Other** rules are applied by `wybuild-links.js`: put it at your site root and add\n"
+    "  `<script src=\"/wybuild-links.js\" defer></script>` to every page. A Trusted Web Activity cannot intercept those taps natively.\n"
+    "  Without the script, those links open in Chrome's in-app tab (external sites) or are handled by Chrome (tel:, mailto:).\n"
+    "- `WyBuildLinks.open(url)` applies the same rules from your own JavaScript.\n"
+)
+open(kit + "/NATIVE-FEATURES.md", "a", encoding="utf8").write(doc)
 
 # ---------------------------------------------------------------- summary
 print("Android features applied:", ", ".join(applied) or "none")

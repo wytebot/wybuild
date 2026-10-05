@@ -27,6 +27,10 @@ export type BuildKind = 'flutter' | 'twa';
 export type TwaOutput = 'apk' | 'aab' | 'both';
 
 /** Everything the TWA workflow needs. Blank fields are auto-detected from the site's Web App Manifest. */
+/** How a link is treated inside the Android app. internal = stays in the app, external = opens in the phone's browser, other = handed to Android (dialer, mail, WhatsApp, Maps...) */
+export type LinkMode = 'internal' | 'external' | 'other';
+export interface LinkRule { pattern: string; mode: LinkMode }
+
 export interface TwaConfig {
   webUrl: string;
   packageId: string;
@@ -50,6 +54,8 @@ export interface TwaConfig {
   locationDelegation: boolean;
   playBilling: boolean;
   additionalTrustedOrigins: string[];
+  /** link handling: first matching rule wins; links on the app's own site always stay internal */
+  linkRules?: LinkRule[];
   androidPermissions: string[];
   shortcuts: { name: string; shortName: string; url: string }[];
   minSdkVersion: number;

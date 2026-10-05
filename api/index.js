@@ -9,7 +9,7 @@ import blake from 'blakejs';
 
 const TWA_WORKFLOW_FILE = 'wybuild-twa.yml';
 const TWA_WORKFLOW_PATH = `.github/workflows/${TWA_WORKFLOW_FILE}`;
-const TWA_WORKFLOW_VERSION = 12;
+const TWA_WORKFLOW_VERSION = 13;
 // every file committed to a repo for each workflow kind: [path in repo, path in ./workflow]
 const WORKFLOW_KINDS = {
   twa: {
@@ -1037,6 +1037,44 @@ function cleanHttps(v, what, required = false) {
   return u.href;
 }
 
+// Link handling rules: internal (stay in the app), external (system browser), other (handed to Android).
+// Mirrors src/services/links.ts. Returns [{ pattern, mode }] with patterns normalised.
+const LINK_BLOCKED_SCHEMES = new Set(['http', 'https', 'javascript', 'data', 'file', 'blob', 'about', 'vbscript', 'content', 'intent']);
+const LINK_HOST_RE = /^(\*\.)?([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/;
+const LINK_PATH_RE = /^\/[A-Za-z0-9\-._~%/]*$/;
+function cleanLinkRules(list) {
+  const rules = Array.isArray(list) ? list.slice(0, 30) : [];
+  const out = [];
+  const seen = new Set();
+  for (const r of rules) {
+    const mode = str(r?.mode, 20);
+    if (!['internal', 'external', 'other'].includes(mode)) throw new HttpError(400, 'Link rule type must be internal, external or other');
+    const orig = str(r?.pattern, 200);
+    const t = orig.toLowerCase();
+    if (!t) continue;
+    const bare = t.replace(/:\/\/$/, ':').replace(/:$/, '');
+    let pattern;
+    if (!/[/.]/.test(bare) && /^[a-z][a-z0-9+.-]*$/.test(bare)) {
+      if (LINK_BLOCKED_SCHEMES.has(bare)) throw new HttpError(400, `Link rule "${bare}:" is not allowed; enter a domain instead`);
+      if (mode !== 'other') throw new HttpError(400, `"${bare}:" can only be set to "other" (hand to Android)`);
+      pattern = `${bare}:`;
+    } else {
+      const rest = orig.replace(/^https?:\/\//i, '');
+      const slash = rest.indexOf('/');
+      const host = (slash === -1 ? rest : rest.slice(0, slash)).toLowerCase();
+      let path = slash === -1 ? '' : rest.slice(slash).replace(/[?#].*$/, '').replace(/\*+$/, ''); // paths are case-sensitive
+      if (path === '/') path = '';
+      if (!LINK_HOST_RE.test(host)) throw new HttpError(400, `Link rule "${str(r?.pattern, 60)}" is not a valid domain (use shop.example.com or *.example.com)`);
+      if (path && !LINK_PATH_RE.test(path)) throw new HttpError(400, `Link rule "${str(r?.pattern, 60)}" has an invalid path`);
+      pattern = host + path;
+    }
+    if (seen.has(pattern)) continue;
+    seen.add(pattern);
+    out.push({ pattern, mode });
+  }
+  return out;
+}
+
 // Validates the TWA form and returns the JSON handed to the workflow (one input, because GitHub caps dispatch inputs at 25)
 function cleanTwaConfig(c = {}) {
   const out = { webUrl: cleanHttps(c.webUrl, 'Web app URL', true) };
@@ -1087,6 +1125,7 @@ function cleanTwaConfig(c = {}) {
     if (!Number.isInteger(out.minSdkVersion) || out.minSdkVersion < 21 || out.minSdkVersion > 35) throw new HttpError(400, 'minSdkVersion must be between 21 and 35');
   }
   out.additionalTrustedOrigins = (Array.isArray(c.additionalTrustedOrigins) ? c.additionalTrustedOrigins : []).slice(0, 20).map((o) => str(o, 200)).filter(Boolean);
+  out.linkRules = cleanLinkRules(c.linkRules);
   out.androidPermissions = (Array.isArray(c.androidPermissions) ? c.androidPermissions : []).slice(0, 30).map((p) => str(p, 120)).filter(Boolean);
   if (out.androidPermissions.some((p) => !PERM_RE.test(p))) throw new HttpError(400, 'Invalid Android permission name');
   out.shortcuts = (Array.isArray(c.shortcuts) ? c.shortcuts : []).slice(0, 4).map((s) => ({ name: str(s?.name, 40), shortName: str(s?.shortName || s?.name, 12), url: str(s?.url, 300) })).filter((s) => s.name && s.url.startsWith('/'));

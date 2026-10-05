@@ -2,14 +2,15 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { api, ApiError, repoFromUrl, RepoInspection, TwaInspection } from '../../services/api';
 import { KeystoreForm } from '../KeystoreForm';
-import { Project, TwaConfig } from '../../types';
-import { AlertTriangle, Check, CheckCircle2, Github, Globe2, KeyRound, Loader2, Package, Play, RefreshCw, Search, Smartphone, Wrench, XCircle } from 'lucide-react';
+import { LinkMode, LinkRule, Project, TwaConfig } from '../../types';
+import { checkLinkRule, LINK_MODES, LINK_PRESETS } from '../../services/links';
+import { AlertTriangle, Check, CheckCircle2, Github, Globe2, KeyRound, Link2, Loader2, Package, Play, RefreshCw, Search, Smartphone, Wrench, XCircle } from 'lucide-react';
 
 const EMPTY: TwaConfig = {
   webUrl: '', packageId: '', name: '', launcherName: '', versionName: '1.0.0', versionCode: undefined,
   themeColor: '#0f172a', backgroundColor: '#ffffff', startUrl: '/', iconUrl: '', maskableIconUrl: '', monochromeIconUrl: '',
   display: 'standalone', orientation: 'default', fallbackType: 'customtabs', enableNotifications: false,
-  enableSiteSettingsShortcut: true, locationDelegation: false, playBilling: false, additionalTrustedOrigins: [],
+  enableSiteSettingsShortcut: true, locationDelegation: false, playBilling: false, additionalTrustedOrigins: [], linkRules: [],
   androidPermissions: [], shortcuts: [], minSdkVersion: 21, expectedFingerprint: '', predictiveBack: false, playSigningFingerprint: '', output: 'both', storeReady: true, useKeystore: true,
 };
 
@@ -60,7 +61,10 @@ export const TwaView: React.FC = () => {
   const signingReady = signing === 'repo' || signing === 'default' || (signing === undefined && defaultKeystore);
   const latestBuild = useMemo(() => [...builds].filter(b => b.kind === 'twa' && b.repo === repo).sort((a,b) => Date.parse(b.startedAt) - Date.parse(a.startedAt))[0], [builds, repo]);
   const savedProject = editingId ? projects.find(p => p.id === editingId) : undefined;
-  const settingsChanged = !!savedProject?.twa && JSON.stringify({ ...savedProject.twa, fallbackType: 'customtabs' }) !== JSON.stringify({ ...cfg, fallbackType: 'customtabs' });
+  // key-order independent, and projects saved before a setting existed (e.g. linkRules) compare equal to its default
+  const stable = (v: unknown): string => JSON.stringify(v, (_k, val) => val && typeof val === 'object' && !Array.isArray(val) ? Object.fromEntries(Object.entries(val).sort(([a], [b]) => a.localeCompare(b))) : val);
+  const withDefaults = (t: TwaConfig) => ({ ...EMPTY, ...t, fallbackType: 'customtabs' });
+  const settingsChanged = !!savedProject?.twa && stable(withDefaults(savedProject.twa)) !== stable(withDefaults(cfg));
   const sourceChanged = !!latestBuild?.commitHash && !!repoInspection?.latestCommitSha && !repoInspection.latestCommitSha.startsWith(latestBuild.commitHash);
   const buildCurrent = !!latestBuild && latestBuild.status === 'success' && !settingsChanged && !sourceChanged;
   const workflow = repoInspection?.workflows?.twa ?? { installed: repoInspection?.workflowInstalled ?? false, upToDate: repoInspection?.workflowUpToDate ?? false };
@@ -152,6 +156,15 @@ export const TwaView: React.FC = () => {
     set('androidPermissions', on ? [...cfg.androidPermissions, permission] : cfg.androidPermissions.filter(p => p !== permission));
   };
 
+  const linkRules: LinkRule[] = cfg.linkRules || [];
+  const setRules = (next: LinkRule[]) => set('linkRules', next);
+  const addRule = (pattern = '', mode: LinkMode = 'internal') => {
+    if (pattern && linkRules.some(r => r.pattern.toLowerCase() === pattern)) return;
+    setRules([...linkRules, { pattern, mode }]);
+  };
+  const changeRule = (i: number, patch: Partial<LinkRule>) => setRules(linkRules.map((r, j) => j === i ? { ...r, ...patch } : r));
+  const hasMode = (m: LinkMode) => linkRules.some(r => r.pattern.trim() && r.mode === m);
+
   /** Explicit action: overwrite this repo's signing secrets with the WyBuild (Vercel) default key. */
   const useDefaultKey = async () => {
     const r = repoFromUrl(repo);
@@ -170,6 +183,8 @@ export const TwaView: React.FC = () => {
     if (!r) return setError('Choose the GitHub repository for this Android build.');
     if (!cfg.webUrl) return setError('Enter the address of your live web app first (https://…).');
     if (!cfg.webUrl.startsWith('https://')) return setError('Your web app must use HTTPS.');
+    const badLink = (cfg.linkRules || []).map(x => ({ x, e: checkLinkRule(x) })).find(v => v.e);
+    if (badLink) return setError(`Link handling: "${badLink.x.pattern || 'empty rule'}" - ${badLink.e}`);
     setBusy(true);
     try {
       if (cfg.packageId && !/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/.test(cfg.packageId)) throw new Error('Package ID must look like com.yourbrand.app (lowercase letters, digits, underscores, at least two parts).');
@@ -276,6 +291,27 @@ export const TwaView: React.FC = () => {
       <p className="text-slate-500 mt-1">Tick only what your website needs. WyBuild adds the required Android permissions/configuration.</p>
       <div className="grid sm:grid-cols-2 gap-2 mt-3">{FEATURES.map(f => { const checked = featureState(cfg, f.id); return <button key={f.id} type="button" onClick={() => toggleFeature(f.id)} className={`text-left rounded-xl border p-3 flex gap-3 ${checked ? 'border-emerald-400/30 bg-emerald-400/[.06]' : 'border-white/[.06] bg-black/20'}`}><span className={`w-5 h-5 rounded border flex items-center justify-center shrink-0 ${checked ? 'bg-emerald-400 border-emerald-400 text-black' : 'border-slate-600'}`}>{checked && <Check className="w-3.5 h-3.5"/>}</span><span><b className="text-slate-200 block">{f.label}</b><span className="text-[11px] text-slate-500">{f.hint}</span></span></button>; })}</div>
       {(() => { const hints = (inspection?.featureHints || []).filter(id => !featureState(cfg, id)); return hints.length > 0 && <div className="mt-3 p-3 rounded-xl border border-emerald-400/20 bg-emerald-400/[.04] text-emerald-200 flex flex-wrap items-center gap-2"><span>Your site's code appears to use:</span>{hints.map(id => <button key={id} type="button" onClick={() => toggleFeature(id)} className="px-2.5 py-1 rounded-full border border-emerald-400/30 hover:bg-emerald-400/10">+ {FEATURES.find(f => f.id === id)?.label}</button>)}</div>; })()}
+    </section>
+
+    <section className={card}>
+      <div className="flex items-center justify-between gap-2"><div className="flex items-center gap-2 text-white font-semibold"><Link2 className="w-4 h-4 text-emerald-300"/>Link handling</div><span className="text-[10px] text-slate-500">{linkRules.length ? `${linkRules.length} RULE${linkRules.length === 1 ? '' : 'S'}` : 'DEFAULT'}</span></div>
+      <p className="text-slate-500 mt-1">Choose what happens when someone taps a link in the app. Links on your own site always stay inside the app. Add a domain, a custom domain, or a link type such as <span className="font-mono text-slate-400">tel:</span>. The first matching rule wins.</p>
+      <div className="grid sm:grid-cols-3 gap-2 mt-3">{LINK_MODES.map(m => <div key={m.id} className="rounded-xl border border-white/[.06] bg-black/20 p-3"><b className="text-slate-200 block">{m.label}</b><span className="text-[11px] text-slate-500">{m.hint}</span></div>)}</div>
+      {linkRules.map((rule, i) => { const err = rule.pattern.trim() ? checkLinkRule(rule) : ''; return <div key={i} className={`mt-2 rounded-xl border p-3 ${err ? 'border-rose-500/30' : 'border-white/[.06]'} bg-black/20`}>
+        <div className="flex gap-2">
+          <input className={`${input} font-mono`} value={rule.pattern} onChange={e => changeRule(i, { pattern: e.target.value })} placeholder="shop.example.com  ·  *.example.com/docs  ·  tel:" autoCapitalize="none" autoCorrect="off" spellCheck={false} aria-label="Domain or link type"/>
+          <button type="button" onClick={() => setRules(linkRules.filter((_, j) => j !== i))} className="px-2 text-slate-500 hover:text-rose-400 shrink-0" aria-label="Remove rule"><XCircle className="w-4 h-4"/></button>
+        </div>
+        <div className="grid grid-cols-3 gap-2 mt-2">{LINK_MODES.map(m => { const on = rule.mode === m.id; return <button key={m.id} type="button" onClick={() => changeRule(i, { mode: m.id })} className={`h-10 rounded-lg border font-semibold ${on ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-200' : 'border-white/[.08] text-slate-400'}`}>{m.label}</button>; })}</div>
+        {err && <p className="text-rose-300 mt-2">{err}</p>}
+      </div>; })}
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <button type="button" onClick={() => addRule()} disabled={linkRules.length >= 30} className="h-10 px-4 rounded-lg border border-emerald-400/30 text-emerald-300 disabled:opacity-40">+ Add link</button>
+        {LINK_PRESETS.filter(pr => !linkRules.some(r => r.pattern.toLowerCase() === pr.pattern)).map(pr => <button key={pr.pattern} type="button" onClick={() => addRule(pr.pattern, pr.mode)} className="h-10 px-3 rounded-full border border-white/[.08] text-slate-400 hover:text-slate-200">+ {pr.label}</button>)}
+      </div>
+      {hasMode('internal') && <p className="text-slate-600 mt-3">Internal domains are added as trusted domains and verified app links, so tapping a link to them anywhere on the phone opens this app. Publish the build's assetlinks.json on <b className="text-slate-500">each</b> internal domain (the post-build check lists any that are missing).</p>}
+      {(hasMode('external') || hasMode('other')) && <p className="text-slate-600 mt-2">External and Other rules are applied by <span className="font-mono text-slate-500">wybuild-links.js</span>, which the build produces for you: add it to your website with <span className="font-mono text-slate-500">&lt;script src="/wybuild-links.js" defer&gt;</span>. Android's Trusted Web Activity cannot intercept those taps by itself.</p>}
+      {!linkRules.length && <p className="text-slate-600 mt-3">No rules: your site stays in the app and other sites open in an in-app browser tab.</p>}
     </section>
 
     <section className={card}>
