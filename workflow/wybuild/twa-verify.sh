@@ -20,12 +20,33 @@ case "$ARTIFACT" in
       apksigner verify --verbose "$ARTIFACT" > "$DIST/apksigner.txt" 2>&1 || { echo 'APK signature verification failed.' >> "$DIST/store-readiness.md"; exit 1; }
       echo '- Android APK signature verification: passed' >> "$DIST/store-readiness.md"
     fi
+    if [[ "$SHELL_MODE" != "twa" ]]; then
+      # Prove the APK really contains the standalone shell (a stale workflow would silently build a plain TWA with Chrome's address bar)
+      AAPT="$(command -v aapt || command -v aapt2 || true)"
+      if [[ -n "$AAPT" ]]; then
+        BADGING="$("$AAPT" dump badging "$ARTIFACT" 2>/dev/null || true)"
+        if ! grep -q "launchable-activity: name='[^']*WyBuildActivity'" <<<"$BADGING"; then
+          echo "::error::This APK does not launch WyBuildActivity (the standalone shell), so it would show Chrome's address bar. Reinstall the WyBuild TWA workflow (workflow v15 or newer) and rebuild."
+          echo '- App shell check: FAILED (launcher is not WyBuildActivity)' >> "$DIST/store-readiness.md"; exit 1
+        fi
+        if ! grep -q "uses-permission: name='android.permission.INTERNET'" <<<"$BADGING"; then
+          echo "::error::The standalone APK is missing the INTERNET permission."; echo '- INTERNET permission: MISSING' >> "$DIST/store-readiness.md"; exit 1
+        fi
+        echo '- App shell check: passed (launcher is WyBuildActivity, INTERNET declared)' >> "$DIST/store-readiness.md"
+      else
+        echo '- App shell check: skipped (aapt not found)' >> "$DIST/store-readiness.md"
+      fi
+    fi
     if [[ "$STORE_READY" == "true" ]]; then
       unzip -p "$ARTIFACT" AndroidManifest.xml >/dev/null 2>&1 || { echo 'APK manifest could not be read.' >> "$DIST/store-readiness.md"; exit 1; }
       echo '- APK package generated successfully.' >> "$DIST/store-readiness.md"
     fi
     ;;
   *.aab)
+    if [[ "$SHELL_MODE" != "twa" ]] && ! unzip -p "$ARTIFACT" base/manifest/AndroidManifest.xml 2>/dev/null | grep -aq WyBuildActivity; then
+      echo "::error::This App Bundle does not contain WyBuildActivity (the standalone shell). Reinstall the WyBuild TWA workflow (v15 or newer) and rebuild."
+      echo '- App shell check: FAILED (WyBuildActivity not in bundle)' >> "$DIST/store-readiness.md"; exit 1
+    fi
     jarsigner -verify "$ARTIFACT" > "$DIST/jarsigner.txt" 2>&1 || { echo 'App Bundle signature verification failed.' >> "$DIST/store-readiness.md"; exit 1; }
     echo '- Android App Bundle signature verification: passed' >> "$DIST/store-readiness.md"
     ;;

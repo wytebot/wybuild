@@ -246,6 +246,12 @@ if standalone:
             t = open(fp, encoding="utf8").read()
             if "LauncherActivity" in t:
                 open(fp, "w", encoding="utf8").write(re.sub(r'android:targetClass="[^"]*LauncherActivity"', 'android:targetClass="%s.WyBuildActivity"' % pkg_id, t))
+    # Release builds shrink code: keep the shell and the methods the web page calls through window.WyBuildNative
+    pg = os.path.join(proj, "app", "proguard-rules.pro")
+    keep = "\n# WyBuild standalone shell\n-keep class %s.WyBuildActivity { *; }\n-keepclassmembers class * { @android.webkit.JavascriptInterface <methods>; }\n" % pkg_id
+    old = open(pg, encoding="utf8").read() if os.path.exists(pg) else ""
+    if "WyBuild standalone shell" not in old:
+        open(pg, "a", encoding="utf8").write(keep)
     applied.append("standalone app shell: your site runs inside the app's own WebView, so there is no address bar or Chrome toolbar and no Digital Asset Links dependency")
     applied.append("native file upload, downloads, camera/microphone/location prompts, JS dialogs, fullscreen video, offline screen, back button")
     if (features.get("playBilling") or {}).get("enabled"):
