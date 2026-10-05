@@ -1,4 +1,4 @@
-# wybuild-twa-workflow-version: 13
+# wybuild-twa-workflow-version: 14
 name: WyBuild TWA
 concurrency:
   group: wybuild-${{ github.workflow }}-${{ github.ref }}
@@ -337,7 +337,7 @@ jobs:
 
       - name: Upload artifacts
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: wb-twa-${{ github.run_id }}
           path: .wybuild-out/dist/**
