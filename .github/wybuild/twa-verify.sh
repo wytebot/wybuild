@@ -7,10 +7,12 @@ MODE="${4:-write}" # write = start a new report, append = add to it (used when b
 mkdir -p "$DIST"
 command -v apksigner >/dev/null 2>&1 || true
 if [[ "$MODE" == "write" ]]; then echo "# WyBuild TWA readiness" > "$DIST/store-readiness.md"; echo >> "$DIST/store-readiness.md"; fi
+SHELL_MODE="${WYBUILD_SHELL:-standalone}"
+if [[ "$SHELL_MODE" == "twa" ]]; then SHELL_LINE="Trusted Web Activity (Chrome renders the site; needs Digital Asset Links to hide the address bar)"; else SHELL_LINE="Standalone native shell (the app renders the site itself; no address bar, no Digital Asset Links needed)"; fi
 cat >> "$DIST/store-readiness.md" <<REPORT
 - Artifact: \`$(basename "$ARTIFACT")\`
-- TWA build path: Bubblewrap Trusted Web Activity
-- WebView wrapper: **not used**
+- Build path: Bubblewrap project
+- App shell: $SHELL_LINE
 REPORT
 case "$ARTIFACT" in
   *.apk)
