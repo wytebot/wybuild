@@ -49,6 +49,8 @@ export interface TwaConfig {
   display: 'standalone' | 'fullscreen' | 'fullscreen-sticky' | 'minimal-ui';
   orientation: 'default' | 'portrait' | 'landscape';
   fallbackType: 'customtabs';
+  /** standalone = native app shell, never shows an address bar (default). twa = plain Trusted Web Activity (needs assetlinks.json) */
+  shell?: 'standalone' | 'twa';
   enableNotifications: boolean;
   enableSiteSettingsShortcut: boolean;
   locationDelegation: boolean;

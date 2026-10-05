@@ -9,7 +9,7 @@ import { AlertTriangle, Check, CheckCircle2, Github, Globe2, KeyRound, Link2, Lo
 const EMPTY: TwaConfig = {
   webUrl: '', packageId: '', name: '', launcherName: '', versionName: '1.0.0', versionCode: undefined,
   themeColor: '#0f172a', backgroundColor: '#ffffff', startUrl: '/', iconUrl: '', maskableIconUrl: '', monochromeIconUrl: '',
-  display: 'standalone', orientation: 'default', fallbackType: 'customtabs', enableNotifications: false,
+  display: 'standalone', orientation: 'default', fallbackType: 'customtabs', shell: 'standalone', enableNotifications: false,
   enableSiteSettingsShortcut: true, locationDelegation: false, playBilling: false, additionalTrustedOrigins: [], linkRules: [],
   androidPermissions: [], shortcuts: [], minSdkVersion: 21, expectedFingerprint: '', predictiveBack: false, playSigningFingerprint: '', output: 'both', storeReady: true, useKeystore: true,
 };
@@ -26,6 +26,11 @@ const SCREEN_MODES = [
   { id: 'standalone', label: 'Standard', hint: 'Status and navigation bars stay visible' },
   { id: 'fullscreen', label: 'Fullscreen', hint: 'Hides the status and navigation bars; swipe from an edge to peek at them' },
   { id: 'fullscreen-sticky', label: 'Sticky fullscreen', hint: 'Bars stay hidden and re-hide on their own after a peek (games, readers, video)' },
+] as const;
+
+const SHELLS = [
+  { id: 'standalone', label: 'Standalone app (recommended)', hint: 'Your site runs inside the app itself: no address bar or browser toolbar ever, fullscreen really hides the bars, links follow your rules. Nothing to publish on your site.' },
+  { id: 'twa', label: 'Trusted Web Activity', hint: "Chrome renders your site. Needs assetlinks.json on your domain, otherwise Chrome's address bar appears. Required for Web Push and Play Billing." },
 ] as const;
 
 const input = 'w-full h-11 bg-[#050707] border border-white/[.08] rounded-lg px-3 text-white focus:border-emerald-400/50 focus:outline-none';
@@ -309,18 +314,22 @@ export const TwaView: React.FC = () => {
         <button type="button" onClick={() => addRule()} disabled={linkRules.length >= 30} className="h-10 px-4 rounded-lg border border-emerald-400/30 text-emerald-300 disabled:opacity-40">+ Add link</button>
         {LINK_PRESETS.filter(pr => !linkRules.some(r => r.pattern.toLowerCase() === pr.pattern)).map(pr => <button key={pr.pattern} type="button" onClick={() => addRule(pr.pattern, pr.mode)} className="h-10 px-3 rounded-full border border-white/[.08] text-slate-400 hover:text-slate-200">+ {pr.label}</button>)}
       </div>
-      {hasMode('internal') && <p className="text-slate-600 mt-3">Internal domains are added as trusted domains and verified app links, so tapping a link to them anywhere on the phone opens this app. Publish the build's assetlinks.json on <b className="text-slate-500">each</b> internal domain (the post-build check lists any that are missing).</p>}
-      {(hasMode('external') || hasMode('other')) && <p className="text-slate-600 mt-2">External and Other rules are applied by <span className="font-mono text-slate-500">wybuild-links.js</span>, which the build produces for you: add it to your website with <span className="font-mono text-slate-500">&lt;script src="/wybuild-links.js" defer&gt;</span>. Android's Trusted Web Activity cannot intercept those taps by itself.</p>}
-      {!linkRules.length && <p className="text-slate-600 mt-3">No rules: your site stays in the app and other sites open in an in-app browser tab.</p>}
+      {(cfg.shell || 'standalone') !== 'twa' && <p className="text-slate-600 mt-3">The standalone app enforces these rules inside the app: internal links stay in the app with no bar, external links open in the phone's browser, other links go to Android. No script is needed on your website. Sign-in pages (for example accounts.google.com) must be added as internal to stay in the app.</p>}
+      {(cfg.shell || 'standalone') === 'twa' && hasMode('internal') && <p className="text-slate-600 mt-3">Internal domains are added as trusted domains and verified app links, so tapping a link to them anywhere on the phone opens this app. Publish the build's assetlinks.json on <b className="text-slate-500">each</b> internal domain (the post-build check lists any that are missing).</p>}
+      {(cfg.shell || 'standalone') === 'twa' && (hasMode('external') || hasMode('other')) && <p className="text-slate-600 mt-2">External and Other rules are applied by <span className="font-mono text-slate-500">wybuild-links.js</span>, which the build produces for you: add it to your website with <span className="font-mono text-slate-500">&lt;script src="/wybuild-links.js" defer&gt;</span>. Android's Trusted Web Activity cannot intercept those taps by itself.</p>}
+      {!linkRules.length && <p className="text-slate-600 mt-3">{(cfg.shell || 'standalone') === 'twa' ? 'No rules: your site stays in the app and other sites open in an in-app browser tab.' : "No rules: your site stays in the app and other websites open in the phone's browser."}</p>}
     </section>
 
     <section className={card}>
       <div className="flex items-center gap-2 text-white font-semibold"><Smartphone className="w-4 h-4 text-emerald-300"/>Screen &amp; gestures</div>
       <p className="text-slate-500 mt-1">Built into the APK and AAB at build time.</p>
+      <div className="grid sm:grid-cols-2 gap-2 mt-3">{SHELLS.map(m => { const on = (cfg.shell || 'standalone') === m.id; return <button key={m.id} type="button" onClick={() => set('shell', m.id)} className={`text-left rounded-xl border p-3 ${on ? 'border-emerald-400/30 bg-emerald-400/[.06]' : 'border-white/[.06] bg-black/20'}`}><b className="text-slate-200 block">{m.label}</b><span className="text-[11px] text-slate-500">{m.hint}</span></button>; })}</div>
       <div className="grid sm:grid-cols-3 gap-2 mt-3">{SCREEN_MODES.map(m => { const on = (cfg.display === 'minimal-ui' ? 'standalone' : cfg.display) === m.id; return <button key={m.id} type="button" onClick={() => set('display', m.id)} className={`text-left rounded-xl border p-3 ${on ? 'border-emerald-400/30 bg-emerald-400/[.06]' : 'border-white/[.06] bg-black/20'}`}><b className="text-slate-200 block">{m.label}</b><span className="text-[11px] text-slate-500">{m.hint}</span></button>; })}</div>
       <button type="button" onClick={() => set('predictiveBack', !cfg.predictiveBack)} className={`mt-2 w-full text-left rounded-xl border p-3 flex gap-3 ${cfg.predictiveBack ? 'border-emerald-400/30 bg-emerald-400/[.06]' : 'border-white/[.06] bg-black/20'}`}><span className={`w-5 h-5 rounded border flex items-center justify-center shrink-0 ${cfg.predictiveBack ? 'bg-emerald-400 border-emerald-400 text-black' : 'border-slate-600'}`}>{cfg.predictiveBack && <Check className="w-3.5 h-3.5"/>}</span><span><b className="text-slate-200 block">Predictive back gesture</b><span className="text-[11px] text-slate-500">Android 13+ shows the back-swipe preview animation. Older phones ignore it.</span></span></button>
       <div className="mt-3"><label className="text-slate-500">Google Play app-signing SHA-256 <span className="text-slate-600">(optional)</span></label><input className={`${input} font-mono`} value={cfg.playSigningFingerprint || ''} onChange={e => set('playSigningFingerprint', e.target.value.trim())} placeholder="Play Console → Setup → App signing → SHA-256"/></div>
-      <p className="text-slate-600 mt-2">Fullscreen hides the status bar, navigation bar and address bar like a native app, but only while Android can verify your site. WyBuild checks this after every build and reports it in the run summary. Publish the build's assetlinks.json at /.well-known/assetlinks.json; if the app is installed from Google Play, add the Play app-signing fingerprint above, otherwise the browser address bar comes back.</p>
+      {(cfg.shell || 'standalone') === 'twa'
+        ? <p className="text-slate-600 mt-2">Fullscreen hides the status bar, navigation bar and address bar like a native app, but only while Android can verify your site. WyBuild checks this after every build and reports it in the run summary. Publish the build's assetlinks.json at /.well-known/assetlinks.json; if the app is installed from Google Play, add the Play app-signing fingerprint above, otherwise the browser address bar comes back. Switch to the Standalone app to remove this dependency.</p>
+        : <p className="text-slate-600 mt-2">The standalone app never shows an address bar. Fullscreen also hides the status and navigation bars (swipe from an edge to peek). File upload, downloads, camera, microphone, location, fullscreen video, an offline screen and the back button are handled natively. Web Push and Play Billing need the Trusted Web Activity shell; the standalone app offers native notifications through <span className="font-mono text-slate-500">WyBuildPush.notify()</span>.</p>}
     </section>
 
     <section className={card}>

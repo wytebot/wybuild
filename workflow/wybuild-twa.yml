@@ -1,4 +1,4 @@
-# wybuild-twa-workflow-version: 14
+# wybuild-twa-workflow-version: 15
 name: WyBuild TWA
 concurrency:
   group: wybuild-${{ github.workflow }}-${{ github.ref }}
@@ -80,7 +80,7 @@ jobs:
           }
           JSON
           npm install --no-audit --no-fund --package-lock=false "@bubblewrap/cli@${{ inputs.bubblewrap_version }}"
-          for f in twa-prepare.mjs twa-generate.mjs twa-verify.sh twa-native.py; do
+          for f in twa-prepare.mjs twa-generate.mjs twa-verify.sh twa-native.py WyBuildActivity.java; do
             test -f "$GITHUB_WORKSPACE/.github/wybuild/$f" || { echo "::error::.github/wybuild/$f is missing in this repo/branch. Reinstall the WyBuild TWA workflow (WyBuild > Web to Android > Update workflow) so all the WyBuild files are committed."; exit 1; }
           done
           cp "$GITHUB_WORKSPACE/.github/wybuild/twa-generate.mjs" .
@@ -179,7 +179,7 @@ jobs:
       - name: Resolve configuration (auto-detect from the site's Web App Manifest)
         run: |
           node .github/wybuild/twa-prepare.mjs | tee "$WB_OUT/prepare.log"
-          grep -E "^WYBUILD_(PACKAGE|VERSION|VERSION_CODE|WEB_MANIFEST|SNAPSHOT|SOURCE_HOST)=" "$WB_OUT/prepare.log" >> "$GITHUB_ENV"
+          grep -E "^WYBUILD_(PACKAGE|VERSION|VERSION_CODE|WEB_MANIFEST|SNAPSHOT|SOURCE_HOST|SHELL)=" "$WB_OUT/prepare.log" >> "$GITHUB_ENV"
 
       - name: Generate Android project
         run: |
@@ -196,7 +196,7 @@ jobs:
           if [ -d wybuild/android-overrides ]; then
             echo "Applying wybuild/android-overrides/"; cp -a wybuild/android-overrides/. "$P/"
           fi
-          # 2) Permissions, notification delegation, fullscreen, predictive back, notification icon, push kit
+          # 2) Standalone app shell, permissions, notifications, fullscreen, link rules, predictive back, notification icon, push kit
           python3 .github/wybuild/twa-native.py "$P"
           # 3) Optional hook for anything else: runs inside the generated project
           if [ -f wybuild/twa-patch.sh ]; then
@@ -294,7 +294,8 @@ jobs:
             echo; echo "### Digital Asset Links"; echo "Publish \`assetlinks.json\` at \`https://$WYBUILD_SOURCE_HOST/.well-known/assetlinks.json\` (no redirect):"; echo '```json'; cat "$DIST/assetlinks.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           exit $RC
 
-      - name: Check the live site trusts this app (what makes fullscreen hide the address bar)
+      - name: Check the live site trusts this app (only the Trusted Web Activity shell needs this to hide the address bar)
+        if: ${{ env.WYBUILD_SHELL == 'twa' }}
         continue-on-error: true
         run: |
           python3 - <<'PY'

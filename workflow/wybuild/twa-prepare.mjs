@@ -113,6 +113,8 @@ const json = {
 };
 // WyBuild-only options (not Bubblewrap manifest fields): applied by the "Apply manual Android features" step
 const extras = {
+  // "standalone" = WyBuild's native shell (never an address bar); "twa" = plain Trusted Web Activity (needs Digital Asset Links)
+  shell: raw.shell === 'twa' ? 'twa' : 'standalone',
   linkRules,
   predictiveBack: raw.predictiveBack === true,
   playSigningFingerprint: /^([0-9A-Fa-f]{2}:?){32}$/.test(String(raw.playSigningFingerprint || '')) ? String(raw.playSigningFingerprint).replace(/:/g, '').toUpperCase().match(/.{2}/g).join(':') : '',
@@ -128,3 +130,4 @@ console.log(`WYBUILD_VERSION_CODE=${json.appVersionCode}`);
 console.log(`WYBUILD_WEB_MANIFEST=${manifestUrl}`);
 console.log(`WYBUILD_SNAPSHOT=${snapshot}`);
 console.log(`WYBUILD_SOURCE_HOST=${json.host}`);
+console.log(`WYBUILD_SHELL=${extras.shell}`);

@@ -9,7 +9,7 @@ import blake from 'blakejs';
 
 const TWA_WORKFLOW_FILE = 'wybuild-twa.yml';
 const TWA_WORKFLOW_PATH = `.github/workflows/${TWA_WORKFLOW_FILE}`;
-const TWA_WORKFLOW_VERSION = 14;
+const TWA_WORKFLOW_VERSION = 15;
 // every file committed to a repo for each workflow kind: [path in repo, path in ./workflow]
 const WORKFLOW_KINDS = {
   twa: {
@@ -22,6 +22,7 @@ const WORKFLOW_KINDS = {
       ['.github/wybuild/twa-generate.mjs', 'wybuild/twa-generate.mjs'],
       ['.github/wybuild/twa-verify.sh', 'wybuild/twa-verify.sh'],
       ['.github/wybuild/twa-native.py', 'wybuild/twa-native.py'],
+      ['.github/wybuild/WyBuildActivity.java', 'wybuild/WyBuildActivity.java'],
     ],
   },
 };
@@ -660,7 +661,7 @@ const DIAGNOSES = [
   { re: /exceeded the maximum execution time|timed out|The operation was canceled|timeout.*bubblewrap|Terminated/i, category: 'twa_config', title: 'Build hung and was stopped (timeout)', fix: 'The failed step ran out of time, most often while signing. Reinstall the TWA workflow (v5 closes stdin and times out with a clear error) and verify the keystore alias/passwords.' },
   { re: /Cannot open the keystore|java\.io\.EOFException|keystore was tampered|Keystore was tampered|password was incorrect|Cannot recover key|UnrecoverableKeyException|Invalid keystore format/i, category: 'keystore', title: 'Release keystore is invalid, truncated, or credentials are wrong', fix: 'WyBuild decoded the secret but Java could not read it. Replace WB_KEYSTORE_BASE64 with the complete raw .jks/.p12 Base64, then verify the exact case-sensitive alias and store password. WyBuild now checks the decoded file before Bubblewrap.' },
   { re: /alias.*does not exist|Alias <.*> does not exist/i, category: 'keystore', title: 'Key alias not found in keystore', fix: 'The alias saved in WB_KEY_ALIAS is not in your keystore. Run keytool -list -keystore <file> locally and re-upload with the exact alias.' },
-  { re: /\.github\/wybuild\/[\w.-]+ is missing|cp: cannot stat '?[^\n]*\.github\/wybuild|Cannot find module[^\n]*\.github\/wybuild/i, category: 'twa_config', title: 'Workflow helper files are missing in the repo', fix: 'Use Update workflow so .github/wybuild/twa-prepare.mjs, twa-generate.mjs, twa-verify.sh and twa-native.py are committed alongside the workflow.' },
+  { re: /\.github\/wybuild\/[\w.-]+ is missing|cp: cannot stat '?[^\n]*\.github\/wybuild|Cannot find module[^\n]*\.github\/wybuild/i, category: 'twa_config', title: 'Workflow helper files are missing in the repo', fix: 'Use Update workflow so .github/wybuild/twa-prepare.mjs, twa-generate.mjs, twa-verify.sh, twa-native.py and WyBuildActivity.java are committed alongside the workflow.' },
   { re: /unbound variable/i, category: 'twa_config', title: 'Workflow script used an undefined variable', fix: 'Your repo has an outdated WyBuild workflow. Use Update workflow and re-run.' },
   { re: /unknown option|too many arguments|error: missing required/i, category: 'twa_config', title: 'Bubblewrap command-line option rejected', fix: 'Your repo has an outdated WyBuild TWA workflow that passes options Bubblewrap does not accept. Use Update workflow.' },
   { re: /No such file or directory|ENOENT[^\n]*/i, category: 'twa_config', title: 'A required file was not found', fix: 'The error line names the missing path. If it is under .github/wybuild or twa-manifest.json, update the workflow; if it is under android/ or pubspec.yaml, check the branch contents.' },
@@ -1116,8 +1117,10 @@ function cleanTwaConfig(c = {}) {
     if (!['default', 'portrait', 'landscape'].includes(c.orientation)) throw new HttpError(400, 'Invalid orientation');
     out.orientation = c.orientation;
   }
-  // WyBuild web-to-Android is always a Trusted Web Activity. A WebView fallback is
-  // deliberately not exposed because it changes the product into a WebView wrapper.
+  // App shell. "standalone" (default) runs the site in WyBuild's own native activity, so no browser address bar or
+  // Chrome toolbar can ever appear and no Digital Asset Links are needed. "twa" is a plain Trusted Web Activity,
+  // which shows Chrome's address bar whenever the site's assetlinks.json does not verify.
+  out.shell = c.shell === 'twa' ? 'twa' : 'standalone';
   out.fallbackType = 'customtabs';
   for (const k of ['enableNotifications', 'enableSiteSettingsShortcut', 'locationDelegation', 'playBilling', 'isChromeOSOnly', 'predictiveBack']) if (k in c) out[k] = !!c[k];
   if (c.minSdkVersion) {

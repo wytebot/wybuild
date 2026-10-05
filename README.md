@@ -22,5 +22,10 @@ In **Web to Android → Link handling** every link rule is a domain (or `tel:`-s
 
 Internal rules are baked into the APK/AAB manifest by `workflow/wybuild/twa-native.py`. External and Other rules are enforced by `wybuild-links.js`, generated into the build artifact (`dist/native/`) for the site to include, because a Trusted Web Activity cannot intercept those taps natively. Links on the app's own site always stay internal; the first matching rule wins. Changing rules needs the TWA workflow v13 or newer (WyBuild offers the update automatically).
 
+### App shell (workflow v15)
+
+- **Standalone app** (default): `workflow/wybuild/WyBuildActivity.java` is injected as the launcher activity. The site runs in the app's own WebView, so no address bar or Chrome toolbar can appear and no `assetlinks.json` is required. Fullscreen hides the status and navigation bars, link rules (internal / external / other) are enforced natively, and uploads, downloads, camera/microphone/location prompts, JS dialogs, fullscreen video, an offline screen, the back button and local notifications (`WyBuildNative.notify`) are handled in the app.
+- **Trusted Web Activity**: the previous behaviour. Needs `assetlinks.json` to hide Chrome's address bar; required for Web Push delegation and Play Billing.
+
 ## PWA
 WyBuild itself is installable: `public/manifest.webmanifest`, icons (192, 512, maskable 512, monochrome 512, Apple touch 180), `public/sw.js` and `public/offline.html`. The service worker is network-first for pages (a new deploy is never hidden behind a stale cache), cache-first only for content-hashed `/assets/*`, and never touches `/api/*`. Bump `VERSION` in `sw.js` to drop all caches. `vercel.json` serves `sw.js` uncached and the manifest with the right content type.
