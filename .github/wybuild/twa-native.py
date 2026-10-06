@@ -95,7 +95,7 @@ if want and not standalone:
         xml = re.sub(r'(android:name="android\.support\.customtabs\.trusted\.DISPLAY_MODE"\s+android:value=")[^"]*(")', r"\g<1>%s\g<2>" % want, xml)
     else:
         # Bubblewrap normally uses LauncherActivity. Fail rather than silently losing the TWA display mode.
-        m = re.search(r'<activity\b[^>]*android:name="[^"]*LauncherActivity"[^>]*>', xml)
+        m = re.search(r'<activity\b[^>]*android:name="(?:[^"]*\.)?LauncherActivity"[^>]*>', xml)
         if not m:
             raise SystemExit("Could not add the TWA fullscreen display mode: LauncherActivity not found in AndroidManifest.xml")
         xml = xml[:m.end()] + meta + xml[m.end():]
@@ -151,7 +151,7 @@ if deep_hosts:
         # Insert intent-filters while Bubblewrap still exposes its launcher; the standalone
         # transformation below then renames that same component to WyBuildActivity.
         activity_name = "LauncherActivity"
-        start = re.search(r'<activity\b(?:(?!/>)[^>])*android:name="[^"]*' + re.escape(activity_name) + r'[^"]*"[^>]*>', xml)
+        start = re.search(r'<activity\b(?:(?!/>)[^>])*android:name="(?:[^"]*\.)?' + re.escape(activity_name) + r'"[^>]*>', xml)
         if not start:
             # Bubblewrap can use the fully-qualified helper name in the TWA manifest.
             start = re.search(r'<activity\b(?:(?!/>)[^>])*' + re.escape(activity_name) + r'(?:(?!/>)[^>])*>', xml)
@@ -245,26 +245,26 @@ if standalone:
     def replace_launcher_activity(m):
         global launcher_hits
         tag = m.group(0)
-        if "LauncherActivity" not in tag:
+        if not re.search(r'android:(?:name|targetActivity)="(?:[^"]*\.)?LauncherActivity"', tag):
             return tag
         launcher_hits += 1
-        tag = re.sub(r'android:name="[^"]*LauncherActivity"', 'android:name="%s"' % native_name, tag, count=1)
+        tag = re.sub(r'android:name="(?:[^"]*\.)?LauncherActivity"', 'android:name="%s"' % native_name, tag, count=1)
         tag = set_attr(tag, "theme", "@style/WyBuildTheme")
         tag = set_attr(tag, "configChanges", "orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|layoutDirection|fontScale")
         tag = set_attr(tag, "windowSoftInputMode", "adjustResize")
         tag = set_attr(tag, "hardwareAccelerated", "true")
         return tag
-    xml = re.sub(r'<activity\b[^>]*android:name="[^"]*LauncherActivity"[^>]*>', replace_launcher_activity, xml)
+    xml = re.sub(r'<activity\b[^>]*android:name="(?:[^"]*\.)?LauncherActivity"[^>]*>', replace_launcher_activity, xml)
 
     # Activity aliases do not themselves run code; redirect their targetClass to WyBuildActivity.
     def replace_alias(m):
         global launcher_hits
         tag = m.group(0)
-        if "LauncherActivity" not in tag:
+        if not re.search(r'android:(?:name|targetActivity)="(?:[^"]*\.)?LauncherActivity"', tag):
             return tag
         launcher_hits += 1
-        tag = re.sub(r'android:targetActivity="[^"]*LauncherActivity"', 'android:targetActivity="%s"' % native_name, tag, count=1)
-        return re.sub(r'android:targetClass="[^"]*LauncherActivity"', 'android:targetClass="%s"' % native_name, tag, count=1)
+        tag = re.sub(r'android:targetActivity="(?:[^"]*\.)?LauncherActivity"', 'android:targetActivity="%s"' % native_name, tag, count=1)
+        return re.sub(r'android:targetClass="(?:[^"]*\.)?LauncherActivity"', 'android:targetClass="%s"' % native_name, tag, count=1)
     xml = re.sub(r'<activity-alias\b[^>]*>', replace_alias, xml)
 
     # If Bubblewrap ever changes its manifest shape, add a native launcher rather than building a
@@ -282,9 +282,9 @@ if standalone:
                 t = open(fp, encoding="utf8").read()
             except Exception:
                 continue
-            if "LauncherActivity" in t:
-                t2 = re.sub(r'android:targetActivity="[^"]*LauncherActivity"', 'android:targetActivity="%s"' % native_name, t)
-                t2 = re.sub(r'android:targetClass="[^"]*LauncherActivity"', 'android:targetClass="%s"' % native_name, t2)
+            if re.search(r'android:(?:targetActivity|targetClass)="(?:[^"]*\.)?LauncherActivity"', t):
+                t2 = re.sub(r'android:targetActivity="(?:[^"]*\.)?LauncherActivity"', 'android:targetActivity="%s"' % native_name, t)
+                t2 = re.sub(r'android:targetClass="(?:[^"]*\.)?LauncherActivity"', 'android:targetClass="%s"' % native_name, t2)
                 if t2 != t:
                     open(fp, "w", encoding="utf8").write(t2)
 
