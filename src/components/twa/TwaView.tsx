@@ -15,7 +15,7 @@ const EMPTY: TwaConfig = {
 };
 
 const FEATURES = [
-  { id: 'notifications', label: 'Notifications', hint: 'Web push shows as real Android notifications (permission, icon and push kit included in the build)', permission: 'POST_NOTIFICATIONS' },
+  { id: 'notifications', label: 'Notifications', hint: 'Allow the app to post Android notifications from supported WyBuild native calls', permission: 'POST_NOTIFICATIONS' },
   { id: 'location', label: 'Location', hint: 'Use Android location permission for the site', permission: 'ACCESS_FINE_LOCATION' },
   { id: 'camera', label: 'Camera', hint: 'Site can use the camera (declared as optional so Play still lists the app on every phone)', permission: 'CAMERA' },
   { id: 'microphone', label: 'Microphone', hint: 'Allow the site to request the microphone', permission: 'RECORD_AUDIO' },
@@ -329,7 +329,7 @@ export const TwaView: React.FC = () => {
       <div className="mt-3"><label className="text-slate-500">Google Play app-signing SHA-256 <span className="text-slate-600">(optional)</span></label><input className={`${input} font-mono`} value={cfg.playSigningFingerprint || ''} onChange={e => set('playSigningFingerprint', e.target.value.trim())} placeholder="Play Console → Setup → App signing → SHA-256"/></div>
       {(cfg.shell || 'standalone') === 'twa'
         ? <p className="text-slate-600 mt-2">Fullscreen hides the status bar, navigation bar and address bar like a native app, but only while Android can verify your site. WyBuild checks this after every build and reports it in the run summary. Publish the build's assetlinks.json at /.well-known/assetlinks.json; if the app is installed from Google Play, add the Play app-signing fingerprint above, otherwise the browser address bar comes back. Switch to the Standalone app to remove this dependency.</p>
-        : <p className="text-slate-600 mt-2">The standalone app never shows an address bar. Fullscreen also hides the status and navigation bars (swipe from an edge to peek). File upload, downloads, camera, microphone, location, fullscreen video, an offline screen and the back button are handled natively. Web Push and Play Billing need the Trusted Web Activity shell; the standalone app offers native notifications through <span className="font-mono text-slate-500">WyBuildPush.notify()</span>.</p>}
+        : <p className="text-slate-600 mt-2">The standalone app never shows an address bar. Fullscreen also hides the status and navigation bars (swipe from an edge to peek). File upload, downloads, camera, microphone, location, fullscreen video, an offline screen and the back button are handled natively. Browser Web Push and Play Billing need the Trusted Web Activity shell; the standalone app offers app-triggered notifications through <span className="font-mono text-slate-500">WyBuildPush.notify()</span>.</p>}
     </section>
 
     <section className={card}>

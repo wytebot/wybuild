@@ -29,6 +29,7 @@ const MainLayout: React.FC = () => {
   const [showQuickBuildModal, setShowQuickBuildModal] = useState(false);
   const [showBillingModal, setShowBillingModal] = useState(false);
   const [billingCycle, setBillingCycle] = useState<BillingCycle>('monthly');
+  const [showPaymentSuccess, setShowPaymentSuccess] = useState(false);
   // Menu starts open on desktop, closed (drawer) on phones/tablets.
   const [navOpen, setNavOpen] = useState<boolean>(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches);
 
@@ -56,8 +57,13 @@ const MainLayout: React.FC = () => {
       setBillingCycle(cycle === 'yearly' ? 'yearly' : 'monthly');
       setShowBillingModal(true);
     };
+    const onPaymentSuccess = () => setShowPaymentSuccess(true);
     window.addEventListener('wybuild:billing-open', onBillingOpen);
-    return () => window.removeEventListener('wybuild:billing-open', onBillingOpen);
+    window.addEventListener('wybuild:payment-success', onPaymentSuccess);
+    return () => {
+      window.removeEventListener('wybuild:billing-open', onBillingOpen);
+      window.removeEventListener('wybuild:payment-success', onPaymentSuccess);
+    };
   }, []);
 
   return (
@@ -109,6 +115,16 @@ const MainLayout: React.FC = () => {
         isOpen={showQuickBuildModal}
         onClose={() => setShowQuickBuildModal(false)}
       />
+      {showPaymentSuccess && (
+        <div className="fixed inset-0 z-[120] bg-black/75 backdrop-blur-sm flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Payment successful">
+          <div className="w-full max-w-sm rounded-2xl border border-emerald-400/25 bg-slate-950 p-6 shadow-2xl text-center">
+            <div className="mx-auto mb-4 h-12 w-12 rounded-full bg-emerald-500/15 border border-emerald-400/30 flex items-center justify-center text-emerald-300 text-2xl">✓</div>
+            <h2 className="text-xl font-bold text-white">Payment successful</h2>
+            <p className="mt-2 text-sm text-slate-400">Flutterwave payment was confirmed on the server. Your WyBuild Pro access is now active.</p>
+            <button onClick={() => setShowPaymentSuccess(false)} className="mt-5 w-full rounded-lg bg-emerald-500 py-3 text-sm font-bold text-black">Continue with Pro</button>
+          </div>
+        </div>
+      )}
       <BillingCheckoutModal
         isOpen={showBillingModal}
         initialCycle={billingCycle}

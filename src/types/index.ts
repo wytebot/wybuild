@@ -208,6 +208,8 @@ export interface SubscriptionInfo {
   cardLast4?: string;
   cardBrand?: string;
   autoRenew?: boolean;
+  graceUntil?: string;
+  cancelledAt?: string;
 }
 
 export interface RateLimitState {

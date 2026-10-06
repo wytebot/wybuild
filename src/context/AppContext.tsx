@@ -345,21 +345,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Session bootstrap + return from Flutterwave checkout
   useEffect(() => {
-    refreshMe().then(() => {
+    refreshMe().then(async () => {
       const b = new URLSearchParams(window.location.search).get('billing');
       if (!b) return;
-      showToast(
-        b === 'success'
-          ? 'Payment verified. Pro is active.'
-          : b === 'cancelled'
-          ? 'Payment cancelled.'
-          : 'Payment could not be verified. If you were charged, Pro will activate shortly.'
-      );
+      if (b === 'success') {
+        try {
+          const verified = await api.me();
+          const proActive = verified.subscription?.plan === 'pro';
+          if (proActive) {
+            setSubscription(verified.subscription);
+            window.dispatchEvent(new CustomEvent('wybuild:payment-success', { detail: { subscription: verified.subscription } }));
+            showToast('Payment verified by the server. Pro is active.');
+            setCurrentTab('billing');
+          } else {
+            showToast('Payment returned successfully, but Pro is still being verified. No access was unlocked yet.');
+          }
+        } catch {
+          showToast('Payment returned successfully, but server verification could not be completed yet. No access was unlocked yet.');
+        }
+      } else if (b === 'cancelled') showToast('Payment cancelled.');
+      else showToast('Payment could not be verified. If you were charged, Pro will activate only after server verification.');
       window.history.replaceState(null, '', window.location.pathname);
-      if (b === 'success') setCurrentTab('billing');
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Keep server-owned billing state fresh while a grace period is counting down, so the
+  // Free billing card returns automatically when Pro actually expires.
+  useEffect(() => {
+    if (authState !== 'authed' || !['cancelled', 'past_due'].includes(subscription.status)) return;
+    const timer = window.setInterval(() => { void refreshMe(); }, 60_000);
+    return () => window.clearInterval(timer);
+  }, [authState, subscription.status, refreshMe]);
 
   // After sign-in every repo is loaded automatically; nothing has to be typed or "connected" first
   useEffect(() => {
@@ -472,7 +489,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const cancelSubscription = async () => {
     try {
       const r = await api.cancelSubscription();
-      showToast(`Auto-renewal stopped. Pro stays active until ${new Date(r.activeUntil).toLocaleDateString()}.`);
+      showToast(`Subscription cancelled. Pro stays active for the 5-day grace period, until ${new Date(r.activeUntil).toLocaleString()}.`);
       await refreshMe();
     } catch (e) {
       showToast(errMsg(e));

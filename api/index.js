@@ -9,7 +9,7 @@ import blake from 'blakejs';
 
 const TWA_WORKFLOW_FILE = 'wybuild-twa.yml';
 const TWA_WORKFLOW_PATH = `.github/workflows/${TWA_WORKFLOW_FILE}`;
-const TWA_WORKFLOW_VERSION = 15;
+const TWA_WORKFLOW_VERSION = 17;
 // every file committed to a repo for each workflow kind: [path in repo, path in ./workflow]
 const WORKFLOW_KINDS = {
   twa: {
@@ -42,6 +42,8 @@ const PLANS = {
 // Flutterwave continues to charge/verify the configured USD amount.
 const PRICING = { monthly: 9.99, yearly: 99 };
 const PRICING_NGN = { monthly: 15000, yearly: 150000 };
+const CANCELLATION_GRACE_MS = 5 * 24 * 60 * 60 * 1000;
+const RENEWAL_FAILURE_GRACE_MS = 5 * 24 * 60 * 60 * 1000;
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const SECRET_NAMES = ['WB_KEYSTORE_BASE64', 'WB_KEYSTORE_PASSWORD', 'WB_KEY_ALIAS', 'WB_KEY_PASSWORD'];
 
@@ -357,7 +359,7 @@ async function getSubscription(login) {
   if (!sub || sub.plan !== 'pro') return null;
   const until = new Date(sub.nextBillingDate || 0).getTime();
   const grace = new Date(sub.graceUntil || 0).getTime();
-  if ((sub.status === 'active' && until > Date.now()) || (sub.status === 'past_due' && grace > Date.now())) return sub;
+  if ((sub.status === 'active' && until > Date.now()) || ((sub.status === 'past_due' || sub.status === 'cancelled') && grace > Date.now())) return sub;
   return null;
 }
 
@@ -386,6 +388,8 @@ async function activateFromCharge(charge, expected, fallbackLogin) {
   const pending = await kv.get(`wb:tx:${ref}`);
   if (!pending || pending.login !== fallbackLogin && fallbackLogin) return false;
   if (!expected || Number(charge.amount) < Number(expected.amount) || String(charge.currency) !== String(expected.currency)) return false;
+  const returnedCustomerId = charge.customer_id || charge.customer?.id || '';
+  if (pending.customerId && returnedCustomerId && String(returnedCustomerId) !== String(pending.customerId)) return false;
   const pmd = charge.payment_method_details || charge.payment_method || {};
   const customerId = charge.customer_id || charge.customer?.id || pending.customerId || '';
   const paymentMethodId = pmd.id || pending.paymentMethodId || '';
@@ -414,6 +418,7 @@ async function activateFromCharge(charge, expected, fallbackLogin) {
     customerEmail: pending.customerEmail || '',
     customerId,
     paymentMethodId,
+    autoRenew: true,
     cardLast4: pmd.card?.last4 || pmd.card?.last_4digits,
     cardBrand: pmd.card?.network || pmd.card?.type,
   };
@@ -535,9 +540,28 @@ async function renewDueSubscriptions() {
   for (const login of logins || []) {
     const sub = await kv.get(`wb:sub:${login}`);
     if (!sub || !sub.customerId || !sub.paymentMethodId) continue;
+    if (sub.status === 'cancelled' || sub.autoRenew === false) { await kv.srem('wb:subscribers', login); continue; }
+    if (sub.status === 'past_due') {
+      const g = new Date(sub.graceUntil || 0).getTime();
+      if (g && g <= Date.now()) {
+        await kv.set(`wb:sub:${login}`, { ...sub, status: 'cancelled', autoRenew: false });
+        await kv.srem('wb:subscribers', login);
+        continue;
+      }
+    }
     if (new Date(sub.nextBillingDate).getTime() > Date.now()) continue;
     const ref = `wb-renew-${login}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`.replace(/[^A-Za-z0-9-]/g, '').slice(0, 42);
     try {
+      await kv.set(`wb:tx:${ref}`, {
+        login,
+        cycle: sub.billingCycle,
+        amount: Number(sub.amount),
+        currency: sub.currency || 'USD',
+        customerId: sub.customerId,
+        paymentMethodId: sub.paymentMethodId,
+        customerEmail: sub.customerEmail || '',
+        renewal: true,
+      }, { ex: 60 * 60 * 24 * 7 });
       const charge = await flw4('/charges', {
         method: 'POST',
         body: JSON.stringify({
@@ -558,12 +582,14 @@ async function renewDueSubscriptions() {
         else next.setUTCMonth(next.getUTCMonth() + 1);
         await kv.set(`wb:sub:${login}`, { ...sub, status: 'active', nextBillingDate: next.toISOString(), graceUntil: '', flwTransactionRef: ref, flwChargeId: d.id });
       } else {
-        const grace = new Date(Date.now() + 3 * 24 * 3600 * 1000);
+        const currentGrace = new Date(sub.graceUntil || 0).getTime();
+        const grace = currentGrace > Date.now() ? new Date(currentGrace) : new Date(Date.now() + RENEWAL_FAILURE_GRACE_MS);
         await kv.set(`wb:sub:${login}`, { ...sub, status: 'past_due', graceUntil: grace.toISOString(), flwTransactionRef: ref, flwChargeId: d?.id || '' });
       }
       processed++;
     } catch {
-      const grace = new Date(Date.now() + 3 * 24 * 3600 * 1000);
+      const currentGrace = new Date(sub.graceUntil || 0).getTime();
+      const grace = currentGrace > Date.now() ? new Date(currentGrace) : new Date(Date.now() + RENEWAL_FAILURE_GRACE_MS);
       await kv.set(`wb:sub:${login}`, { ...sub, status: 'past_due', graceUntil: grace.toISOString() });
     }
   }
@@ -1121,6 +1147,7 @@ function cleanTwaConfig(c = {}) {
   // Chrome toolbar can ever appear and no Digital Asset Links are needed. "twa" is a plain Trusted Web Activity,
   // which shows Chrome's address bar whenever the site's assetlinks.json does not verify.
   out.shell = c.shell === 'twa' ? 'twa' : 'standalone';
+  // fallbackType is only meaningful to Bubblewrap/TWA. Standalone builds never use a browser shell.
   out.fallbackType = 'customtabs';
   for (const k of ['enableNotifications', 'enableSiteSettingsShortcut', 'locationDelegation', 'playBilling', 'isChromeOSOnly', 'predictiveBack']) if (k in c) out[k] = !!c[k];
   if (c.minSdkVersion) {
@@ -1405,7 +1432,15 @@ async function route(req, res, path, query) {
     const safeEq = (a, b) => a.length === b.length && a.length > 0 && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
     const legacy = String(req.headers['verif-hash'] || '');
     const sig = String(req.headers['flutterwave-signature'] || '');
-    const expectedSig = want ? crypto.createHmac('sha256', want).update(JSON.stringify(req.body ?? {})).digest('base64') : '';
+    // Flutterwave v4 signs the raw HTTP request body. Prefer a runtime-provided raw body when available;
+    // string/Buffer bodies are already raw. JSON.stringify is only a compatibility fallback for runtimes
+    // that eagerly parse JSON before invoking the function.
+    const rawWebhookBody = Buffer.isBuffer(req.rawBody) ? req.rawBody
+      : typeof req.rawBody === 'string' ? Buffer.from(req.rawBody)
+      : Buffer.isBuffer(req.body) ? req.body
+      : typeof req.body === 'string' ? Buffer.from(req.body)
+      : Buffer.from(JSON.stringify(req.body ?? {}));
+    const expectedSig = want ? crypto.createHmac('sha256', want).update(rawWebhookBody).digest('base64') : '';
     const ok = !!want && (safeEq(legacy, want) || safeEq(sig, expectedSig));
     if (!ok) throw new HttpError(401, 'Invalid signature');
     const id = bodyOf(req)?.data?.id;
@@ -1511,9 +1546,20 @@ async function route(req, res, path, query) {
   if (path === 'billing/cancel' && post) {
     const sub = await kv.get(`wb:sub:${session.login}`);
     if (!sub || sub.plan !== 'pro') throw new HttpError(404, 'No active subscription');
-    await kv.set(`wb:sub:${session.login}`, { ...sub, autoRenew: false });
+    const existingGrace = new Date(sub.graceUntil || 0).getTime();
+    const activeUntil = sub.status === 'cancelled' && existingGrace > Date.now()
+      ? new Date(existingGrace)
+      : new Date(Date.now() + CANCELLATION_GRACE_MS);
+    const cancelled = {
+      ...sub,
+      status: 'cancelled',
+      autoRenew: false,
+      cancelledAt: sub.cancelledAt || new Date().toISOString(),
+      graceUntil: activeUntil.toISOString(),
+    };
+    await kv.set(`wb:sub:${session.login}`, cancelled);
     await kv.srem('wb:subscribers', session.login);
-    return send(res, 200, { ok: true, activeUntil: sub.nextBillingDate });
+    return send(res, 200, { ok: true, activeUntil: cancelled.graceUntil, status: 'cancelled' });
   }
 
   if (path === 'me' && m === 'GET') {

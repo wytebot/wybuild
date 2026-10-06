@@ -20,9 +20,18 @@ import { FLUTTERWAVE_PRICING } from '../../services/flutterwave';
 export const BillingView: React.FC = () => {
   const { subscription, lifetimeFree, rateLimits, openFlutterwaveCheckout, cancelSubscription } = useApp();
   const [billingCycle, setBillingCycle] = useState<BillingCycle>('monthly');
+  const [cancelling, setCancelling] = useState(false);
 
   const isPro = subscription.plan === 'pro';
   const isFreeForever = lifetimeFree;
+  const cancellationPending = isPro && subscription.status === 'cancelled' && !!subscription.graceUntil;
+  const graceLabel = subscription.graceUntil ? new Date(subscription.graceUntil).toLocaleString() : '';
+
+  const cancelNow = async () => {
+    if (cancelling || cancellationPending) return;
+    setCancelling(true);
+    try { await cancelSubscription(); } finally { setCancelling(false); }
+  };
 
   const planComparison = [
     {
@@ -150,7 +159,9 @@ export const BillingView: React.FC = () => {
               {isFreeForever
                 ? 'WyBuild owner access: all Free + Pro capabilities are permanently unlocked on this GitHub account.'
                 : isPro
-                ? `Billed via Flutterwave v4 (${subscription.billingCycle}). Next renewal on ${new Date(subscription.nextBillingDate).toLocaleDateString()}.`
+                ? cancellationPending
+                  ? `Cancellation requested. Pro remains active through the 5-day grace period until ${graceLabel}, then the Free billing card returns automatically.`
+                  : `Billed via Flutterwave v4 (${subscription.billingCycle}). Next renewal on ${new Date(subscription.nextBillingDate).toLocaleDateString()}.`
                 : `5 successful builds/month. Projects are unlimited. Build allowance resets ${rateLimits.resetsAt}.`}
             </p>
           </div>
@@ -165,9 +176,18 @@ export const BillingView: React.FC = () => {
               <Sparkles className="w-4 h-4 fill-slate-950" />
               <span>Upgrade to Pro ({FLUTTERWAVE_PRICING[billingCycle].label})</span>
             </button>
+          ) : isFreeForever ? (
+            <div className="text-right text-xs font-mono text-emerald-400 font-semibold">✓ Free Forever Access</div>
           ) : (
-            <div className="text-right text-xs font-mono text-emerald-400 font-semibold">
-              {isFreeForever ? '✓ Free Forever Access' : '✓ Pro Access Active'}
+            <div className="min-w-[210px] text-right">
+              <div className="text-sm font-bold text-emerald-300">You are now in Pro</div>
+              {cancellationPending ? (
+                <div className="mt-1 text-[11px] text-amber-300">Cancellation scheduled · Pro ends {graceLabel}</div>
+              ) : (
+                <button onClick={cancelNow} disabled={cancelling} className="mt-2 px-4 py-2 rounded-lg border border-rose-400/30 text-rose-300 text-xs font-bold disabled:opacity-60">
+                  {cancelling ? 'Cancelling…' : 'Cancel subscription'}
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -300,11 +320,12 @@ export const BillingView: React.FC = () => {
 
           <div className="mt-8 pt-4 border-t border-slate-800">
             <button
-              onClick={() => openFlutterwaveCheckout(billingCycle)}
+              onClick={() => isPro ? (cancellationPending ? undefined : cancelNow()) : openFlutterwaveCheckout(billingCycle)}
+              disabled={isPro && cancellationPending}
               className="w-full py-2.5 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white transition flex items-center justify-center gap-2 shadow-lg cursor-pointer"
             >
               <CreditCard className="w-4 h-4" />
-              <span>{isPro ? 'Manage Flutterwave Subscription' : `Upgrade with Flutterwave ($${FLUTTERWAVE_PRICING[billingCycle].amount} / ${FLUTTERWAVE_PRICING[billingCycle].ngnLabel})`}</span>
+              <span>{isPro ? (cancellationPending ? 'Cancellation scheduled — Pro active during grace' : 'Cancel subscription') : `Upgrade with Flutterwave ($${FLUTTERWAVE_PRICING[billingCycle].amount} / ${FLUTTERWAVE_PRICING[billingCycle].ngnLabel})`}</span>
             </button>
           </div>
         </div>

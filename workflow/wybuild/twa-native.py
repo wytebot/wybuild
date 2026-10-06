@@ -19,6 +19,7 @@ applied, notes = [], []
 # "twa": plain Trusted Web Activity (needs Digital Asset Links, or Chrome shows its address bar).
 standalone = extras.get("shell", "standalone") != "twa"
 here = os.path.dirname(os.path.abspath(__file__))
+native_name = "%s.WyBuildActivity" % cfg.get("packageId", "")
 
 
 def perm(name):
@@ -38,9 +39,11 @@ def add_before_application(block):
 
 # ---------------------------------------------------------------- 1. permissions
 wanted = [perm(p) for p in cfg.get("androidPermissions", [])]
+if "android.permission.ACCESS_FINE_LOCATION" in wanted or "android.permission.ACCESS_COARSE_LOCATION" in wanted:
+    wanted += ["android.permission.ACCESS_FINE_LOCATION", "android.permission.ACCESS_COARSE_LOCATION"]
 if standalone:
     # A TWA lets Chrome do the networking; our own WebView needs these itself or every page fails to load.
-    wanted += ["android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE", "android.permission.VIBRATE"]
+    wanted += ["android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE"]
 features = cfg.get("features", {}) or {}
 if cfg.get("enableNotifications"):
     # Android 13+ will not show ANY notification, and cannot even ask, unless the app declares this
@@ -84,22 +87,22 @@ if cfg.get("enableNotifications"):
         applied.append("notification delegation (web push shows as native Android notifications)")
 
 # ---------------------------------------------------------------- 3. fullscreen / immersive
+# TWA display metadata belongs to Chrome. Standalone fullscreen is implemented by WyBuildActivity.
 want = {"fullscreen": "immersive", "fullscreen-sticky": "sticky-immersive"}.get(cfg.get("display"))
-if want:
+if want and not standalone:
     meta = '\n            <meta-data android:name="android.support.customtabs.trusted.DISPLAY_MODE" android:value="%s" />' % want
     if "trusted.DISPLAY_MODE" in xml:
-        # normalise whatever is there to the mode that was asked for
         xml = re.sub(r'(android:name="android\.support\.customtabs\.trusted\.DISPLAY_MODE"\s+android:value=")[^"]*(")', r"\g<1>%s\g<2>" % want, xml)
     else:
-        xml, n = re.subn(r'(<activity\b(?:(?!/>)[^>])*LauncherActivity(?:(?!/>)[^>])*>)', lambda m: m.group(1) + meta, xml, count=1)
-        if not n:
-            raise SystemExit("Could not add the fullscreen display mode: LauncherActivity not found in AndroidManifest.xml")
-    if standalone:
-        applied.append("fullscreen: status bar, navigation bar and any browser chrome hidden (native shell, no site verification needed)")
-    else:
-        applied.append("display=" + want)
-        notes.append("Fullscreen hides the address bar only while Android can verify your site (Digital Asset Links). WyBuild checks this after the build. Choose the Standalone app shell in WyBuild to remove that dependency.")
-
+        # Bubblewrap normally uses LauncherActivity. Fail rather than silently losing the TWA display mode.
+        m = re.search(r'<activity\b[^>]*android:name="[^"]*LauncherActivity"[^>]*>', xml)
+        if not m:
+            raise SystemExit("Could not add the TWA fullscreen display mode: LauncherActivity not found in AndroidManifest.xml")
+        xml = xml[:m.end()] + meta + xml[m.end():]
+    applied.append("display=" + want)
+    notes.append("TWA fullscreen depends on Digital Asset Links; Standalone fullscreen does not.")
+elif want and standalone:
+    applied.append("native immersive fullscreen requested; implemented by WyBuildActivity (not Chrome/TWA metadata)")
 # ---------------------------------------------------------------- 4. predictive back (Android 13+)
 if extras.get("predictiveBack"):
     gradle = ""
@@ -145,14 +148,20 @@ if deep_hosts:
             '            </intent-filter>\n' % (host, (' android:pathPrefix="%s"' % path) if path else "")
         )
     if filters:
-        start = re.search(r'<activity\b(?:(?!/>)[^>])*LauncherActivity(?:(?!/>)[^>])*>', xml)
+        # Insert intent-filters while Bubblewrap still exposes its launcher; the standalone
+        # transformation below then renames that same component to WyBuildActivity.
+        activity_name = "LauncherActivity"
+        start = re.search(r'<activity\b(?:(?!/>)[^>])*android:name="[^"]*' + re.escape(activity_name) + r'[^"]*"[^>]*>', xml)
         if not start:
-            raise SystemExit("Could not add link handling: LauncherActivity not found in AndroidManifest.xml")
+            # Bubblewrap can use the fully-qualified helper name in the TWA manifest.
+            start = re.search(r'<activity\b(?:(?!/>)[^>])*' + re.escape(activity_name) + r'(?:(?!/>)[^>])*>', xml)
+        if not start:
+            raise SystemExit("Could not add link handling: target launcher activity not found in AndroidManifest.xml")
         end = xml.find("</activity>", start.end())
         if end == -1:
-            raise SystemExit("Could not add link handling: LauncherActivity is not closed in AndroidManifest.xml")
-        line_start = xml.rfind("\n", 0, end) + 1  # insert on its own lines, keeping the closing tag indented
-        xml = xml[:line_start] + filters + xml[line_start:]
+            raise SystemExit("Could not add link handling: target launcher activity is not closed in AndroidManifest.xml")
+        # Insert inside the target activity, immediately before its closing tag.
+        xml = xml[:end] + filters + xml[end:]
         applied.append("links to %s open in the app (%d domain%s)" % (", ".join(h + p for h, p in deep_hosts), len(deep_hosts), "" if len(deep_hosts) == 1 else "s"))
     if any(h.startswith("*.") for h, _ in deep_hosts):
         notes.append("Wildcard domains open the app only after Android verifies the root domain: publish assetlinks.json on it too. Wildcards cannot be trusted origins, so list each subdomain you want without the address bar.")
@@ -206,6 +215,7 @@ if standalone:
         "startUrl": start_abs,
         "name": cfg.get("name", ""),
         "versionName": cfg.get("appVersion", ""),
+        "display": cfg.get("display", "standalone"),
         "fullscreen": cfg.get("display") in ("fullscreen", "fullscreen-sticky"),
         "notifications": bool(cfg.get("enableNotifications")),
         "themeColor": cfg.get("themeColor", "#FFFFFF"),
@@ -226,26 +236,58 @@ if standalone:
         '        <item name="android:windowDrawsSystemBarBackgrounds">true</item>\n'
         '    </style>\n</resources>\n' % (cfg.get("backgroundColor", "#FFFFFF"), cfg.get("themeColor", "#FFFFFF"), cfg.get("navigationColor") or cfg.get("themeColor", "#FFFFFF")))
 
-    # Point the launcher entry (MAIN/LAUNCHER, verified app links, shortcuts) at the native shell instead of Chrome's LauncherActivity.
-    m = re.search(r'<activity\b(?:(?!/>)[^>])*android:name="[^"]*LauncherActivity"(?:(?!/>)[^>])*>', xml)
-    if not m and "WyBuildActivity" in xml:
-        m = re.search(r'<activity\b(?:(?!/>)[^>])*android:name="[^"]*WyBuildActivity"(?:(?!/>)[^>])*>', xml)  # already converted: re-run is harmless
-    if not m:
-        raise SystemExit("Could not switch to the standalone shell: LauncherActivity not found in AndroidManifest.xml")
-    tag = m.group(0)
-    tag = re.sub(r'android:name="[^"]*LauncherActivity"', lambda _m: 'android:name="%s.WyBuildActivity"' % pkg_id, tag, count=1)
-    tag = set_attr(tag, "theme", "@style/WyBuildTheme")
-    tag = set_attr(tag, "configChanges", "orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|layoutDirection|fontScale")
-    tag = set_attr(tag, "windowSoftInputMode", "adjustResize")
-    tag = set_attr(tag, "hardwareAccelerated", "true")
-    xml = xml[:m.start()] + tag + xml[m.end():]
+    # Point EVERY Bubblewrap launcher/alias at the native shell. A TWA project can expose
+    # LauncherActivity through either a direct activity or an activity-alias; changing only one
+    # can silently leave Chrome's Custom Tab as the real launcher (the URL/share/three-dot bar).
+    launcher_hits = 0
+    # Direct activity declarations. Keep all intent-filters on the component so MAIN/LAUNCHER,
+    # VIEW and shortcuts continue to work, but replace the implementation class.
+    def replace_launcher_activity(m):
+        global launcher_hits
+        tag = m.group(0)
+        if "LauncherActivity" not in tag:
+            return tag
+        launcher_hits += 1
+        tag = re.sub(r'android:name="[^"]*LauncherActivity"', 'android:name="%s"' % native_name, tag, count=1)
+        tag = set_attr(tag, "theme", "@style/WyBuildTheme")
+        tag = set_attr(tag, "configChanges", "orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|layoutDirection|fontScale")
+        tag = set_attr(tag, "windowSoftInputMode", "adjustResize")
+        tag = set_attr(tag, "hardwareAccelerated", "true")
+        return tag
+    xml = re.sub(r'<activity\b[^>]*android:name="[^"]*LauncherActivity"[^>]*>', replace_launcher_activity, xml)
+
+    # Activity aliases do not themselves run code; redirect their targetClass to WyBuildActivity.
+    def replace_alias(m):
+        global launcher_hits
+        tag = m.group(0)
+        if "LauncherActivity" not in tag:
+            return tag
+        launcher_hits += 1
+        tag = re.sub(r'android:targetActivity="[^"]*LauncherActivity"', 'android:targetActivity="%s"' % native_name, tag, count=1)
+        return re.sub(r'android:targetClass="[^"]*LauncherActivity"', 'android:targetClass="%s"' % native_name, tag, count=1)
+    xml = re.sub(r'<activity-alias\b[^>]*>', replace_alias, xml)
+
+    # If Bubblewrap ever changes its manifest shape, add a native launcher rather than building a
+    # browser shell by accident. This is intentionally an error for a missing launcher only after
+    # we have tried both activity and alias forms.
+    if launcher_hits == 0:
+        raise SystemExit("Could not switch the standalone shell: Bubblewrap exposed no LauncherActivity activity or alias")
+
+    # Redirect any shortcut/alias targetClass references left in generated XML resources.
     xml_dir = os.path.join(proj, "app", "src", "main", "res", "xml")
     if os.path.isdir(xml_dir):
         for fn in os.listdir(xml_dir):
             fp = os.path.join(xml_dir, fn)
-            t = open(fp, encoding="utf8").read()
+            try:
+                t = open(fp, encoding="utf8").read()
+            except Exception:
+                continue
             if "LauncherActivity" in t:
-                open(fp, "w", encoding="utf8").write(re.sub(r'android:targetClass="[^"]*LauncherActivity"', 'android:targetClass="%s.WyBuildActivity"' % pkg_id, t))
+                t2 = re.sub(r'android:targetActivity="[^"]*LauncherActivity"', 'android:targetActivity="%s"' % native_name, t)
+                t2 = re.sub(r'android:targetClass="[^"]*LauncherActivity"', 'android:targetClass="%s"' % native_name, t2)
+                if t2 != t:
+                    open(fp, "w", encoding="utf8").write(t2)
+
     # Release builds shrink code: keep the shell and the methods the web page calls through window.WyBuildNative
     pg = os.path.join(proj, "app", "proguard-rules.pro")
     keep = "\n# WyBuild standalone shell\n-keep class %s.WyBuildActivity { *; }\n-keepclassmembers class * { @android.webkit.JavascriptInterface <methods>; }\n" % pkg_id
@@ -326,11 +368,12 @@ open(kit + "/wybuild-push.js", "w", encoding="utf8").write(r"""/*! WyBuild push 
   }
   var api = {
     isApp: inApp,
-    supported: function () { return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window; },
+    supported: function () { return !inApp() && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window; },
     permission: function () { return 'Notification' in window ? Notification.permission : 'unsupported'; },
     /** Ask permission (Android shows its own prompt in the app), subscribe, and send the subscription to your server. */
     enable: function (opts) {
       opts = opts || {};
+      if (inApp()) return Promise.reject(new Error('Remote Web Push is not supported by the standalone WebView shell. Use WyBuildPush.notify() for native notifications or the Trusted Web Activity shell for Web Push.'));
       if (!api.supported()) return Promise.reject(new Error('Push is not supported here'));
       if (!opts.vapidPublicKey) return Promise.reject(new Error('vapidPublicKey is required'));
       return navigator.serviceWorker.register(opts.serviceWorker || '/sw.js').then(function () {
@@ -409,8 +452,8 @@ open(kit + "/NATIVE-FEATURES.md", "w", encoding="utf8").write("""# Native featur
 
 Package: `%(pkg)s`   Site: `https://%(host)s`
 
-## Push notifications (native on Android)
-The app is a Trusted Web Activity with **notification delegation**: when your site shows a web push notification,
+## Push notifications
+For a **Trusted Web Activity**, the app uses **notification delegation**: when your site shows a web push notification,
 Chrome hands it to this app, and Android shows it as a native notification (your app icon and name, its own channel,
 tap opens the app). `POST_NOTIFICATIONS` is declared, so Android 13+ asks the user once, with the system prompt.
 

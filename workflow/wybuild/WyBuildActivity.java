@@ -30,6 +30,10 @@ import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
+import android.window.OnBackAnimationCallback;
+import android.window.OnBackInvokedCallback;
+import android.window.OnBackInvokedDispatcher;
+import android.window.BackEvent;
 import android.webkit.CookieManager;
 import android.webkit.GeolocationPermissions;
 import android.webkit.JavascriptInterface;
@@ -88,7 +92,7 @@ public class WyBuildActivity extends Activity {
     private String startUrl = "";
     private String appName = "";
     private String versionName = "";
-    private boolean fullscreen, notifications;
+    private boolean fullscreen, stickyFullscreen, notifications;
     private int themeColor = Color.WHITE, backgroundColor = Color.WHITE, navColor = Color.WHITE;
 
     private FrameLayout root;
@@ -103,6 +107,9 @@ public class WyBuildActivity extends Activity {
     private String[] pendingNotification;
     private String pendingDownloadUrl;
     private final Handler handler = new Handler();
+    private OnBackInvokedCallback backCallback;
+    private OnBackAnimationCallback backAnimationCallback;
+    private float backProgress;
 
     // ------------------------------------------------------------------ lifecycle
     @Override
@@ -121,7 +128,9 @@ public class WyBuildActivity extends Activity {
         root.addView(web, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(root);
         configureWebView();
+        installBackHandling();
         applySystemBars();
+        root.requestApplyInsets();
 
         if (state != null && web.restoreState(state) != null) {
             // restored the previous page and history
@@ -164,6 +173,7 @@ public class WyBuildActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        uninstallBackHandling();
         if (web != null) {
             root.removeView(web);
             web.stopLoading();
@@ -176,18 +186,16 @@ public class WyBuildActivity extends Activity {
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
-        if (hasFocus) applySystemBars();
+        if (hasFocus) { applySystemBars(); if (root != null) root.requestApplyInsets(); }
     }
 
     @Override
+    @SuppressWarnings("deprecation")
     public void onBackPressed() {
-        if (customView != null) {
-            hideCustomView();
-        } else if (web != null && web.canGoBack()) {
-            web.goBack();
-        } else {
-            super.onBackPressed();
-        }
+        // AndroidX is normally preferred for predictive back. This native shell intentionally
+        // stays dependency-light, so API 34+ uses the platform animation callback and older
+        // Android versions use the legacy callback.
+        if (Build.VERSION.SDK_INT < 33) handleBack();
     }
 
     // ------------------------------------------------------------------ configuration
@@ -204,6 +212,7 @@ public class WyBuildActivity extends Activity {
             appName = c.optString("name", "");
             versionName = c.optString("versionName", "");
             fullscreen = c.optBoolean("fullscreen", false);
+            stickyFullscreen = "fullscreen-sticky".equals(c.optString("display", ""));
             notifications = c.optBoolean("notifications", false);
             themeColor = color(c.optString("themeColor"), Color.WHITE);
             backgroundColor = color(c.optString("backgroundColor"), Color.WHITE);
@@ -269,23 +278,81 @@ public class WyBuildActivity extends Activity {
         v.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
             @Override
             public WindowInsets onApplyWindowInsets(View view, WindowInsets insets) {
-                int l, t, r, b;
+                int l = 0, t = 0, r = 0, b = 0;
                 if (Build.VERSION.SDK_INT >= 30) {
-                    android.graphics.Insets i = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.ime() | WindowInsets.Type.displayCutout());
-                    l = i.left; t = i.top; r = i.right; b = i.bottom;
+                    android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+                    android.graphics.Insets ime = insets.getInsets(WindowInsets.Type.ime());
+                    if (!fullscreen && customView == null) { l = bars.left; t = bars.top; r = bars.right; b = bars.bottom; }
+                    b = Math.max(b, ime.bottom);
                 } else {
-                    l = insets.getSystemWindowInsetLeft();
-                    t = insets.getSystemWindowInsetTop();
-                    r = insets.getSystemWindowInsetRight();
-                    b = insets.getSystemWindowInsetBottom();
+                    if (!fullscreen && customView == null) {
+                        l = insets.getSystemWindowInsetLeft();
+                        t = insets.getSystemWindowInsetTop();
+                        r = insets.getSystemWindowInsetRight();
+                        b = insets.getSystemWindowInsetBottom();
+                    }
                 }
                 view.setPadding(l, t, r, b);
-                return Build.VERSION.SDK_INT >= 30 ? WindowInsets.CONSUMED : insets.consumeSystemWindowInsets();
+                return Build.VERSION.SDK_INT >= 30 ? insets : insets.consumeSystemWindowInsets();
             }
         });
     }
 
-    /** Fullscreen hides the status and navigation bars (a swipe from the edge peeks at them, then they hide again). */
+    private void installBackHandling() {
+        if (Build.VERSION.SDK_INT >= 34) {
+            backAnimationCallback = new OnBackAnimationCallback() {
+                @Override public void onBackStarted(BackEvent event) { backProgress = 0f; }
+                @Override public void onBackProgressed(BackEvent event) {
+                    backProgress = Math.max(0f, Math.min(1f, event.getProgress()));
+                    if (root != null && customView == null) {
+                        float shift = root.getWidth() * 0.04f * backProgress;
+                        root.setTranslationX(event.getSwipeEdge() == BackEvent.EDGE_RIGHT ? shift : -shift);
+                    }
+                }
+                @Override public void onBackCancelled() {
+                    backProgress = 0f;
+                    if (root != null) root.animate().translationX(0f).setDuration(120).start();
+                }
+                @Override public void onBackInvoked() {
+                    if (root != null) root.setTranslationX(0f);
+                    handleBack();
+                }
+            };
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                    OnBackInvokedDispatcher.PRIORITY_DEFAULT, backAnimationCallback);
+        } else if (Build.VERSION.SDK_INT >= 33) {
+            backCallback = new OnBackInvokedCallback() {
+                @Override public void onBackInvoked() { handleBack(); }
+            };
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                    OnBackInvokedDispatcher.PRIORITY_DEFAULT, backCallback);
+        }
+    }
+
+    private void uninstallBackHandling() {
+        if (Build.VERSION.SDK_INT >= 33) {
+            if (backAnimationCallback != null) {
+                getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(backAnimationCallback);
+                backAnimationCallback = null;
+            }
+            if (backCallback != null) {
+                getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(backCallback);
+                backCallback = null;
+            }
+        }
+    }
+
+    private void handleBack() {
+        if (customView != null) {
+            hideCustomView();
+        } else if (web != null && web.canGoBack()) {
+            web.goBack();
+        } else {
+            finish();
+        }
+    }
+
+    /** Fullscreen hides both Android system bars; sticky mode uses the more persistent swipe behavior. */
     @SuppressWarnings("deprecation")
     private void applySystemBars() {
         Window w = getWindow();
@@ -308,7 +375,8 @@ public class WyBuildActivity extends Activity {
             int f = View.SYSTEM_UI_FLAG_LAYOUT_STABLE;
             if (hide) {
                 f |= View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                        | View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY;
+                        | View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION;
+                f |= stickyFullscreen ? View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY : View.SYSTEM_UI_FLAG_IMMERSIVE;
             } else {
                 if (Build.VERSION.SDK_INT >= 23 && lightStatus) f |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
                 if (Build.VERSION.SDK_INT >= 26 && lightNav) f |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
@@ -662,6 +730,7 @@ public class WyBuildActivity extends Activity {
         customCallback = null;
         web.setVisibility(View.VISIBLE);
         applySystemBars();
+        if (root != null) root.requestApplyInsets();
     }
 
     // ------------------------------------------------------------------ permissions
