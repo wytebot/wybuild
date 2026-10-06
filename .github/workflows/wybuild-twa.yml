@@ -1,4 +1,4 @@
-# wybuild-twa-workflow-version: 19
+# wybuild-twa-workflow-version: 21
 name: WyBuild TWA
 concurrency:
   group: wybuild-${{ github.workflow }}-${{ github.ref }}
@@ -33,6 +33,10 @@ on:
         description: 15 minutes on Free, 60 minutes on Pro
         type: string
         default: "15"
+      wb_ticket:
+        description: One-time build ticket issued by WyBuild. Builds started from the GitHub Actions tab have none and are refused.
+        type: string
+        default: ""
 
 jobs:
   twa:
@@ -50,6 +54,29 @@ jobs:
       WB_KEY_ALIAS_SECRET: ${{ secrets.WB_KEY_ALIAS }}
       WB_KEY_PASSWORD: ${{ secrets.WB_KEY_PASSWORD }}
     steps:
+      - name: Authorize with WyBuild
+        # Builds must be started from the WyBuild app: it checks the plan and quota, then hands this run a
+        # one-time ticket. Running the workflow by hand from the Actions tab has no ticket and stops here.
+        env:
+          WB_APP_URL: "https://wybuild-black.vercel.app"
+          WB_TICKET: ${{ inputs.wb_ticket }}
+        run: |
+          set -uo pipefail
+          case "$WB_APP_URL" in
+            https://*) ;;
+            *) echo "::error::This workflow was not installed by WyBuild (missing app URL). Open WyBuild > Web to Android > Update workflow."; exit 1 ;;
+          esac
+          jq -n --arg t "$WB_TICKET" --arg repo "$GITHUB_REPOSITORY" --arg run "$GITHUB_RUN_ID" --arg att "$GITHUB_RUN_ATTEMPT" --arg ev "$GITHUB_EVENT_NAME" \
+            '{ticket:$t, repo:$repo, runId:$run, runAttempt:$att, event:$ev}' > "$RUNNER_TEMP/wb-auth.json"
+          CODE="$(curl -sS --retry 3 --retry-delay 3 --retry-all-errors -m 30 -o "$RUNNER_TEMP/wb-auth-resp.json" -w '%{http_code}' \
+            -H 'Content-Type: application/json' --data @"$RUNNER_TEMP/wb-auth.json" "${WB_APP_URL%/}/api/build/authorize" || echo 000)"
+          if [ "$CODE" != "200" ]; then
+            MSG="$(jq -r '.error // empty' "$RUNNER_TEMP/wb-auth-resp.json" 2>/dev/null || true)"
+            echo "::error::WyBuild did not authorize this build (HTTP $CODE). ${MSG:-Start builds from the WyBuild app, not from the GitHub Actions tab.}"
+            exit 1
+          fi
+          echo "WyBuild authorized this build."
+
       - name: Checkout
         uses: actions/checkout@v5
 
