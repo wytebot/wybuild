@@ -30,7 +30,14 @@ const mono = icons.find(i => String(i.purpose || '').includes('monochrome'));
 if (!best?.src || size(best) < 192) throw new Error('The web manifest needs an app icon. Add a PNG icon of at least 192px; 512px is recommended.');
 
 const host = new URL(page.url || pageUrl).hostname.replace(/^www\./, '').toLowerCase();
-const generatedPackage = host.split('.').filter(Boolean).reverse().map(x => x.replace(/[^a-z0-9_]/g, '')).filter(Boolean).map(x => /^[a-z]/.test(x) ? x : `a${x}`).join('.');
+const HOST_PLATFORMS = ['vercel.app','netlify.app','pages.dev','github.io','web.app','firebaseapp.com','onrender.com','herokuapp.com','fly.dev','railway.app','surge.sh','workers.dev','glitch.me','repl.co','replit.app','azurewebsites.net','framer.app','webflow.io','wixsite.com','blogspot.com'];
+const cleanSeg = x => String(x).toLowerCase().replace(/[^a-z0-9]/g, '');
+const platform = HOST_PLATFORMS.find(p => host.endsWith('.' + p));
+// Free hosts: app.<name>.<platform> (Google Play accepts app.wybuildblack.vercel, not app.vercel.wybuildblack); owned domains: reverse-DNS
+const generatedPackage = (platform
+  ? ['app', cleanSeg(host.slice(0, -(platform.length + 1)).split('.').join('')), cleanSeg(platform.split('.')[0])]
+  : host.split('.').reverse().map(cleanSeg)
+).filter(Boolean).map(x => /^[a-z]/.test(x) ? x : `a${x}`).join('.');
 const packageId = raw.packageId || generatedPackage;
 if (!/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/.test(packageId)) throw new Error(`Could not generate a valid free package ID from ${host}.`);
 

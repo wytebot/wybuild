@@ -27,3 +27,9 @@
 - Failed renewal grace is five days and no longer extends forever on each retry.
 - Renewal transactions are recorded for webhook/status reconciliation.
 - Webhook signature verification prefers a raw request body when the runtime exposes it and keeps compatibility fallback behavior.
+
+## v23 build-ticket gate (TWA workflow v21)
+- Every dispatch from /api/twa-build carries a one-time `wb_ticket` input (kv `wb:ticket:<sha256>`, 3h TTL, bound to repo).
+- The workflow's first step POSTs it to `/api/build/authorize` (URL baked into the workflow at install time via `__WYBUILD_APP_URL__`). Missing/used/expired ticket, re-run (attempt > 1) or wrong repo => 403 and the run fails before any build step.
+- Runs refused this way are marked `wb:rejected:<repo>:<runId>` so refundIfNeeded never decrements a pending/in-flight slot for them.
+- Limit: the workflow file lives in the user's repo, so someone who edits it can delete the step. This stops the Run-workflow button and re-runs, not a determined fork. Stronger option: serve the signing key only from /authorize instead of copying it into repo secrets.

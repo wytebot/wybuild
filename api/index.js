@@ -9,7 +9,7 @@ import blake from 'blakejs';
 
 const TWA_WORKFLOW_FILE = 'wybuild-twa.yml';
 const TWA_WORKFLOW_PATH = `.github/workflows/${TWA_WORKFLOW_FILE}`;
-const TWA_WORKFLOW_VERSION = 19;
+const TWA_WORKFLOW_VERSION = 21;
 // every file committed to a repo for each workflow kind: [path in repo, path in ./workflow]
 const WORKFLOW_KINDS = {
   twa: {
@@ -642,6 +642,8 @@ function mapRun(run, repo) {
 async function refundIfNeeded(session, repo, run) {
   if ((run.triggering_actor?.login || '').toLowerCase() !== session.login.toLowerCase()) return;
   if (run.status !== 'completed') return;
+  // a run WyBuild refused at its authorize step (started by hand from GitHub) never reserved anything
+  if (await kv.get(`wb:rejected:${repo}:${run.id}`)) return;
   const ik = `wb:inflight:${session.login}`;
   const released = await kv.set(`wb:release-inflight:${repo}:${run.id}`, 1, { nx: true, ex: 60 * 60 * 24 * 3 });
   if (released) {
@@ -1016,6 +1018,36 @@ async function keystoresFor(session, repos) {
 
 /* ---------------------------- quota + TWA helpers --------------------------- */
 
+/* Build tickets: every dispatch carries a one-time ticket that the workflow's first step redeems at
+   /api/build/authorize. A run started by hand from the GitHub Actions tab has no valid ticket and is refused. */
+const ticketHash = (t) => crypto.createHash('sha256').update(String(t)).digest('hex');
+async function issueBuildTicket(session, repo, branch) {
+  const ticket = crypto.randomBytes(24).toString('hex');
+  await kv.set(`wb:ticket:${ticketHash(ticket)}`, { login: session.login, repo: String(repo).toLowerCase(), branch, at: Date.now() }, { ex: 60 * 60 * 3 });
+  return ticket;
+}
+async function redeemBuildTicket(b) {
+  const repo = String(b.repo || '').toLowerCase();
+  const runId = String(b.runId || '');
+  const attempt = String(b.runAttempt || '1');
+  const fail = async (msg) => {
+    if (attempt === '1' && /^[\w.-]+\/[\w.-]+$/.test(repo) && /^\d+$/.test(runId)) await kv.set(`wb:rejected:${repo}:${runId}`, 1, { ex: 60 * 60 * 24 * 120 }).catch(() => {});
+    throw new HttpError(403, msg, 'NOT_AUTHORIZED');
+  };
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !/^\d+$/.test(runId)) throw new HttpError(400, 'Invalid request');
+  const ticket = String(b.ticket || '');
+  if (!/^[0-9a-f]{48}$/.test(ticket)) return fail('No WyBuild ticket on this run. Start the build from the WyBuild app.');
+  if (b.event !== 'workflow_dispatch') return fail('Unsupported trigger.');
+  if (attempt !== '1') return fail('Re-running a build from GitHub is not allowed. Start a new build from the WyBuild app.');
+  const h = ticketHash(ticket);
+  const t = await kv.get(`wb:ticket:${h}`);
+  if (!t || t.repo !== repo) return fail('This build ticket is invalid or expired. Start the build from the WyBuild app.');
+  const claimed = await kv.set(`wb:ticket-used:${h}`, `${repo}:${runId}`, { nx: true, ex: 60 * 60 * 24 });
+  if (!claimed && (await kv.get(`wb:ticket-used:${h}`)) !== `${repo}:${runId}`) return fail('This build ticket was already used. Start a new build from the WyBuild app.');
+  await kv.set(`wb:run:${repo}:${runId}`, t.login, { ex: 60 * 60 * 24 * 120 }).catch(() => {});
+  return t;
+}
+
 // Checks successful-monthly + concurrent limits and reserves only concurrency.
 // A build is counted against the Free allowance only after GitHub reports a successful run.
 async function reserveBuildSlot(session, repo) {
@@ -1044,6 +1076,24 @@ async function reserveBuildSlot(session, repo) {
 }
 
 const HEX = /^#[0-9a-fA-F]{6}$/;
+// Default Android package id for a web address. Free hosting domains (x.vercel.app ...) become app.<name>.<platform>
+// (Google Play accepts app.wybuildblack.vercel, not app.vercel.wybuildblack); owned domains keep reverse-DNS (com.brand).
+const HOST_PLATFORMS = ['vercel.app', 'netlify.app', 'pages.dev', 'github.io', 'web.app', 'firebaseapp.com', 'onrender.com', 'herokuapp.com', 'fly.dev', 'railway.app', 'surge.sh', 'workers.dev', 'glitch.me', 'repl.co', 'replit.app', 'azurewebsites.net', 'framer.app', 'webflow.io', 'wixsite.com', 'blogspot.com'];
+function defaultPackageId(hostname) {
+  const clean = (x) => String(x).toLowerCase().replace(/[^a-z0-9]/g, '');
+  const seg = (x) => (/^[a-z]/.test(x) ? x : `a${x}`);
+  const host = String(hostname || '').replace(/^www\./, '').toLowerCase();
+  const plat = HOST_PLATFORMS.find((p) => host.endsWith('.' + p));
+  let segs;
+  if (plat) {
+    const name = clean(host.slice(0, -(plat.length + 1)).split('.').join(''));
+    segs = ['app', name, clean(plat.split('.')[0])];
+  } else {
+    segs = host.split('.').reverse().map(clean);
+  }
+  return segs.filter(Boolean).map(seg).join('.').slice(0, 140);
+}
+
 const PKG_RE = /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/;
 const PERM_RE = /^[A-Za-z][A-Za-z0-9_.]*$/;
 const str = (v, max = 200) => String(v ?? '').trim().slice(0, max);
@@ -1106,8 +1156,7 @@ function cleanLinkRules(list) {
 function cleanTwaConfig(c = {}) {
   const out = { webUrl: cleanHttps(c.webUrl, 'Web app URL', true) };
   const host = new URL(out.webUrl).hostname.replace(/^www\./, '').toLowerCase();
-  const parts = host.split('.').filter(Boolean).reverse().map((x) => x.replace(/[^a-z0-9_]/g, '')).filter(Boolean);
-  const generatedPackage = parts.map((x) => /^[a-z]/.test(x) ? x : `a${x}`).join('.').slice(0, 140);
+  const generatedPackage = defaultPackageId(host);
   if (c.packageId) {
     out.packageId = str(c.packageId, 150);
     if (!PKG_RE.test(out.packageId)) throw new HttpError(400, 'Package id must look like com.company.app (lowercase letters, digits, underscores)');
@@ -1382,7 +1431,7 @@ async function inspectSite(rawUrl) {
       monochromeIconUrl: mono ? abs(mono.src) : '',
       additionalTrustedOrigins: crossOrigin ? [startUrl.origin] : undefined,
       shortcuts: shortcuts.length ? shortcuts : undefined,
-      packageId: host.split('.').reverse().map((x) => x.replace(/[^a-z0-9]/gi, '').toLowerCase()).filter(Boolean).map((x) => (/^[a-z]/.test(x) ? x : `a${x}`)).join('.'),
+      packageId: defaultPackageId(host),
     },
     featureHints,
     checks,
@@ -1532,6 +1581,12 @@ async function route(req, res, path, query) {
     if (!cron || given !== cron) throw new HttpError(401, 'Unauthorized');
     const processed = await renewDueSubscriptions();
     return send(res, 200, { ok: true, processed });
+  }
+
+  /* called by the installed workflow's first step; authenticated by the one-time ticket, not a session */
+  if (path === 'build/authorize' && post) {
+    await redeemBuildTicket(bodyOf(req));
+    return send(res, 200, { ok: true });
   }
 
   /* everything below needs a session */
@@ -1747,7 +1802,8 @@ async function route(req, res, path, query) {
     }
     // commit the workflow first, helper scripts after it; the contents API needs one request per file
     for (const [repoPath, localPath] of k.files) {
-      const content = fs.readFileSync(new URL(`../workflow/${localPath}`, import.meta.url), 'utf8');
+      let content = fs.readFileSync(new URL(`../workflow/${localPath}`, import.meta.url), 'utf8');
+      if (repoPath === k.path) content = content.replaceAll('__WYBUILD_APP_URL__', appUrl(req));
       const ex = await gh(session, `/repos/${repo}/contents/${repoPath}?ref=${encodeURIComponent(target)}`);
       if (!ex.ok && ex.status !== 404) {
         await ghJson(session, `/repos/${repo}/contents/${repoPath}?ref=${encodeURIComponent(target)}`, undefined, `checking ${repoPath} on branch ${target}`);
@@ -1913,11 +1969,13 @@ async function route(req, res, path, query) {
 
     const reservation = await reserveBuildSlot(session, repo);
     const inflightKey = reservation.inflightKey;
+    const wbTicket = await issueBuildTicket(session, repo, branch);
     const r = await gh(session, `/repos/${repo}/actions/workflows/${TWA_WORKFLOW_FILE}/dispatches`, {
       method: 'POST',
       body: JSON.stringify({
         ref: branch,
         inputs: {
+          wb_ticket: wbTicket,
           twa_config: JSON.stringify(twa),
           output,
           use_keystore: String(useKeystore),
@@ -1928,6 +1986,7 @@ async function route(req, res, path, query) {
       }),
     });
     if (r.status !== 204) {
+      await kv.del(`wb:ticket:${ticketHash(wbTicket)}`).catch(() => {});
       await kv.decr(inflightKey);
       const e = await r.json().catch(() => ({}));
       const d = describeGithubFailure(r, e, `starting the build on branch ${branch}`, `POST /repos/${repo}/actions/workflows/<workflow>/dispatches`);
