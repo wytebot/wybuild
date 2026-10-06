@@ -458,6 +458,13 @@ public class WyBuildActivity extends Activity {
             if (hostOk && (r.p.isEmpty() || path.startsWith(r.p))) return r.m;
         }
         if (web && own.contains(h)) return "internal";
+        // Built-in default: GitHub sign-in / authorization pages must load in THIS WebView. If they open in
+        // the phone's browser, the session cookie is set there and the app never becomes signed in.
+        // Explicit rules above always win over this default.
+        if (web && "github.com".equals(h)
+                && (path.equals("/login") || path.startsWith("/login/") || path.startsWith("/sessions")
+                    || path.startsWith("/session") || path.startsWith("/settings/connections")
+                    || path.startsWith("/settings/installations") || path.startsWith("/apps/"))) return "internal";
         return null;
     }
 
