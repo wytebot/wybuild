@@ -99,7 +99,9 @@ const json = {
   signingKey: { path: `${out}/wybuild-release.jks`, alias: process.env.WB_KEY_ALIAS || process.env.WB_KEY_ALIAS_SECRET || 'wybuild' },
   shortcuts,
   webManifestUrl: manifestUrl,
-  fallbackType: 'customtabs',
+  // Standalone must never fall back to a browser Custom Tab. Bubblewrap accepts only
+  // 'customtabs' or 'webview'; use WebView as the safety fallback, while TWA keeps Custom Tabs.
+  fallbackType: raw.shell === 'twa' ? 'customtabs' : 'webview',
   features,
   minSdkVersion: Math.max(21, Number(raw.minSdkVersion) || 21),
   orientation,
