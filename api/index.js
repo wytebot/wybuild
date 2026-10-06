@@ -640,10 +640,11 @@ function mapRun(run, repo) {
 }
 
 async function refundIfNeeded(session, repo, run) {
+  const lrepo = String(repo).toLowerCase();
   if ((run.triggering_actor?.login || '').toLowerCase() !== session.login.toLowerCase()) return;
   if (run.status !== 'completed') return;
   // a run WyBuild refused at its authorize step (started by hand from GitHub) never reserved anything
-  if (await kv.get(`wb:rejected:${repo}:${run.id}`)) return;
+  if (await kv.get(`wb:rejected:${lrepo}:${run.id}`)) return;
   const ik = `wb:inflight:${session.login}`;
   const released = await kv.set(`wb:release-inflight:${repo}:${run.id}`, 1, { nx: true, ex: 60 * 60 * 24 * 3 });
   if (released) {

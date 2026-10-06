@@ -1,6 +1,6 @@
 import React from 'react';
 import { useApp } from '../context/AppContext';
-import { Home, Terminal, Wrench, KeyRound, CreditCard, Sparkles, Server, X, Smartphone, LogOut } from 'lucide-react';
+import { Home, Terminal, Wrench, KeyRound, CreditCard, Server, X, Smartphone, LogOut } from 'lucide-react';
 
 interface SidebarProps { open: boolean; onClose: () => void; }
 
@@ -30,7 +30,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, onClose }) => {
       </div>
       <nav className="flex-1 p-3 space-y-1">
         {items.map(([id,label,Icon]) => <button key={id} onClick={() => go(id, id === 'settings' ? 'keystore' : undefined)} className={`w-full min-h-11 px-3 rounded-lg flex items-center gap-3 text-sm ${currentTab===id ? 'bg-emerald-400/10 text-emerald-200 border border-emerald-400/15' : 'text-slate-400 hover:bg-white/[.03] hover:text-white'}`}><Icon className="w-4 h-4"/><span>{label}</span></button>)}
-        {!isPro && <button onClick={() => go('billing')} className="w-full mt-3 px-3 py-3 rounded-lg border border-emerald-400/15 bg-emerald-400/[.04] text-left"><div className="flex gap-2 items-center text-emerald-300 text-xs font-semibold"><Sparkles className="w-4 h-4"/>Pro automation</div><div className="text-[11px] text-slate-500 mt-1">Automate repetitive build work.</div></button>}
       </nav>
       <div className="m-3 p-3 rounded-lg bg-white/[.02] border border-white/[.05] text-[11px] text-slate-500">
         <div className="flex justify-between"><span>{lifetimeFree ? 'Free Forever' : isPro ? 'Pro' : 'Free builds'}</span><span className="text-slate-300 font-mono">{lifetimeFree || isPro ? 'Active' : `${Math.min(rateLimits.monthlyBuildsUsed, 5)}/5`}</span></div>

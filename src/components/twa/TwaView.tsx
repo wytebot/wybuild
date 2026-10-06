@@ -381,11 +381,6 @@ export const TwaView: React.FC = () => {
       </div>
     </section>}
 
-    <section className={card}>
-      <div className="flex items-center justify-between"><div><div className="text-white font-semibold">Pro automation</div><p className="text-slate-500 mt-1">Automatic rebuilds and other repo-change automation stay behind Pro. Manual builds remain available here.</p></div><span className="text-[10px] px-2 py-1 rounded bg-emerald-400/10 text-emerald-300">PRO</span></div>
-      {subscription.plan !== 'pro' && <button onClick={() => setCurrentTab('billing')} className="mt-2 text-emerald-300 underline">View Pro</button>}
-    </section>
-
     {needKey && <section className="rounded-2xl border border-amber-400/25 bg-amber-400/[.04] p-4 sm:p-5 space-y-3">
       <div className="flex items-center gap-2 text-amber-200 font-semibold"><KeyRound className="w-4 h-4"/>One-time signing key for {repo}</div>
       <p className="text-slate-400">No usable release keystore is available for this repo. {repoInspection?.signingProblem ? <span className="text-amber-200">The WyBuild default key was not used: {repoInspection.signingProblem} Fix it in Vercel and redeploy, and no repo will ask again. </span> : defaultKeystore ? '' : 'To skip this for every repo, set WB_KEYSTORE_* in the WyBuild Vercel environment. '}Or upload a key for this repo only; the build then starts automatically.</p>
