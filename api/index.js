@@ -9,7 +9,7 @@ import blake from 'blakejs';
 
 const TWA_WORKFLOW_FILE = 'wybuild-twa.yml';
 const TWA_WORKFLOW_PATH = `.github/workflows/${TWA_WORKFLOW_FILE}`;
-const TWA_WORKFLOW_VERSION = 17;
+const TWA_WORKFLOW_VERSION = 18;
 // every file committed to a repo for each workflow kind: [path in repo, path in ./workflow]
 const WORKFLOW_KINDS = {
   twa: {
