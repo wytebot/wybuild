@@ -1,4 +1,4 @@
-# wybuild-twa-workflow-version: 18
+# wybuild-twa-workflow-version: 19
 name: WyBuild TWA
 concurrency:
   group: wybuild-${{ github.workflow }}-${{ github.ref }}
