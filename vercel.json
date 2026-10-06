@@ -7,6 +7,10 @@
   },
   "rewrites": [
     {
+      "source": "/.well-known/assetlinks.json",
+      "destination": "/api/self-assetlinks"
+    },
+    {
       "source": "/api/:path*",
       "destination": "/api/index.js"
     }

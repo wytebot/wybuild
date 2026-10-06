@@ -276,6 +276,23 @@ export const TwaView: React.FC = () => {
       </div>}
       {repoInspection && defaultKeystore && signing === 'repo' && <button type="button" disabled={busy} onClick={useDefaultKey} className="mt-2 text-xs text-emerald-300 underline disabled:opacity-40">Replace this repo's key with the WyBuild default key</button>}
       {inspection && <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">{inspection.checks.map(c => <div key={c.id} className={`rounded-lg px-3 py-2 border ${c.level === 'error' ? 'border-rose-500/20 text-rose-300' : c.level === 'warn' ? 'border-amber-500/20 text-amber-200' : 'border-emerald-400/15 text-emerald-200'}`}><div className="flex gap-2 items-center">{c.level === 'ok' ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0"/> : <AlertTriangle className="w-3.5 h-3.5 shrink-0"/>}{c.msg}</div></div>)}</div>}
+      {inspection?.pwa && <div className="mt-3 rounded-xl border border-white/[.06] bg-black/20 p-3">
+        <div className="flex items-center justify-between gap-2"><div><b className="text-white">PWA credentials discovered</b><p className="text-[11px] text-slate-500 mt-0.5">WyBuild uses the live manifest as the primary source, then fills missing values from the repository.</p></div><span className={`px-2 py-1 rounded-full border text-[10px] ${inspection.pwa.ready ? 'border-emerald-400/20 text-emerald-300' : 'border-amber-400/20 text-amber-300'}`}>{inspection.pwa.ready ? 'PWA READY' : 'PWA NEEDS ATTENTION'}</span></div>
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-2 mt-3">
+          <div><span className="text-slate-600">Manifest</span><b className="block text-slate-200 truncate">{inspection.pwa.manifest.url ? new URL(inspection.pwa.manifest.url).pathname : 'Not found'}</b></div>
+          <div><span className="text-slate-600">Start URL</span><b className="block text-slate-200 font-mono truncate">{inspection.pwa.manifest.startUrl || '—'}</b></div>
+          <div><span className="text-slate-600">Scope</span><b className="block text-slate-200 font-mono truncate">{inspection.pwa.manifest.scope || '—'}</b></div>
+          <div><span className="text-slate-600">Service worker</span><b className={`block truncate ${inspection.pwa.serviceWorker.present ? 'text-emerald-300' : 'text-amber-300'}`}>{inspection.pwa.serviceWorker.present ? new URL(inspection.pwa.serviceWorker.url).pathname : 'Not detected'}</b></div>
+        </div>
+        <div className="flex flex-wrap gap-2 mt-2 text-[10px]">
+          <span className="px-2 py-1 rounded border border-white/[.06] text-slate-400">{inspection.pwa.manifest.display}</span>
+          <span className="px-2 py-1 rounded border border-white/[.06] text-slate-400">{inspection.pwa.manifest.orientation}</span>
+          <span className="px-2 py-1 rounded border border-white/[.06] text-slate-400">Icon {inspection.pwa.icons.primarySize ? `${inspection.pwa.icons.primarySize}px` : 'detected'}</span>
+          {inspection.pwa.icons.maskable && <span className="px-2 py-1 rounded border border-emerald-400/15 text-emerald-300">Maskable icon</span>}
+          {inspection.pwa.icons.monochrome && <span className="px-2 py-1 rounded border border-emerald-400/15 text-emerald-300">Monochrome icon</span>}
+          <span className={`px-2 py-1 rounded border ${inspection.assetlinks.present ? 'border-emerald-400/15 text-emerald-300' : 'border-white/[.06] text-slate-500'}`}>{inspection.assetlinks.present ? `Asset Links: ${inspection.assetlinks.packages.length} package${inspection.assetlinks.packages.length === 1 ? '' : 's'}` : 'Asset Links: not published'}</span>
+        </div>
+      </div>}
     </section>
 
     <section className={card}>

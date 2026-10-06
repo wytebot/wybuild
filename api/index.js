@@ -1305,12 +1305,50 @@ async function inspectSite(rawUrl) {
     } catch { return null; }
   }).filter((s) => s && s.name && s.url.startsWith('/'));
 
-  // 4) assetlinks (does the site already trust an Android package?)
+  // 4) service worker + asset links. A manifest alone is not enough to call a site a PWA.
+  const swLinks = links.filter((l) => /(^|\s)serviceworker(\s|$)/i.test(l.rel || '') && l.href).map((l) => abs(l.href));
+  const swCandidates = [...new Set([
+    ...swLinks,
+    finalUrl.origin + '/sw.js',
+    finalUrl.origin + '/service-worker.js',
+    finalUrl.origin + '/serviceworker.js',
+  ])].slice(0, 6);
+  let serviceWorker = { present: false, url: '', source: 'none', reachable: false };
+  for (const sw of swCandidates) {
+    const r = await fetchOk(sw, { maxBytes: 2_000_000 });
+    if (r && r.status >= 200 && r.status < 300 && /javascript|ecmascript|text\//i.test(r.contentType || '') && /(?:addEventListener|self\.|workbox|precache)/.test(r.text)) {
+      serviceWorker = { present: true, url: r.finalUrl, source: swLinks.includes(sw) ? 'html' : 'conventional-path', reachable: true };
+      break;
+    }
+  }
+
   let assetlinks = null;
   const al = await fetchOk(`${finalUrl.origin}/.well-known/assetlinks.json`, { json: true });
   try { assetlinks = al && al.status === 200 ? JSON.parse(al.text) : null; } catch { assetlinks = null; }
 
-  // 5) native features the site's own code appears to use (suggestions only; the user decides)
+  // 5) PWA readiness: distinguish detected metadata from the minimum signals needed for a dependable install/build.
+  const manifestScope = (() => { try { return manifest?.scope ? new URL(manifest.scope, base).href : new URL('./', manifestUrl || finalUrl.href).href; } catch { return ''; } })();
+  const startHref = startUrl?.href || finalUrl.href;
+  let scopeCoversStart = true;
+  try { scopeCoversStart = new URL(startHref).origin === new URL(manifestScope).origin && new URL(startHref).pathname.startsWith(new URL(manifestScope).pathname); } catch { scopeCoversStart = false; }
+  const hasName = !!String(manifest?.name || siteName).trim();
+  const hasShortName = !!String(manifest?.short_name || shortName).trim();
+  const hasStartUrl = !!manifest?.start_url;
+  const hasScope = !!manifest?.scope || !!manifestUrl;
+  const hasDisplay = ['standalone', 'fullscreen', 'minimal-ui'].includes(String(manifest?.display || '')) || Array.isArray(manifest?.display_override);
+  const hasGoodIcon = !!iconUrl && iconReachable && (iconPx === 0 || iconPx >= 192);
+  const pwaChecks = [
+    { id: 'pwa-name', ok: hasName, msg: hasName ? 'App name detected' : 'Manifest/page has no usable app name', level: 'error' },
+    { id: 'pwa-short-name', ok: hasShortName, msg: hasShortName ? 'Launcher name detected' : 'No usable short_name/launcher name detected', level: 'warn' },
+    { id: 'pwa-start-url', ok: hasStartUrl, msg: hasStartUrl ? `start_url detected: ${manifest.start_url}` : 'Manifest has no start_url', level: 'error' },
+    { id: 'pwa-scope', ok: hasScope && scopeCoversStart, msg: scopeCoversStart ? 'Manifest scope covers the start URL' : 'Manifest scope does not cover the start URL', level: 'error' },
+    { id: 'pwa-display', ok: hasDisplay, msg: hasDisplay ? `Display mode detected: ${display}` : 'No standalone/fullscreen display mode detected', level: 'warn' },
+    { id: 'pwa-icon', ok: hasGoodIcon, msg: hasGoodIcon ? `Install icon detected${iconPx ? ` (${iconPx}px)` : ''}` : 'No reachable 192px+ install icon detected', level: 'error' },
+    { id: 'pwa-service-worker', ok: serviceWorker.present, msg: serviceWorker.present ? `Service worker detected at ${new URL(serviceWorker.url).pathname}` : 'No reachable service worker detected', level: 'warn' },
+  ];
+  const pwaReady = !!manifest && pwaChecks.filter((x) => x.level === 'error').every((x) => x.ok);
+
+  // 6) native features the site's own code appears to use (suggestions only; the user decides)
   const scriptUrls = [...new Set([
     ...htmlTags(html, 'script').map((s) => s.src),
     ...links.filter((l) => /modulepreload|preload/.test(l.rel || '') && /\.m?js(\?|$)/.test(l.href || '')).map((l) => l.href),
@@ -1324,7 +1362,7 @@ async function inspectSite(rawUrl) {
     /getUserMedia/.test(code) && /audio\s*:/.test(code) && 'microphone',
     /navigator\s*\.\s*vibrate/.test(code) && 'vibration',
   ].filter(Boolean);
-  add('service-worker', swSeen, swSeen ? 'Service worker registered (offline support)' : 'No service worker found: the app needs a network connection to open', 'warn');
+  add('service-worker', serviceWorker.present || swSeen, serviceWorker.present ? `Service worker detected at ${new URL(serviceWorker.url).pathname}` : (swSeen ? 'Service-worker registration code detected, but the conventional worker URL could not be fetched' : 'No service worker found: the app needs a network connection to open'), 'warn');
   if (featureHints.length) add('feature-hints', true, `Your site's code uses: ${featureHints.join(', ')}. Enable the matching Native features below.`);
 
   const host = finalUrl.hostname.replace(/^www\./, '');
@@ -1348,7 +1386,14 @@ async function inspectSite(rawUrl) {
     },
     featureHints,
     checks,
-    assetlinks: assetlinks ? { present: true, packages: assetlinks.map((e) => e?.target?.package_name).filter(Boolean) } : { present: false, packages: [] },
+    assetlinks: assetlinks ? { present: true, packages: Array.isArray(assetlinks) ? assetlinks.map((e) => e?.target?.package_name).filter(Boolean) : [] } : { present: false, packages: [] },
+    pwa: {
+      ready: pwaReady,
+      manifest: { url: manifestUrl || '', id: String(manifest?.id || '').slice(0, 300), scope: manifestScope ? new URL(manifestScope).pathname : '/', startUrl: manifest?.start_url ? String(manifest.start_url).slice(0, 300) : '/', display, orientation, name: String(siteName).slice(0, 50), shortName: String(shortName).slice(0, 30) },
+      serviceWorker,
+      icons: { primary: iconUrl, primarySize: iconPx || null, maskable: maskable ? abs(maskable.src) : '', monochrome: mono ? abs(mono.src) : '' },
+      checks: pwaChecks,
+    },
   };
 }
 
@@ -1599,15 +1644,17 @@ async function route(req, res, path, query) {
       const f = await r.json();
       return Buffer.from(f.content || '', 'base64').toString('utf8');
     };
-    const MANIFEST_PATHS = ['public/manifest.webmanifest', 'public/manifest.json', 'manifest.webmanifest', 'manifest.json', 'static/manifest.json', 'src/manifest.json', 'docs/manifest.json'];
+    const MANIFEST_PATHS = ['public/manifest.webmanifest', 'public/manifest.json', 'manifest.webmanifest', 'manifest.json', 'site.webmanifest', 'static/manifest.json', 'src/manifest.json', 'docs/manifest.json'];
+    const SW_PATHS = ['public/sw.js', 'public/service-worker.js', 'sw.js', 'service-worker.js', 'src/sw.js', 'src/service-worker.js', 'static/sw.js', 'docs/sw.js'];
     const CNAME_PATHS = ['CNAME', 'public/CNAME', 'docs/CNAME', 'static/CNAME'];
-    const [packageJson, gradle, manifest, twaWf, latest, signing, repoManifestFiles, cnameFiles] = await Promise.all([
+    const [packageJson, gradle, manifest, twaWf, latest, signing, repoManifestFiles, cnameFiles, repoSwFiles] = await Promise.all([
       readFile('package.json'), readFile('android/app/build.gradle'),
       readFile('android/app/src/main/AndroidManifest.xml'), readFile(WORKFLOW_KINDS.twa.path),
       ghJson(session, `/repos/${repo}/commits?sha=${encodeURIComponent(branch)}&per_page=1`).catch(() => []),
       signingStatus(session, repo),
       Promise.all(MANIFEST_PATHS.map((f) => readFile(f).catch(() => ''))),
       Promise.all(CNAME_PATHS.map((f) => readFile(f).catch(() => ''))),
+      Promise.all(SW_PATHS.map((f) => readFile(f).catch(() => ''))),
     ]);
     let framework = 'unknown';
     if (packageJson) {
@@ -1644,16 +1691,24 @@ async function route(req, res, path, query) {
           display: ['fullscreen', 'minimal-ui', 'standalone'].includes(j.display) ? j.display : '',
           orientation: /portrait/.test(j.orientation || '') ? 'portrait' : /landscape/.test(j.orientation || '') ? 'landscape' : '',
           startUrl: typeof j.start_url === 'string' && j.start_url.startsWith('/') ? j.start_url.slice(0, 300) : '',
+          manifestUrl: MANIFEST_PATHS[i],
+          id: typeof j.id === 'string' ? j.id.slice(0, 300) : '',
+          scope: typeof j.scope === 'string' && j.scope.startsWith('/') ? j.scope.slice(0, 300) : '',
+          iconCount: Array.isArray(j.icons) ? j.icons.length : 0,
+          hasMaskableIcon: Array.isArray(j.icons) && j.icons.some((x) => /maskable/i.test(String(x?.purpose || ''))),
+          hasMonochromeIcon: Array.isArray(j.icons) && j.icons.some((x) => /monochrome/i.test(String(x?.purpose || ''))),
         };
       } catch { /* not a manifest */ }
     }
-    if (!repoWeb && (pkgMeta.name || info.description)) repoWeb = { source: 'package.json', name: String(pkgMeta.displayName || info.description || '').slice(0, 50), launcherName: '', themeColor: '', backgroundColor: '', display: '', orientation: '', startUrl: '' };
+    if (!repoWeb && (pkgMeta.name || info.description)) repoWeb = { source: 'package.json', name: String(pkgMeta.displayName || info.description || '').slice(0, 50), launcherName: '', themeColor: '', backgroundColor: '', display: '', orientation: '', startUrl: '', manifestUrl: '', id: '', scope: '', iconCount: 0, hasMaskableIcon: false, hasMonochromeIcon: false };
+    const repoServiceWorker = SW_PATHS.find((_, i) => String(repoSwFiles[i] || '').trim());
+    const pwaSource = repoWeb ? { ...repoWeb, serviceWorker: repoServiceWorker || '' } : (repoServiceWorker ? { source: repoServiceWorker, name: '', launcherName: '', themeColor: '', backgroundColor: '', display: '', orientation: '', startUrl: '', manifestUrl: '', id: '', scope: '', iconCount: 0, hasMaskableIcon: false, hasMonochromeIcon: false, serviceWorker: repoServiceWorker } : undefined);
     if (!homepage && info.has_pages) homepage = /\.github\.io$/i.test(info.name) ? `https://${info.name.toLowerCase()}/` : `https://${info.owner.login.toLowerCase()}.github.io/${info.name}/`;
     return send(res, 200, {
       repo, name: info.name, defaultBranch: branch, framework, flutterVersion: 'n/a', packageId, latestCommitSha,
       workflowInstalled: workflows.twa.installed, workflowUpToDate: workflows.twa.upToDate, workflows,
       signing, signingProblem: signing === 'none' ? (defaultKeystoreState().problem || undefined) : undefined, homepage: homepage.startsWith('https://') ? homepage : '',
-      canPush: !!info.permissions?.push, private: !!info.private, web: repoWeb, homepageFrom: info.homepage ? 'github' : homepage ? 'repo' : '',
+      canPush: !!info.permissions?.push, private: !!info.private, web: pwaSource, pwa: { manifestFound: !!repoWeb && repoWeb.source !== 'package.json', manifestPath: repoWeb?.manifestUrl || '', serviceWorkerFound: !!repoServiceWorker, serviceWorkerPath: repoServiceWorker || '', maskableIcon: !!repoWeb?.hasMaskableIcon, monochromeIcon: !!repoWeb?.hasMonochromeIcon }, homepageFrom: info.homepage ? 'github' : homepage ? 'repo' : '',
     });
   }
 
@@ -1788,6 +1843,22 @@ async function route(req, res, path, query) {
 
   if (path === 'twa/inspect' && post) {
     return send(res, 200, await inspectSite(bodyOf(req).url));
+  }
+
+  // WyBuild can publish its own Digital Asset Links document when its production
+  // Android signing identity is configured. Never emit a fake fingerprint.
+  if (path === 'self-assetlinks' && m === 'GET') {
+    const packageId = String(env('WYBUILD_ANDROID_PACKAGE_ID') || '').trim();
+    const rawFingerprints = String(env('WYBUILD_ANDROID_SHA256') || '').split(/[\s,;]+/).map((x) => x.trim()).filter(Boolean);
+    const playFingerprints = String(env('WYBUILD_PLAY_SIGNING_SHA256') || '').split(/[\s,;]+/).map((x) => x.trim()).filter(Boolean);
+    const fingerprints = [...new Set([...rawFingerprints, ...playFingerprints])].map((x) => x.toUpperCase().replace(/-/g, ':'));
+    if (!packageId || !fingerprints.length || fingerprints.some((x) => !/^([0-9A-F]{2}:?){32}$/.test(x))) {
+      return send(res, 503, { error: 'WyBuild Digital Asset Links is not configured. Set WYBUILD_ANDROID_PACKAGE_ID and valid WYBUILD_ANDROID_SHA256 (SHA-256 fingerprints).', code: 'ASSETLINKS_NOT_CONFIGURED' });
+    }
+    return send(res, 200, fingerprints.map((sha256_cert_fingerprints) => ({
+      relation: ['delegate_permission/common.handle_all_urls'],
+      target: { namespace: 'android_app', package_name: packageId, sha256_cert_fingerprints: [sha256_cert_fingerprints] },
+    })));
   }
 
   if (path === 'twa/assetlinks' && post) {

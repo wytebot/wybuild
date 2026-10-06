@@ -29,3 +29,22 @@ Internal rules are baked into the APK/AAB manifest by `workflow/wybuild/twa-nati
 
 ## PWA
 WyBuild itself is installable: `public/manifest.webmanifest`, icons (192, 512, maskable 512, monochrome 512, Apple touch 180), `public/sw.js` and `public/offline.html`. The service worker is network-first for pages (a new deploy is never hidden behind a stale cache), cache-first only for content-hashed `/assets/*`, and never touches `/api/*`. Bump `VERSION` in `sw.js` to drop all caches. `vercel.json` serves `sw.js` uncached and the manifest with the right content type.
+
+## Automatic PWA discovery
+
+Web → Android now performs a two-source PWA discovery pass:
+
+1. **Live site is authoritative** when the repository has a published HTTPS address. WyBuild reads the Web App Manifest, stable app ID, name/short name, start URL, scope, display mode, orientation, primary/maskable/monochrome icons, service worker and existing Digital Asset Links.
+2. **Repository metadata is the fallback** when the live site is missing a value. WyBuild checks common manifest locations plus conventional service-worker files and uses the repository data only to fill blanks.
+3. WyBuild reports **PWA READY** only when the manifest, usable identity, start URL/scope and install icon are present. A missing service worker is reported separately instead of being incorrectly treated as a manifest failure.
+4. The generated package ID is still a free Android identity derived from the HTTPS hostname unless the developer supplies one.
+
+### WyBuild's own PWA/TWA readiness
+
+WyBuild ships its own manifest, install icons, service worker and offline page. It also exposes a guarded `/.well-known/assetlinks.json` endpoint. To make the deployed WyBuild site a verified TWA, configure the exact production Android signing identity in Vercel:
+
+- `WYBUILD_ANDROID_PACKAGE_ID`
+- `WYBUILD_ANDROID_SHA256`
+- optional `WYBUILD_PLAY_SIGNING_SHA256`
+
+The endpoint returns HTTP 503 until a real package ID and valid SHA-256 certificate fingerprint are configured; WyBuild never generates a placeholder fingerprint.

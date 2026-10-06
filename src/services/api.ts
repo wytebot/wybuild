@@ -55,6 +55,13 @@ export interface TwaInspection {
   featureHints?: ('notifications' | 'location' | 'camera' | 'microphone' | 'vibration')[];
   checks: { id: string; ok: boolean; level: 'ok' | 'warn' | 'error'; msg: string }[];
   assetlinks: { present: boolean; packages: string[] };
+  pwa: {
+    ready: boolean;
+    manifest: { url: string; id: string; scope: string; startUrl: string; display: string; orientation: string; name: string; shortName: string };
+    serviceWorker: { present: boolean; url: string; source: string; reachable: boolean };
+    icons: { primary: string; primarySize: number | null; maskable: string; monochrome: string };
+    checks: { id: string; ok: boolean; level: 'ok' | 'warn' | 'error'; msg: string }[];
+  };
 }
 
 
@@ -74,7 +81,8 @@ export interface RepoInspection {
   signingProblem?: string;
   homepage?: string;
   /** values read from a web manifest / package.json inside the repo; used only to fill blanks the live site does not publish */
-  web?: { source: string; name: string; launcherName: string; themeColor: string; backgroundColor: string; display: string; orientation: string; startUrl: string };
+  web?: { source: string; name: string; launcherName: string; themeColor: string; backgroundColor: string; display: string; orientation: string; startUrl: string; manifestUrl?: string; id?: string; scope?: string; iconCount?: number; hasMaskableIcon?: boolean; hasMonochromeIcon?: boolean; serviceWorker?: string };
+  pwa?: { manifestFound: boolean; manifestPath: string; serviceWorkerFound: boolean; serviceWorkerPath: string; maskableIcon: boolean; monochromeIcon: boolean };
   canPush?: boolean;
   private?: boolean;
   latestCommitSha?: string;
