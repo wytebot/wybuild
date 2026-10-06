@@ -1,4 +1,4 @@
-# wybuild-twa-workflow-version: 15
+# wybuild-twa-workflow-version: 17
 name: WyBuild TWA
 concurrency:
   group: wybuild-${{ github.workflow }}-${{ github.ref }}
@@ -203,13 +203,14 @@ jobs:
             echo "Running wybuild/twa-patch.sh"; (cd "$P" && bash "$GITHUB_WORKSPACE/wybuild/twa-patch.sh")
           fi
 
-      - name: Build with Bubblewrap TWA only
+      - name: Build signed APK / AAB (Bubblewrap CLI + Gradle; standalone shell or TWA per settings)
         env:
           CI: "true"
           BUBBLEWRAP_NO_PROMPT: "1"
         run: |
           set -euo pipefail
           P="$WB_OUT/project"; DIST="$WB_OUT/dist"; mkdir -p "$DIST"
+          echo "App shell for this build: ${WYBUILD_SHELL:-standalone}"
           cd "$P"
           # Bubblewrap build reads the manifest from the project folder; make sure it is there and matches the checksum
           cp -f "$WB_OUT/twa-manifest.json" "$P/twa-manifest.json"
