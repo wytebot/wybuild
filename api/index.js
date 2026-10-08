@@ -9,7 +9,7 @@ import blake from 'blakejs';
 
 const TWA_WORKFLOW_FILE = 'wybuild-twa.yml';
 const TWA_WORKFLOW_PATH = `.github/workflows/${TWA_WORKFLOW_FILE}`;
-const TWA_WORKFLOW_VERSION = 21;
+const TWA_WORKFLOW_VERSION = 22;
 // every file committed to a repo for each workflow kind: [path in repo, path in ./workflow]
 const WORKFLOW_KINDS = {
   twa: {
@@ -23,6 +23,7 @@ const WORKFLOW_KINDS = {
       ['.github/wybuild/twa-verify.sh', 'wybuild/twa-verify.sh'],
       ['.github/wybuild/twa-native.py', 'wybuild/twa-native.py'],
       ['.github/wybuild/WyBuildActivity.java', 'wybuild/WyBuildActivity.java'],
+      ['.github/wybuild/WyBuildReminderReceiver.java', 'wybuild/WyBuildReminderReceiver.java'],
     ],
   },
 };
@@ -690,7 +691,7 @@ const DIAGNOSES = [
   { re: /exceeded the maximum execution time|timed out|The operation was canceled|timeout.*bubblewrap|Terminated/i, category: 'twa_config', title: 'Build hung and was stopped (timeout)', fix: 'The failed step ran out of time, most often while signing. Reinstall the TWA workflow (v5 closes stdin and times out with a clear error) and verify the keystore alias/passwords.' },
   { re: /Cannot open the keystore|java\.io\.EOFException|keystore was tampered|Keystore was tampered|password was incorrect|Cannot recover key|UnrecoverableKeyException|Invalid keystore format/i, category: 'keystore', title: 'Release keystore is invalid, truncated, or credentials are wrong', fix: 'WyBuild decoded the secret but Java could not read it. Replace WB_KEYSTORE_BASE64 with the complete raw .jks/.p12 Base64, then verify the exact case-sensitive alias and store password. WyBuild now checks the decoded file before Bubblewrap.' },
   { re: /alias.*does not exist|Alias <.*> does not exist/i, category: 'keystore', title: 'Key alias not found in keystore', fix: 'The alias saved in WB_KEY_ALIAS is not in your keystore. Run keytool -list -keystore <file> locally and re-upload with the exact alias.' },
-  { re: /\.github\/wybuild\/[\w.-]+ is missing|cp: cannot stat '?[^\n]*\.github\/wybuild|Cannot find module[^\n]*\.github\/wybuild/i, category: 'twa_config', title: 'Workflow helper files are missing in the repo', fix: 'Use Update workflow so .github/wybuild/twa-prepare.mjs, twa-generate.mjs, twa-verify.sh, twa-native.py and WyBuildActivity.java are committed alongside the workflow.' },
+  { re: /\.github\/wybuild\/[\w.-]+ is missing|cp: cannot stat '?[^\n]*\.github\/wybuild|Cannot find module[^\n]*\.github\/wybuild/i, category: 'twa_config', title: 'Workflow helper files are missing in the repo', fix: 'Use Update workflow so .github/wybuild/twa-prepare.mjs, twa-generate.mjs, twa-verify.sh, twa-native.py, WyBuildActivity.java and WyBuildReminderReceiver.java are committed alongside the workflow.' },
   { re: /unbound variable/i, category: 'twa_config', title: 'Workflow script used an undefined variable', fix: 'Your repo has an outdated WyBuild workflow. Use Update workflow and re-run.' },
   { re: /unknown option|too many arguments|error: missing required/i, category: 'twa_config', title: 'Bubblewrap command-line option rejected', fix: 'Your repo has an outdated WyBuild TWA workflow that passes options Bubblewrap does not accept. Use Update workflow.' },
   { re: /No such file or directory|ENOENT[^\n]*/i, category: 'twa_config', title: 'A required file was not found', fix: 'The error line names the missing path. If it is under .github/wybuild or twa-manifest.json, update the workflow; if it is under android/ or pubspec.yaml, check the branch contents.' },
@@ -1096,6 +1097,7 @@ function defaultPackageId(hostname) {
 }
 
 const PKG_RE = /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/;
+const NATIVE_OPTIN = ['biometric', 'sharetarget', 'reminders'];
 const PERM_RE = /^[A-Za-z][A-Za-z0-9_.]*$/;
 const str = (v, max = 200) => String(v ?? '').trim().slice(0, max);
 
@@ -1206,6 +1208,7 @@ function cleanTwaConfig(c = {}) {
   }
   out.additionalTrustedOrigins = (Array.isArray(c.additionalTrustedOrigins) ? c.additionalTrustedOrigins : []).slice(0, 20).map((o) => str(o, 200)).filter(Boolean);
   out.linkRules = cleanLinkRules(c.linkRules);
+  out.nativeFeatures = [...new Set((Array.isArray(c.nativeFeatures) ? c.nativeFeatures : []).map((f) => str(f, 30)).filter((f) => NATIVE_OPTIN.includes(f)))];
   out.androidPermissions = (Array.isArray(c.androidPermissions) ? c.androidPermissions : []).slice(0, 30).map((p) => str(p, 120)).filter(Boolean);
   if (out.androidPermissions.some((p) => !PERM_RE.test(p))) throw new HttpError(400, 'Invalid Android permission name');
   out.shortcuts = (Array.isArray(c.shortcuts) ? c.shortcuts : []).slice(0, 4).map((s) => ({ name: str(s?.name, 40), shortName: str(s?.shortName || s?.name, 12), url: str(s?.url, 300) })).filter((s) => s.name && s.url.startsWith('/'));

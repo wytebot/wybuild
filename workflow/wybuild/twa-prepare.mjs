@@ -126,6 +126,8 @@ const extras = {
   shell: raw.shell === 'twa' ? 'twa' : 'standalone',
   linkRules,
   predictiveBack: raw.predictiveBack === true,
+  // opt-in native bridge features (the always-on set is defined in twa-native.py)
+  nativeFeatures: (Array.isArray(raw.nativeFeatures) ? raw.nativeFeatures : []).filter(f => ['biometric', 'sharetarget', 'reminders'].includes(f)),
   playSigningFingerprint: /^([0-9A-Fa-f]{2}:?){32}$/.test(String(raw.playSigningFingerprint || '')) ? String(raw.playSigningFingerprint).replace(/:/g, '').toUpperCase().match(/.{2}/g).join(':') : '',
 };
 await fs.writeFile(`${out}/wybuild-extras.json`, JSON.stringify(extras, null, 2));

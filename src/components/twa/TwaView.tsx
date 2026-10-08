@@ -11,7 +11,7 @@ const EMPTY: TwaConfig = {
   themeColor: '#0f172a', backgroundColor: '#ffffff', startUrl: '/', iconUrl: '', maskableIconUrl: '', monochromeIconUrl: '',
   display: 'standalone', orientation: 'default', fallbackType: 'customtabs', shell: 'standalone', enableNotifications: false,
   enableSiteSettingsShortcut: true, locationDelegation: false, playBilling: false, additionalTrustedOrigins: [], linkRules: [],
-  androidPermissions: [], shortcuts: [], minSdkVersion: 21, expectedFingerprint: '', predictiveBack: false, playSigningFingerprint: '', output: 'both', storeReady: true, useKeystore: true,
+  androidPermissions: [], shortcuts: [], minSdkVersion: 21, expectedFingerprint: '', predictiveBack: false, nativeFeatures: [], playSigningFingerprint: '', output: 'both', storeReady: true, useKeystore: true,
 };
 
 const FEATURES = [
@@ -20,6 +20,29 @@ const FEATURES = [
   { id: 'camera', label: 'Camera', hint: 'Site can use the camera (declared as optional so Play still lists the app on every phone)', permission: 'CAMERA' },
   { id: 'microphone', label: 'Microphone', hint: 'Allow the site to request the microphone', permission: 'RECORD_AUDIO' },
   { id: 'vibration', label: 'Vibration', hint: 'Allow vibration from supported web APIs', permission: 'VIBRATE' },
+] as const;
+
+// Native bridge (standalone app shell). ALWAYS = in every build, no permission needed. OPT_IN = adds a permission or manifest entry, so it is off until ticked.
+const NATIVE_ALWAYS = [
+  { id: 'clipboard', label: 'Clipboard', hint: 'Copy and paste through Android' },
+  { id: 'haptics', label: 'Haptic feedback', hint: 'Tick, click, success and error vibrations (no permission)' },
+  { id: 'deviceinfo', label: 'Device & network info', hint: 'Model, Android version, dark mode, live online/offline events' },
+  { id: 'lifecycle', label: 'App lifecycle events', hint: 'Know when the app goes to the background or returns' },
+  { id: 'keepawake', label: 'Keep screen awake', hint: 'For timers, readers and navigation screens' },
+  { id: 'orientation', label: 'Orientation lock', hint: 'Lock portrait or landscape from a page' },
+  { id: 'securescreen', label: 'Secure screen', hint: 'Block screenshots and the recents preview on private pages' },
+  { id: 'savefile', label: 'Save files', hint: 'Write generated files and blobs into Downloads' },
+  { id: 'speech', label: 'Voice input & read aloud', hint: 'System speech recognition and text-to-speech' },
+  { id: 'contacts', label: 'Contact picker', hint: 'The user taps one contact; no contacts permission' },
+  { id: 'calendar', label: 'Add to calendar', hint: "Opens the phone's calendar with the event filled in" },
+  { id: 'shortcuts', label: 'Launcher shortcuts', hint: 'Long-press the app icon to jump to pages you choose' },
+  { id: 'rate', label: 'Rate app & settings', hint: 'Open the store listing or Android app settings' },
+] as const;
+
+const NATIVE_OPT_IN = [
+  { id: 'biometric', label: 'Biometric unlock', hint: 'Fingerprint / face / device PIN gate for private areas (adds USE_BIOMETRIC). Local unlock only.' },
+  { id: 'sharetarget', label: 'Share target', hint: 'Your app appears in the Android Share sheet and receives shared text' },
+  { id: 'reminders', label: 'Local reminders', hint: 'Schedule notifications from your site, even when the app is closed (adds POST_NOTIFICATIONS)' },
 ] as const;
 
 const SCREEN_MODES = [
@@ -313,6 +336,17 @@ export const TwaView: React.FC = () => {
       <p className="text-slate-500 mt-1">Tick only what your website needs. WyBuild adds the required Android permissions/configuration.</p>
       <div className="grid sm:grid-cols-2 gap-2 mt-3">{FEATURES.map(f => { const checked = featureState(cfg, f.id); return <button key={f.id} type="button" onClick={() => toggleFeature(f.id)} className={`text-left rounded-xl border p-3 flex gap-3 ${checked ? 'border-emerald-400/30 bg-emerald-400/[.06]' : 'border-white/[.06] bg-black/20'}`}><span className={`w-5 h-5 rounded border flex items-center justify-center shrink-0 ${checked ? 'bg-emerald-400 border-emerald-400 text-black' : 'border-slate-600'}`}>{checked && <Check className="w-3.5 h-3.5"/>}</span><span><b className="text-slate-200 block">{f.label}</b><span className="text-[11px] text-slate-500">{f.hint}</span></span></button>; })}</div>
       {(() => { const hints = (inspection?.featureHints || []).filter(id => !featureState(cfg, id)); return hints.length > 0 && <div className="mt-3 p-3 rounded-xl border border-emerald-400/20 bg-emerald-400/[.04] text-emerald-200 flex flex-wrap items-center gap-2"><span>Your site's code appears to use:</span>{hints.map(id => <button key={id} type="button" onClick={() => toggleFeature(id)} className="px-2.5 py-1 rounded-full border border-emerald-400/30 hover:bg-emerald-400/10">+ {FEATURES.find(f => f.id === id)?.label}</button>)}</div>; })()}
+    </section>
+
+    <section className={card}>
+      <div className="flex items-center justify-between gap-2"><div className="flex items-center gap-2 text-white font-semibold"><Smartphone className="w-4 h-4 text-emerald-300"/>Native app features</div><span className="text-[10px] text-slate-500">{(cfg.shell || 'standalone') === 'twa' ? 'STANDALONE ONLY' : `${NATIVE_ALWAYS.length + (cfg.nativeFeatures || []).length} ACTIVE`}</span></div>
+      <p className="text-slate-500 mt-1">Real Android features your site calls through <span className="font-mono text-slate-400">wybuild-native.js</span> (shipped with every build). Stores review the app's behaviour, so use these on screens people actually use and tick only what you need.</p>
+      {(cfg.shell || 'standalone') === 'twa' ? <p className="text-amber-300/80 mt-3">The Trusted Web Activity shell lets Chrome render your site, so the native bridge is not available. Switch to the standalone app shell to use these.</p> : <>
+        <div className="grid sm:grid-cols-2 gap-2 mt-3">{NATIVE_OPT_IN.map(f => { const on = (cfg.nativeFeatures || []).includes(f.id); return <button key={f.id} type="button" onClick={() => set('nativeFeatures', on ? (cfg.nativeFeatures || []).filter(x => x !== f.id) : [...(cfg.nativeFeatures || []), f.id])} className={`text-left rounded-xl border p-3 flex gap-3 ${on ? 'border-emerald-400/30 bg-emerald-400/[.06]' : 'border-white/[.06] bg-black/20'}`}><span className={`w-5 h-5 rounded border flex items-center justify-center shrink-0 ${on ? 'bg-emerald-400 border-emerald-400 text-black' : 'border-slate-600'}`}>{on && <Check className="w-3.5 h-3.5"/>}</span><span><b className="text-slate-200 block">{f.label}</b><span className="text-[11px] text-slate-500">{f.hint}</span></span></button>; })}</div>
+        <p className="text-[11px] text-slate-500 mt-3 mb-1">Always included (no permission needed)</p>
+        <div className="grid sm:grid-cols-2 gap-2">{NATIVE_ALWAYS.map(f => <div key={f.id} className="rounded-xl border border-white/[.06] bg-black/20 p-3 flex gap-3"><span className="w-5 h-5 rounded border border-emerald-400/40 bg-emerald-400/10 text-emerald-300 flex items-center justify-center shrink-0"><Check className="w-3.5 h-3.5"/></span><span><b className="text-slate-300 block">{f.label}</b><span className="text-[11px] text-slate-500">{f.hint}</span></span></div>)}</div>
+        <p className="text-slate-600 mt-3">Google Play judges whether the app is more than a website and whether each declared permission is used. Add the script to your site and use these features in real screens; do not enable features you will not use.</p>
+      </>}
     </section>
 
     <section className={card}>

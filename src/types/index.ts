@@ -64,6 +64,8 @@ export interface TwaConfig {
   expectedFingerprint: string;
   /** Android 13+ back-swipe preview animation (native, baked into the APK/AAB) */
   predictiveBack?: boolean;
+  /** opt-in native bridge features; the permission-free set is always included */
+  nativeFeatures?: string[];
   /** SHA-256 of Google Play's app-signing key; added to assetlinks.json so Play installs stay fullscreen with no address bar */
   playSigningFingerprint?: string;
   // build options
