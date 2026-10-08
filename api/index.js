@@ -1538,14 +1538,38 @@ async function route(req, res, path, query) {
     const expectedSig = want ? crypto.createHmac('sha256', want).update(rawWebhookBody).digest('base64') : '';
     const ok = !!want && (safeEq(legacy, want) || safeEq(sig, expectedSig));
     if (!ok) throw new HttpError(401, 'Invalid signature');
-    const id = bodyOf(req)?.data?.id;
-    if (id) {
+    const webhook = bodyOf(req) || {};
+    // Never activate from webhook fields alone. Use the webhook only as a trigger,
+    // then fetch the authoritative charge from Flutterwave v4 and validate amount,
+    // currency, customer/payment-method ownership, reference and succeeded status.
+    const id = webhook?.data?.id || webhook?.data?.charge_id || webhook?.charge_id || null;
+    const referenceHint = webhook?.data?.reference || webhook?.reference || webhook?.tx_ref || null;
+    if (id || referenceHint) {
       try {
-        const charge = await getCharge(String(id));
-        const ref = String(charge.reference || bodyOf(req)?.data?.reference || '');
-        const pending = await kv.get(`wb:tx:${ref}`);
-        if (pending) await activateFromCharge(charge, pending, pending.login);
+        let charge = null;
+        if (id) {
+          charge = await getCharge(String(id));
+        } else {
+          // Some webhook payloads carry the reference but not the charge id.
+          // Resolve it only against our own pending transaction records.
+          const pending = await kv.get(`wb:tx:${String(referenceHint)}`);
+          if (pending?.flwChargeId) charge = await getCharge(String(pending.flwChargeId));
+          else if (pending) {
+            // Reference is enough to identify our pending payment, but activation
+            // still requires an authoritative Flutterwave charge response.
+            // There is no safe arbitrary-reference lookup endpoint here, so wait
+            // for callback/status reconciliation instead.
+            console.info('Flutterwave webhook received reference-only event; awaiting charge reconciliation', referenceHint);
+          }
+        }
+        if (charge) {
+          const ref = String(charge.reference || referenceHint || '');
+          const pending = await kv.get(`wb:tx:${ref}`);
+          if (pending) await activateFromCharge(charge, pending, pending.login);
+        }
       } catch (e) {
+        // Return 200 after authenticated receipt so Flutterwave does not retry
+        // indefinitely; the callback/status poll can reconcile transient API errors.
         console.error('Flutterwave webhook reconciliation failed', e);
       }
     }
