@@ -291,6 +291,21 @@ export const BuildsView: React.FC = () => {
               isRunning={isRunning}
               buildId={selectedBuild.id}
             />
+
+            {selectedBuild.status === 'failed' && (
+              <div className="flex justify-center -mt-2">
+                <a
+                  href="https://wyte.name.ng"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold shadow-lg shadow-emerald-950/30 transition"
+                  title="Open Wyte to edit your code and fix the failed build"
+                >
+                  <FileCode className="w-4 h-4" />
+                  Edit Your Code
+                </a>
+              </div>
+            )}
           </>
         ) : awaitingNewBuild ? (
           <div className="text-center py-20 text-slate-400 space-y-3">
