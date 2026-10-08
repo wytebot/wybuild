@@ -1,4 +1,4 @@
-# wybuild-twa-workflow-version: 21
+# wybuild-twa-workflow-version: 22
 name: WyBuild TWA
 concurrency:
   group: wybuild-${{ github.workflow }}-${{ github.ref }}
@@ -107,7 +107,7 @@ jobs:
           }
           JSON
           npm install --no-audit --no-fund --package-lock=false "@bubblewrap/cli@${{ inputs.bubblewrap_version }}"
-          for f in twa-prepare.mjs twa-generate.mjs twa-verify.sh twa-native.py WyBuildActivity.java; do
+          for f in twa-prepare.mjs twa-generate.mjs twa-verify.sh twa-native.py WyBuildActivity.java WyBuildReminderReceiver.java; do
             test -f "$GITHUB_WORKSPACE/.github/wybuild/$f" || { echo "::error::.github/wybuild/$f is missing in this repo/branch. Reinstall the WyBuild TWA workflow (WyBuild > Web to Android > Update workflow) so all the WyBuild files are committed."; exit 1; }
           done
           cp "$GITHUB_WORKSPACE/.github/wybuild/twa-generate.mjs" .
