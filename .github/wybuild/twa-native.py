@@ -327,15 +327,17 @@ if standalone:
         applied.append("share target: the app appears in Android's Share sheet for text")
     if "biometric" in opted:
         applied.append("biometric unlock (platform BiometricPrompt, USE_BIOMETRIC)")
+    # WyBuildActivity references the receiver class, so its source must ALWAYS be compiled in.
+    # It is only registered in the manifest (and therefore only ever runs) when Reminders is selected.
+    rt = os.path.join(here, "WyBuildReminderReceiver.java")
+    if not os.path.exists(rt):
+        raise SystemExit("WyBuildReminderReceiver.java is missing next to twa-native.py. Reinstall the WyBuild TWA workflow (WyBuild > Web to Android > Update workflow).")
+    open(os.path.join(src_dir, "WyBuildReminderReceiver.java"), "w", encoding="utf8").write(open(rt, encoding="utf8").read().replace("__PACKAGE__", pkg_id))
     if "reminders" in opted:
         recv = '    <receiver android:name="%s.WyBuildReminderReceiver" android:exported="false" />\n' % pkg_id
         xml, n = re.subn(r"</application>", lambda m: recv + "    </application>", xml, count=1)
         if not n:
             raise SystemExit("AndroidManifest.xml has no </application>")
-        rt = os.path.join(here, "WyBuildReminderReceiver.java")
-        if not os.path.exists(rt):
-            raise SystemExit("WyBuildReminderReceiver.java is missing next to twa-native.py. Reinstall the WyBuild TWA workflow.")
-        open(os.path.join(src_dir, "WyBuildReminderReceiver.java"), "w", encoding="utf8").write(open(rt, encoding="utf8").read().replace("__PACKAGE__", pkg_id))
         applied.append("local reminders (AlarmManager + notification receiver)")
     # Text-to-speech needs package visibility on Android 11+
     tts_q = '    <queries>\n        <intent><action android:name="android.intent.action.TTS_SERVICE" /></intent>\n    </queries>\n'
