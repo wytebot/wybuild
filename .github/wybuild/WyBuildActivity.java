@@ -1303,7 +1303,7 @@ public class WyBuildActivity extends Activity {
             return;
         }
         try {
-            Intent i = new Intent(this, WyBuildReminderReceiver.class);
+            Intent i = new Intent().setClassName(this, getPackageName() + ".WyBuildReminderReceiver");
             i.putExtra("title", title.length() > 100 ? title.substring(0, 100) : title);
             i.putExtra("body", body == null ? "" : (body.length() > 300 ? body.substring(0, 300) : body));
             String safe = startUrl;
@@ -1322,7 +1322,7 @@ public class WyBuildActivity extends Activity {
 
     private void cancelReminder(String id) {
         try {
-            Intent i = new Intent(this, WyBuildReminderReceiver.class);
+            Intent i = new Intent().setClassName(this, getPackageName() + ".WyBuildReminderReceiver");
             PendingIntent pi = PendingIntent.getBroadcast(this, reminderCode(id), i, PendingIntent.FLAG_NO_CREATE | (Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0));
             AlarmManager am = (AlarmManager) getSystemService(Context.ALARM_SERVICE);
             if (pi != null && am != null) {
