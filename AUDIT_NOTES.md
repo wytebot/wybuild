@@ -36,7 +36,7 @@
 
 - v26: removed the "Pro automation" teasers (Sidebar, dashboard tile renamed "Pro plan") and the unused mock GitHubWebhooksSection.tsx.
 
-## v27 native bridge upgrade (TWA workflow v22)
+## v27 native bridge upgrade (TWA workflow v23; bump the number whenever workflow files change or repos will not be updated)
 - Standalone shell now ships a `window.WyBuildNative` bridge with 13 always-on, permission-free features (clipboard, haptics, device/network info + events, lifecycle events, keep-awake, orientation lock, secure screen, save file to Downloads, speech recognition + TTS, one-shot contact picker, add-to-calendar, launcher shortcuts, rate/app settings) and 3 opt-in features that touch the manifest (biometric unlock = USE_BIOMETRIC, share target = SEND intent filter, local reminders = POST_NOTIFICATIONS + receiver).
 - New bridge methods answer only pages served from the app's own hosts (own + additionalTrustedOrigins/internal link hosts), never sign-in pages. Existing methods (notify/share/vibrate/openExternal) are unchanged.
 - Every build artifact now includes `native/wybuild-native.js` (promise API with web fallbacks) and policy guidance in NATIVE-FEATURES.md.
