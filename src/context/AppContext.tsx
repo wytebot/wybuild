@@ -504,7 +504,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const proj = projects.find((p) => p.id === projectId);
     if (!proj) return { success: false, error: 'Project not found' };
     const repo = repoFromUrl(proj.repoUrl);
-    if (proj.kind !== 'twa' && proj.config?.flutterVersion) {
+    // Treat a project with saved TWA settings as an Android web-app project even
+    // if older persisted project metadata still labels it as Flutter.
+    const isTwaProject = proj.kind === 'twa' || !!proj.twa;
+    if (!isTwaProject && proj.config?.flutterVersion) {
       const msg = 'Flutter builds are no longer available in WyBuild. Use a web app/PWA project with Web → Android.';
       showToast(msg);
       return { success: false, error: msg };
@@ -515,7 +518,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, error: msg };
     }
     let ref = branch || proj.branch;
-    const kind: BuildKind = proj.kind === 'twa' && proj.twa ? 'twa' : 'flutter';
+    const kind: BuildKind = isTwaProject && proj.twa ? 'twa' : 'flutter';
     let liveProject = proj;
     if (kind === 'flutter') {
       try {
