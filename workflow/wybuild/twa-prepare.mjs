@@ -110,7 +110,7 @@ const json = {
   // 'customtabs' or 'webview'; use WebView as the safety fallback, while TWA keeps Custom Tabs.
   fallbackType: raw.shell === 'twa' ? 'customtabs' : 'webview',
   features,
-  minSdkVersion: Math.max(21, Number(raw.minSdkVersion) || 21),
+  minSdkVersion: Math.max(24, Number(raw.minSdkVersion) || 24), // androidbrowserhelper 2.7.x needs 24
   orientation,
   additionalTrustedOrigins: [...trusted],
   fingerprints: raw.expectedFingerprint ? [{ value: String(raw.expectedFingerprint).replace(/:/g,'').toUpperCase() }] : [],

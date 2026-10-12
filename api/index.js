@@ -9,7 +9,8 @@ import blake from 'blakejs';
 
 const TWA_WORKFLOW_FILE = 'wybuild-twa.yml';
 const TWA_WORKFLOW_PATH = `.github/workflows/${TWA_WORKFLOW_FILE}`;
-const TWA_WORKFLOW_VERSION = 23;
+const TWA_WORKFLOW_VERSION = 24;
+const TWA_MIN_SDK = 24; // androidbrowserhelper 2.7.x declares minSdk 24; a lower value fails the manifest merge
 // every file committed to a repo for each workflow kind: [path in repo, path in ./workflow]
 const WORKFLOW_KINDS = {
   twa: {
@@ -28,6 +29,26 @@ const WORKFLOW_KINDS = {
   },
 };
 const kindOf = (v) => 'twa';
+
+// Compare every WyBuild file committed in a repo branch against the copy bundled with THIS deployment.
+// A version number alone is not enough: helper scripts can change without the workflow header changing,
+// and the Builds page and Web to Android page must agree on what "up to date" means.
+async function twaStaleFiles(session, repo, branch, req) {
+  const norm = (t) => String(t).replace(/\r\n/g, '\n').trim();
+  const stale = [];
+  await Promise.all(WORKFLOW_KINDS.twa.files.map(async ([repoPath, localPath]) => {
+    let want = fs.readFileSync(new URL(`../workflow/${localPath}`, import.meta.url), 'utf8');
+    if (repoPath === TWA_WORKFLOW_PATH) want = want.replaceAll('__WYBUILD_APP_URL__', appUrl(req));
+    const r = await gh(session, `/repos/${repo}/contents/${repoPath}?ref=${encodeURIComponent(branch)}`);
+    if (r.status === 404) { stale.push(repoPath); return; }
+    if (!r.ok) { await ghJson(session, `/repos/${repo}/contents/${repoPath}?ref=${encodeURIComponent(branch)}`, undefined, `checking ${repoPath}`); return; }
+    const f = await r.json();
+    const have = Buffer.from(f.content || '', 'base64').toString('utf8');
+    if (norm(have) !== norm(want)) stale.push(repoPath);
+  }));
+  return stale;
+}
+
 const SESSION_COOKIE = 'wb_session';
 const STATE_COOKIE = 'wb_state';
 const STALE_ACTIVE_MS = 3 * 60 * 60 * 1000;
@@ -1205,6 +1226,8 @@ function cleanTwaConfig(c = {}) {
   if (c.minSdkVersion) {
     out.minSdkVersion = Number(c.minSdkVersion);
     if (!Number.isInteger(out.minSdkVersion) || out.minSdkVersion < 21 || out.minSdkVersion > 35) throw new HttpError(400, 'minSdkVersion must be between 21 and 35');
+    // saved projects from before v24 still carry 21; raise it instead of failing the Gradle manifest merge
+    out.minSdkVersion = Math.max(TWA_MIN_SDK, out.minSdkVersion);
   }
   out.additionalTrustedOrigins = (Array.isArray(c.additionalTrustedOrigins) ? c.additionalTrustedOrigins : []).slice(0, 20).map((o) => str(o, 200)).filter(Boolean);
   out.linkRules = cleanLinkRules(c.linkRules);
@@ -1748,7 +1771,9 @@ async function route(req, res, path, query) {
       } catch { framework = 'web'; }
     }
     const packageId = /applicationId\s+["']([^"']+)/.exec(gradle)?.[1] || /package="([^"]+)"/.exec(manifest)?.[1] || undefined;
-    const workflows = { twa: { installed: !!twaWf, upToDate: Number((/wybuild-twa-workflow-version:\s*(\d+)/.exec(twaWf) || [])[1] || 0) >= TWA_WORKFLOW_VERSION } };
+    const twaVersionOk = Number((/wybuild-twa-workflow-version:\s*(\d+)/.exec(twaWf) || [])[1] || 0) >= TWA_WORKFLOW_VERSION;
+    const twaStale = twaWf && twaVersionOk ? await twaStaleFiles(session, repo, branch, req).catch(() => []) : [];
+    const workflows = { twa: { installed: !!twaWf, upToDate: twaVersionOk && twaStale.length === 0 } };
     const latestCommitSha = Array.isArray(latest) ? (latest[0]?.sha || '') : '';
     // best guess at the live website for web repos: GitHub "Website" field, else GitHub Pages
     let homepage = String(info.homepage || '').trim();
@@ -1810,7 +1835,8 @@ async function route(req, res, path, query) {
     const f = await r.json();
     const text = Buffer.from(f.content || '', 'base64').toString('utf8');
     const v = Number((/wybuild(?:-twa)?-workflow-version:\s*(\d+)/.exec(text) || [])[1] || 0);
-    return send(res, 200, { installed: true, upToDate: v >= k.version });
+    const stale = v >= k.version ? await twaStaleFiles(session, repo, query.branch || (await ghJson(session, `/repos/${repo}`)).default_branch, req) : ['version'];
+    return send(res, 200, { installed: true, upToDate: stale.length === 0 });
   }
 
   if (path === 'install-workflow' && post) {
@@ -1981,17 +2007,10 @@ async function route(req, res, path, query) {
     const wf = await gh(session, `/repos/${repo}/contents/${TWA_WORKFLOW_PATH}?ref=${encodeURIComponent(branch)}`);
     if (wf.status === 404) throw new HttpError(409, `The WyBuild TWA workflow (${TWA_WORKFLOW_PATH}) is not on branch "${branch}" of ${repo}.`, 'NO_WORKFLOW', { hint: 'Open Web to Android, pick this repo and use Update workflow to install it.' });
     {
-      const wfText = Buffer.from(((await wf.json().catch(() => ({}))).content || ''), 'base64').toString('utf8');
-      const have = Number((/wybuild-twa-workflow-version:\s*(\d+)/.exec(wfText) || [])[1] || 0);
-      if (have < TWA_WORKFLOW_VERSION) throw new HttpError(409, `The WyBuild TWA workflow in ${repo} is outdated (v${have}, current v${TWA_WORKFLOW_VERSION}).`, 'WORKFLOW_OUTDATED', { hint: 'WyBuild reinstalls it automatically; if you see this, press Build again.' });
+      // Same freshness test the Web to Android page uses: every WyBuild file must match this deployment
+      const stale = await twaStaleFiles(session, repo, branch, req);
+      if (stale.length) throw new HttpError(409, `The WyBuild TWA workflow in ${repo} is outdated (${stale.map((x) => x.split('/').pop()).join(', ')} differ from v${TWA_WORKFLOW_VERSION}).`, 'WORKFLOW_OUTDATED', { hint: 'WyBuild reinstalls it automatically; if you see this, press Build again.', details: { stale } });
     }
-    const missingHelpers = [];
-    for (const [repoPath] of WORKFLOW_KINDS.twa.files.slice(1)) {
-      const hr = await gh(session, `/repos/${repo}/contents/${repoPath}?ref=${encodeURIComponent(branch)}`);
-      if (hr.status === 404) missingHelpers.push(repoPath);
-      else if (!hr.ok) await ghJson(session, `/repos/${repo}/contents/${repoPath}?ref=${encodeURIComponent(branch)}`, undefined, `checking ${repoPath}`);
-    }
-    if (missingHelpers.length) throw new HttpError(409, `The TWA workflow is installed but these helper files are missing on branch "${branch}": ${missingHelpers.join(', ')}.`, 'MISSING_HELPER_FILES', { hint: 'The build would fail with "No such file". Use Update workflow to commit all four WyBuild TWA files, then retry.', details: { missing: missingHelpers } });
     if (useKeystore) await ensureSigning(session, repo);
     else await ensureSigning(session, repo).catch(() => {}); // still leave the secrets in place for later builds
 
