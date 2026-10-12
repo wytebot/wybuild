@@ -100,6 +100,7 @@ export interface BuildStep {
 }
 
 export interface BuildArtifact {
+  id?: number;
   name: string;
   type: 'apk' | 'aab' | 'mapping' | 'bundle';
   sizeBytes: number;

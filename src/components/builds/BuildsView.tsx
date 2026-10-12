@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { TerminalViewer } from './TerminalViewer';
 import { TwaBuildPanel } from '../twa/TwaBuildPanel';
+import { setReleaseHandoff } from '../../services/releaseHandoff';
 import {
   CheckCircle2,
   XCircle,
@@ -17,10 +18,11 @@ import {
   FileCode,
   ShieldCheck,
   Sparkles,
+  Rocket,
 } from 'lucide-react';
 
 export const BuildsView: React.FC = () => {
-  const { builds, activeBuildId, setActiveBuildId, cancelBuild, applyAutoFix, triggerBuild, awaitingNewBuild } = useApp();
+  const { builds, activeBuildId, setActiveBuildId, cancelBuild, applyAutoFix, triggerBuild, awaitingNewBuild, setCurrentTab } = useApp();
   const [filterProject, setFilterProject] = useState<string>('all');
   const [showQrModal, setShowQrModal] = useState<boolean>(false);
 
@@ -271,14 +273,25 @@ export const BuildsView: React.FC = () => {
                         </p>
                       </div>
 
-                      <a
-                        href={art.downloadUrl}
-                        download={art.name}
-                        className="px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-semibold flex items-center gap-1 shrink-0 transition cursor-pointer text-xs"
-                      >
-                        <Download className="w-3.5 h-3.5" />
-                        <span>Download</span>
-                      </a>
+                      <div className="flex flex-col sm:flex-row gap-1.5 shrink-0">
+                        <a
+                          href={art.downloadUrl}
+                          download={art.name}
+                          className="px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-semibold flex items-center gap-1 transition cursor-pointer text-xs"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          <span>Download</span>
+                        </a>
+                        {selectedBuild.repo && selectedBuild.kind === 'twa' && art.id && (
+                          <button
+                            onClick={() => { setReleaseHandoff({ repo: selectedBuild.repo!, buildId: selectedBuild.id, artifactId: art.id }); setCurrentTab('releases'); }}
+                            className="px-3 py-1.5 rounded border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10 font-semibold flex items-center gap-1 transition cursor-pointer text-xs"
+                          >
+                            <Rocket className="w-3.5 h-3.5" />
+                            <span>Release</span>
+                          </button>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>

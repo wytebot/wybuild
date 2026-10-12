@@ -6,6 +6,7 @@ import net from 'node:net';
 import tls from 'node:tls';
 import nacl from 'tweetnacl';
 import blake from 'blakejs';
+import JSZip from 'jszip';
 
 const TWA_WORKFLOW_FILE = 'wybuild-twa.yml';
 const TWA_WORKFLOW_PATH = `.github/workflows/${TWA_WORKFLOW_FILE}`;
@@ -29,6 +30,50 @@ const WORKFLOW_KINDS = {
   },
 };
 const kindOf = (v) => 'twa';
+
+/* ------------------------- GitHub Releases from a build artifact ------------------------- */
+// Only installable binaries are ever published. Everything else in the artifact (logs, fingerprints, helper
+// files) is ignored, and nothing is written to a release unless the person pressed Publish.
+const RELEASE_ASSET_RE = /\.(apk|aab)$/i;
+const MAX_ARTIFACT_BYTES = 150 * 1024 * 1024;
+const TAG_RE = /^[A-Za-z0-9][A-Za-z0-9._\/-]{0,99}$/;
+const safeAssetName = (n) => String(n).split('/').pop().replace(/[^A-Za-z0-9._-]/g, '-').slice(0, 120);
+const fmtBytes = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+
+async function loadArtifactZip(session, repo, artifactId) {
+  if (!/^\d+$/.test(String(artifactId || ''))) throw new HttpError(400, 'Invalid artifact id', 'BAD_ARTIFACT');
+  const meta = await ghJson(session, `/repos/${repo}/actions/artifacts/${artifactId}`, undefined, 'reading the build artifact');
+  if (meta.expired) throw new HttpError(410, 'This build artifact has expired on GitHub.', 'ARTIFACT_GONE', { hint: 'Run the build again; artifacts are kept for the repository retention period (90 days by default).' });
+  if (!/^wb-twa-/.test(meta.name || '')) throw new HttpError(400, 'Only artifacts produced by a WyBuild build can be released.', 'NOT_WYBUILD_ARTIFACT');
+  if (meta.size_in_bytes > MAX_ARTIFACT_BYTES) throw new HttpError(413, `This artifact is ${fmtBytes(meta.size_in_bytes)}, above the ${fmtBytes(MAX_ARTIFACT_BYTES)} limit WyBuild can process.`, 'ARTIFACT_TOO_LARGE');
+  const r = await gh(session, `/repos/${repo}/actions/artifacts/${artifactId}/zip`, { redirect: 'manual' });
+  const loc = r.headers.get('location');
+  if (!loc) throw new HttpError(404, `GitHub has no downloadable artifact ${artifactId} in ${repo} (HTTP ${r.status}).`, 'ARTIFACT_GONE', { hint: 'Run the build again.' });
+  const dl = await fetch(loc); // pre-signed storage URL: must NOT carry the GitHub token
+  if (!dl.ok) throw new HttpError(502, `Downloading the artifact from GitHub storage failed (HTTP ${dl.status}).`, 'ARTIFACT_DOWNLOAD');
+  let zip;
+  try { zip = await JSZip.loadAsync(Buffer.from(await dl.arrayBuffer())); }
+  catch { throw new HttpError(422, 'The build artifact is not a readable zip file.', 'ARTIFACT_CORRUPT'); }
+  const entries = zip.file(RELEASE_ASSET_RE).filter((f) => !f.dir);
+  if (!entries.length) throw new HttpError(422, 'This artifact contains no .apk or .aab file to release.', 'NO_BINARIES', { hint: 'Build with output "APK", "AAB" or "Both" and try again.' });
+  return { meta, zip, entries };
+}
+
+const parseBinaryName = (name) => {
+  const m = /^(.*)_([^_]+)_(\d+)\.(apk|aab)$/i.exec(name);
+  return m ? { packageId: m[1], versionName: m[2], versionCode: m[3] } : {};
+};
+
+async function releaseExistsForTag(session, repo, tag) {
+  const r = await gh(session, `/repos/${repo}/releases/tags/${encodeURIComponent(tag)}`);
+  if (r.status === 404) return null;
+  if (!r.ok) await ghJson(session, `/repos/${repo}/releases/tags/${encodeURIComponent(tag)}`, undefined, `checking tag ${tag}`);
+  return r.json();
+}
+async function tagExists(session, repo, tag) {
+  const r = await gh(session, `/repos/${repo}/git/ref/tags/${encodeURIComponent(tag)}`);
+  return r.ok;
+}
 
 // Compare every WyBuild file committed in a repo branch against the copy bundled with THIS deployment.
 // A version number alone is not enough: helper scripts can change without the workflow header changing,
@@ -805,6 +850,7 @@ async function runDetail(session, repo, id) {
       type: build.kind === 'twa' ? 'bundle' : aab ? 'aab' : 'apk',
       sizeBytes: a.size_in_bytes,
       sizeFormatted: `${(a.size_in_bytes / 1048576).toFixed(1)} MB`,
+      id: a.id,
       downloadUrl: `/api/artifact?repo=${encodeURIComponent(repo)}&id=${a.id}`,
       sha256: String(a.digest || '').replace('sha256:', ''),
     }));
@@ -2068,6 +2114,98 @@ async function route(req, res, path, query) {
     const r = await gh(session, `/repos/${repo}/actions/runs/${runId}/cancel`, { method: 'POST' });
     if (r.status !== 202) throw new HttpError(502, `Could not cancel (GitHub ${r.status})`);
     return send(res, 200, { ok: true });
+  }
+
+  if (path === 'release/prepare' && m === 'GET') {
+    const repo = checkRepo(query.repo);
+    const { meta, entries } = await loadArtifactZip(session, repo, query.artifactId);
+    const sha = meta.workflow_run?.head_sha || '';
+    const files = [];
+    for (const f of entries) {
+      const buf = await f.async('nodebuffer');
+      const name = safeAssetName(f.name);
+      files.push({ name, size: buf.length, kind: /\.aab$/i.test(name) ? 'aab' : 'apk', sha256: crypto.createHash('sha256').update(buf).digest('hex') });
+    }
+    // APK first: it is what people sideload; the AAB is for Play Console
+    files.sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === 'apk' ? -1 : 1));
+    const parsed = parseBinaryName(files[0].name);
+    const versionName = parsed.versionName || '';
+    let tag = versionName ? `v${versionName}` : `build-${meta.workflow_run?.id || Date.now()}`;
+    const existing = await releaseExistsForTag(session, repo, tag);
+    const tagTaken = !!existing || (await tagExists(session, repo, tag));
+    if (tagTaken && parsed.versionCode) tag = `${tag}-${parsed.versionCode}`;
+    const info = await ghJson(session, `/repos/${repo}`, undefined, `reading ${repo}`);
+    const latest = await gh(session, `/repos/${repo}/releases/latest`);
+    const previousTag = latest.ok ? (await latest.json()).tag_name : undefined;
+    let notes = ''; let notesSource = 'fallback'; let title = versionName ? `${info.name} ${versionName}` : `${info.name} ${tag}`;
+    try {
+      const gn = await gh(session, `/repos/${repo}/releases/generate-notes`, { method: 'POST', body: JSON.stringify({ tag_name: tag, target_commitish: sha, ...(previousTag ? { previous_tag_name: previousTag } : {}) }) });
+      if (gn.ok) { const j = await gn.json(); notes = String(j.body || '').trim(); notesSource = 'github'; }
+    } catch { /* fall through to the plain notes */ }
+    if (!notes) notes = `Release ${tag} built from ${meta.workflow_run?.head_branch || 'the default branch'} at ${sha.slice(0, 7)}.`;
+    const table = ['| File | Size | SHA-256 |', '| --- | --- | --- |', ...files.map((f) => `| \`${f.name}\` | ${fmtBytes(f.size)} | \`${f.sha256}\` |`)].join('\n');
+    const howTo = files.some((f) => f.kind === 'apk') ? '\n\nInstall the `.apk` on an Android device (allow installs from your browser or file manager). Use the `.aab` for Google Play Console.' : '\n\nUpload the `.aab` to Google Play Console.';
+    notes = `${notes}\n\n## Downloads\n\n${table}${howTo}\n\n_Built with WyBuild._`;
+    return send(res, 200, {
+      files, packageId: parsed.packageId || '', versionName, versionCode: parsed.versionCode || '',
+      tag, name: title, notes, notesSource, previousTag,
+      target: { sha, branch: meta.workflow_run?.head_branch || info.default_branch },
+      tagExists: tagTaken, releaseExists: !!existing, existingReleaseUrl: existing?.html_url,
+      canPush: info.permissions ? !!info.permissions.push : true,
+    });
+  }
+
+  if (path === 'release/publish' && post) {
+    const b = bodyOf(req);
+    const repo = checkRepo(b.repo);
+    const tag = String(b.tag || '').trim();
+    if (!TAG_RE.test(tag) || tag.includes('..') || tag.endsWith('/') || tag.endsWith('.lock')) throw new HttpError(400, 'Tag must be 1–100 characters: letters, digits, dots, dashes, underscores or slashes (for example v1.0.0).', 'BAD_TAG');
+    const name = String(b.name || tag).trim().slice(0, 200) || tag;
+    const body = String(b.body || '').slice(0, 100000);
+    const wanted = Array.isArray(b.files) ? b.files.map(safeAssetName).filter((n) => RELEASE_ASSET_RE.test(n)).slice(0, 6) : [];
+    if (!wanted.length) throw new HttpError(400, 'Select at least one .apk or .aab file to publish.', 'NO_FILES');
+    const asDraft = b.draft === true;
+    const info = await ghJson(session, `/repos/${repo}`, undefined, `reading ${repo}`);
+    if (info.permissions && !info.permissions.push) throw new HttpError(403, `Your GitHub account cannot create releases in ${repo}.`, 'NO_PUSH_ACCESS', { hint: 'Sign in as the owner or a collaborator with write access.' });
+    const { meta, entries } = await loadArtifactZip(session, repo, b.artifactId);
+    const byName = new Map(entries.map((f) => [safeAssetName(f.name), f]));
+    const missing = wanted.filter((n) => !byName.has(n));
+    if (missing.length) throw new HttpError(400, `These files are not in the artifact: ${missing.join(', ')}.`, 'FILE_NOT_IN_ARTIFACT');
+    const existing = await releaseExistsForTag(session, repo, tag);
+    if (existing) throw new HttpError(409, `A release for tag ${tag} already exists.`, 'TAG_HAS_RELEASE', { hint: 'Choose a new tag (for example bump the version) or edit the existing release on GitHub.', details: { url: existing.html_url } });
+    const sha = meta.workflow_run?.head_sha || undefined;
+    // Create as a draft first: nobody sees a release with missing downloads. It is published only after every upload succeeds.
+    const rel = await ghJson(session, `/repos/${repo}/releases`, {
+      method: 'POST',
+      body: JSON.stringify({ tag_name: tag, target_commitish: sha, name, body, draft: true, prerelease: b.prerelease === true, generate_release_notes: false }),
+    }, `creating release ${tag}`);
+    const uploaded = [];
+    try {
+      for (const n of wanted) {
+        const buf = await byName.get(n).async('nodebuffer');
+        const up = await gh(session, `https://uploads.github.com/repos/${repo}/releases/${rel.id}/assets?name=${encodeURIComponent(n)}`, {
+          method: 'POST', body: buf,
+          headers: { 'Content-Type': /\.apk$/i.test(n) ? 'application/vnd.android.package-archive' : 'application/octet-stream' },
+        });
+        if (!up.ok) {
+          const e = await up.json().catch(() => ({}));
+          throw new HttpError(up.status === 404 ? 502 : up.status, `GitHub rejected the upload of ${n} (${up.status}${e.message ? `: ${e.message}` : ''}).`, 'ASSET_UPLOAD_FAILED');
+        }
+        const a = await up.json();
+        uploaded.push({ name: a.name, url: a.browser_download_url, size: a.size });
+      }
+    } catch (e) {
+      await gh(session, `/repos/${repo}/releases/${rel.id}`, { method: 'DELETE' }).catch(() => {}); // never leave a half-filled draft behind
+      throw e;
+    }
+    let finalRel = rel;
+    if (!asDraft) {
+      finalRel = await ghJson(session, `/repos/${repo}/releases/${rel.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ draft: false, prerelease: b.prerelease === true, make_latest: b.prerelease === true ? 'false' : 'true' }),
+      }, `publishing release ${tag}`);
+    }
+    return send(res, 200, { ok: true, url: finalRel.html_url, draft: !!finalRel.draft, tag, assets: uploaded });
   }
 
   if (path === 'artifact' && m === 'GET') {

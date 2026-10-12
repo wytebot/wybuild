@@ -95,6 +95,25 @@ export interface UsageInfo {
   resetsAt: string;
 }
 
+export interface ReleasePrep {
+  files: { name: string; size: number; kind: 'apk' | 'aab'; sha256: string }[];
+  packageId: string;
+  versionName: string;
+  versionCode: string;
+  tag: string;
+  name: string;
+  notes: string;
+  notesSource: 'github' | 'fallback';
+  previousTag?: string;
+  target: { sha: string; branch: string };
+  tagExists: boolean;
+  releaseExists: boolean;
+  existingReleaseUrl?: string;
+  canPush: boolean;
+}
+
+export interface ReleaseResult { ok: true; url: string; draft: boolean; tag: string; assets: { name: string; url: string; size: number }[] }
+
 export const api = {
   me: () => request<{ user: AuthUser; subscription: SubscriptionInfo | null; usage: UsageInfo; lifetimeFree?: boolean; pricing?: Record<BillingCycle, number>; pricingNgn?: Record<BillingCycle, number>; defaultKeystore?: boolean; defaultKeystoreProblem?: string }>('me'),
   logout: () => post<{ ok: true }>('auth/logout', {}),
@@ -110,6 +129,9 @@ export const api = {
     const clean = Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== '' && v !== undefined && !(Array.isArray(v) && !v.length)));
     return post<{ ok: true }>('twa-build', { repo, branch, output, storeReady, useKeystore, twa: clean });
   },
+  releasePrepare: (repo: string, artifactId: number) => request<ReleasePrep>(`release/prepare?repo=${enc(repo)}&artifactId=${artifactId}`),
+  releasePublish: (body: { repo: string; artifactId: number; tag: string; name: string; body: string; files: string[]; prerelease: boolean; draft: boolean }) =>
+    post<ReleaseResult>('release/publish', body),
   twaInspect: (url: string) => post<TwaInspection>('twa/inspect', { url }),
   twaAssetlinks: (url: string, packageId: string, fingerprint?: string) =>
     post<{ published: boolean; fingerprintMatches: boolean | null; fingerprints: string[] }>('twa/assetlinks', { url, packageId, fingerprint }),
