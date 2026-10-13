@@ -211,6 +211,24 @@ export const BuildsView: React.FC = () => {
                 Pipeline Stages Execution
               </h3>
 
+              {!!selectedBuild.detailWarnings?.length && (
+                <div className="mb-3 space-y-2">
+                  {selectedBuild.detailWarnings.map((warning, index) => (
+                    <div key={`${selectedBuild.id}-detail-warning-${index}`} className="flex items-start gap-2 rounded-md border border-amber-500/20 bg-amber-500/5 p-2.5 text-[11px] leading-relaxed text-amber-200">
+                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      <span className="break-words">{warning}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {!selectedBuild.steps.length && (
+                <p className="mb-3 rounded-md border border-slate-800 bg-slate-900/60 p-3 text-xs text-slate-400">
+                  {isRunning ? 'Waiting for GitHub Actions to publish the pipeline steps…' : 'Pipeline steps have not loaded yet. WyBuild will retry automatically; you can also open the run in GitHub Actions to verify its job details.'}
+                  {selectedBuild.htmlUrl && <> <a className="text-emerald-300 underline underline-offset-2" href={selectedBuild.htmlUrl} target="_blank" rel="noopener noreferrer">Open GitHub run</a>.</>}
+                </p>
+              )}
+
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 {selectedBuild.steps.map((step, idx) => {
                   return (
@@ -295,6 +313,13 @@ export const BuildsView: React.FC = () => {
                     </div>
                   ))}
                 </div>
+              </div>
+            )}
+
+            {selectedBuild.status === 'success' && selectedBuild.artifacts.length === 0 && (
+              <div className="rounded-lg border border-slate-800 bg-slate-950 p-4 text-xs text-slate-400">
+                <div className="flex items-center gap-2 text-slate-200 font-semibold"><FileCode className="h-4 w-4 text-emerald-400" /> Generated artifacts</div>
+                <p className="mt-2">No downloadable artifact has been returned by GitHub for this run yet. WyBuild is retrying the run details in the background.</p>
               </div>
             )}
 

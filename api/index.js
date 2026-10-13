@@ -676,10 +676,13 @@ function mapStatus(run) {
   return 'failed';
 }
 
-function mapRun(run, repo) {
+function mapRun(run, repo, workflowKind = 'twa') {
   const title = run.display_title || run.name || '';
   const t = /^WyBuild TWA (\S+)\/(\S+) on /.exec(title);
   const m = t ? null : /^WyBuild (\S+)\/(\S+)\/(\S+) on /.exec(title);
+  // These API routes list/detail the WyBuild TWA workflow specifically. Do not infer
+  // the workflow kind from display_title alone: GitHub often puts the commit message there.
+  const isTwa = workflowKind === 'twa' || !!t;
   const started = run.run_started_at || run.created_at;
   const done = run.status === 'completed';
   return {
@@ -697,11 +700,11 @@ function mapRun(run, repo) {
     startedAt: started,
     finishedAt: done ? run.updated_at : undefined,
     durationSeconds: Math.max(0, Math.round(((done ? Date.parse(run.updated_at) : Date.now()) - Date.parse(started)) / 1000)),
-    kind: t ? 'twa' : 'flutter',
-    target: t ? (t[2] === 'aab' ? 'appbundle' : 'apk') : m ? m[1] : 'apk',
+    kind: isTwa ? 'twa' : 'flutter',
+    target: isTwa ? ((t?.[2] || '').toLowerCase() === 'aab' ? 'appbundle' : 'apk') : m ? m[1] : 'apk',
     mode: m ? m[2] : 'release',
     flutterVersion: m ? m[3] : 'stable',
-    ...(t ? { twa: { packageId: t[1], output: t[2] } } : {}),
+    ...(isTwa ? { twa: { packageId: t?.[1] || '', output: t?.[2] || 'apk' } } : {}),
     runnerType: 'shared-standard',
     steps: [],
     artifacts: [],
@@ -743,14 +746,17 @@ async function workflowRuns(session, repo, file, perPage) {
 }
 
 async function listRuns(session, repo) {
-  const runs = await workflowRuns(session, repo, TWA_WORKFLOW_FILE, 15);
+  // GitHub accepts up to 100 runs per page; 15 was silently hiding older pipelines.
+  const runs = await workflowRuns(session, repo, TWA_WORKFLOW_FILE, 100);
   await Promise.all(runs.map((r) => refundIfNeeded(session, repo, r).catch(() => {})));
   return runs;
 }
 
 const STEP_STATUS = (s) => {
-  if (s.status === 'completed') return s.conclusion === 'success' ? 'success' : s.conclusion === 'skipped' ? 'skipped' : 'failed';
-  return s.status === 'in_progress' ? 'running' : 'pending';
+  if (s.status !== 'completed') return s.status === 'in_progress' ? 'running' : 'pending';
+  if (s.conclusion === 'success') return 'success';
+  if (['skipped', 'cancelled', 'neutral'].includes(s.conclusion)) return 'skipped';
+  return 'failed';
 };
 
 const DIAGNOSES = [
@@ -789,73 +795,103 @@ function splitLogsIntoSteps(text, steps) {
 }
 
 async function runDetail(session, repo, id) {
-  const [run, jobs, arts] = await Promise.all([
-    ghJson(session, `/repos/${repo}/actions/runs/${id}`),
-    ghJson(session, `/repos/${repo}/actions/runs/${id}/jobs`),
-    ghJson(session, `/repos/${repo}/actions/runs/${id}/artifacts`),
+  // Fetch the run itself as the required resource. Jobs and artifacts are independent GitHub
+  // endpoints: one can be temporarily unavailable (or forbidden by a narrower token) without
+  // throwing away the other data and leaving the whole Build page empty.
+  const run = await ghJson(session, `/repos/${repo}/actions/runs/${id}`);
+  const [jobsResult, artsResult] = await Promise.allSettled([
+    ghJson(session, `/repos/${repo}/actions/runs/${id}/jobs?per_page=100`),
+    ghJson(session, `/repos/${repo}/actions/runs/${id}/artifacts?per_page=100`),
   ]);
+  const warnings = [];
+  const jobs = jobsResult.status === 'fulfilled' && Array.isArray(jobsResult.value?.jobs)
+    ? jobsResult.value : { jobs: [] };
+  const arts = artsResult.status === 'fulfilled' && Array.isArray(artsResult.value?.artifacts)
+    ? artsResult.value : { artifacts: [] };
+  if (jobsResult.status === 'rejected') warnings.push(`GitHub pipeline jobs could not be loaded: ${jobsResult.reason?.message || 'request failed'}`);
+  if (artsResult.status === 'rejected') warnings.push(`Generated artifacts could not be loaded: ${artsResult.reason?.message || 'request failed'}`);
+
   const build = mapRun(run, repo);
-  const job = (jobs.jobs || [])[0];
-  if (job) {
-    const ghSteps = job.steps || [];
+  const allJobs = jobs.jobs || [];
+  if (!allJobs.length && !['queued', 'requested', 'waiting', 'pending'].includes(run.status)) {
+    warnings.push('GitHub has not returned any jobs for this run. Refresh in a few seconds; if this persists, check the run in GitHub Actions.');
+  }
+
+  // A workflow can contain multiple jobs, each with its own steps and logs. Load every job;
+  // the previous implementation only rendered jobs[0], hiding the rest of the pipeline.
+  const jobStepGroups = await Promise.all(allJobs.map(async (job) => {
+    const ghSteps = Array.isArray(job.steps) ? job.steps : [];
     let buckets = ghSteps.map(() => []);
-    if (job.status !== 'queued') {
-      const lr = await gh(session, `/repos/${repo}/actions/jobs/${job.id}/logs`).catch(() => null);
-      if (lr && lr.ok) {
-        const rawLogs = await lr.text();
-        buckets = splitLogsIntoSteps(rawLogs, ghSteps);
-        if (ghSteps.length && buckets.every((b) => b.length === 0) && rawLogs.trim()) buckets[0] = rawLogs.split('\n').filter(Boolean).slice(-500);
+    if (ghSteps.length && job.status !== 'queued' && job.status !== 'waiting') {
+      try {
+        const lr = await gh(session, `/repos/${repo}/actions/jobs/${job.id}/logs`);
+        if (lr.ok) {
+          const rawLogs = await lr.text();
+          buckets = splitLogsIntoSteps(rawLogs, ghSteps);
+          if (buckets.length && buckets.every((b) => b.length === 0) && rawLogs.trim()) {
+            buckets[0] = rawLogs.split('\n').filter(Boolean).slice(-500);
+          }
+        } else {
+          warnings.push(`Logs for job "${job.name || job.id}" are not available yet (GitHub HTTP ${lr.status}).`);
+        }
+      } catch (e) {
+        warnings.push(`Logs for job "${job.name || job.id}" could not be loaded: ${e?.message || 'request failed'}`);
       }
     }
-    build.steps = ghSteps.map((s, i) => {
-      const errLine = buckets[i].filter((l) => l.startsWith('##[error]')).pop();
+    return ghSteps.map((step, index) => {
+      const errLine = (buckets[index] || []).filter((line) => line.startsWith('##[error]')).pop();
+      const multiJob = allJobs.length > 1;
       return {
-        id: `step-${s.number}`,
-        name: s.name,
-        status: STEP_STATUS(s),
-        durationMs: s.started_at && s.completed_at ? Math.max(0, Date.parse(s.completed_at) - Date.parse(s.started_at)) : 0,
-        logs: buckets[i],
+        id: `job-${job.id}-step-${step.number ?? index + 1}`,
+        name: multiJob ? `${job.name || `Job ${job.id}`} · ${step.name || `Step ${index + 1}`}` : (step.name || `Step ${index + 1}`),
+        status: STEP_STATUS(step),
+        durationMs: step.started_at && step.completed_at ? Math.max(0, Date.parse(step.completed_at) - Date.parse(step.started_at)) : 0,
+        logs: buckets[index] || [],
         ...(errLine ? { error: errLine.replace('##[error]', '') } : {}),
       };
     });
-    if (build.status === 'failed') {
-      const failedStep = build.steps.find((s) => s.status === 'failed');
-      // match against the failed step first so unrelated log lines from earlier steps cannot cause a wrong diagnosis
-      const failedText = failedStep ? failedStep.logs.join('\n') : '';
-      const all = build.steps.flatMap((s) => s.logs).join('\n');
-      const hit = DIAGNOSES.find((d) => d.re.test(failedText)) || (failedStep ? undefined : DIAGNOSES.find((d) => d.re.test(all)));
-      if (hit || failedStep) {
-        build.errorDiagnosis = {
-          id: `diag-${id}`,
-          title: hit ? hit.title : `Step failed: ${failedStep.name}`,
-          category: hit ? hit.category : 'gradle',
-          severity: 'critical',
-          matchedPattern: failedStep?.error || failedStep?.name || '',
-          description: `${failedStep ? `Failed at step "${failedStep.name}". ` : ''}${failedStep?.error || [...(failedStep?.logs || [])].reverse().find((l) => /error|fail|denied|not found|no such|timed? ?out/i.test(l)) || 'Open the step logs for details.'}`.slice(0, 600),
-          suggestedFix: hit ? hit.fix : 'Inspect the failing step logs; re-run once fixed.',
-          autoFixAvailable: false,
-        };
-      }
+  }));
+  build.steps = jobStepGroups.flat();
+
+  if (build.status === 'failed') {
+    const failedStep = build.steps.find((step) => step.status === 'failed');
+    const failedText = failedStep ? failedStep.logs.join('\n') : '';
+    const all = build.steps.flatMap((step) => step.logs).join('\n');
+    const hit = DIAGNOSES.find((d) => d.re.test(failedText)) || (failedStep ? undefined : DIAGNOSES.find((d) => d.re.test(all)));
+    if (hit || failedStep) {
+      build.errorDiagnosis = {
+        id: `diag-${id}`,
+        title: hit ? hit.title : `Step failed: ${failedStep.name}`,
+        category: hit ? hit.category : 'gradle',
+        severity: 'critical',
+        matchedPattern: failedStep?.error || failedStep?.name || '',
+        description: `${failedStep ? `Failed at step "${failedStep.name}". ` : ''}${failedStep?.error || [...(failedStep?.logs || [])].reverse().find((line) => /error|fail|denied|not found|no such|timed? ?out/i.test(line)) || 'Open the step logs for details.'}`.slice(0, 600),
+        suggestedFix: hit ? hit.fix : 'Inspect the failing step logs; re-run once fixed.',
+        autoFixAvailable: false,
+      };
     }
   }
+
   if (build.kind === 'twa') {
-    const all = build.steps.flatMap((s) => s.logs).join('\n');
-    const pick = (k) => ((new RegExp(`WYBUILD_${k}=(.+)`).exec(all) || [])[1] || '').trim();
+    const all = build.steps.flatMap((step) => step.logs).join('\n');
+    const pick = (key) => ((new RegExp(`WYBUILD_${key}=(.+)`).exec(all) || [])[1] || '').trim();
     build.twa = { ...build.twa, versionName: pick('VERSION'), fingerprint: pick('FINGERPRINT') };
     if (pick('PACKAGE')) build.twa.packageId = pick('PACKAGE');
   }
+
   const aab = build.target === 'appbundle';
   build.artifacts = (arts.artifacts || [])
-    .filter((a) => !a.expired)
-    .map((a) => ({
-      name: `${a.name}.zip`,
+    .filter((artifact) => artifact && !artifact.expired)
+    .map((artifact) => ({
+      name: `${artifact.name || `artifact-${artifact.id}`}.zip`,
       type: build.kind === 'twa' ? 'bundle' : aab ? 'aab' : 'apk',
-      sizeBytes: a.size_in_bytes,
-      sizeFormatted: `${(a.size_in_bytes / 1048576).toFixed(1)} MB`,
-      id: a.id,
-      downloadUrl: `/api/artifact?repo=${encodeURIComponent(repo)}&id=${a.id}`,
-      sha256: String(a.digest || '').replace('sha256:', ''),
+      sizeBytes: Number(artifact.size_in_bytes || 0),
+      sizeFormatted: `${(Number(artifact.size_in_bytes || 0) / 1048576).toFixed(1)} MB`,
+      id: artifact.id,
+      downloadUrl: `/api/artifact?repo=${encodeURIComponent(repo)}&id=${artifact.id}`,
+      sha256: String(artifact.digest || '').replace('sha256:', ''),
     }));
+  build.detailWarnings = warnings;
   return build;
 }
 

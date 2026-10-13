@@ -9,7 +9,7 @@ const mb = (n: number) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${
 
 export const ReleasesView: React.FC = () => {
   const { builds } = useApp();
-  const candidates = useMemo(() => builds.filter((b) => b.status === 'success' && b.kind === 'twa' && b.repo), [builds]);
+  const candidates = useMemo(() => builds.filter((b) => b.status === 'success' && (b.kind === 'twa' || !!b.twa) && !!b.repo), [builds]);
   const [buildId, setBuildId] = useState('');
   const [artifactId, setArtifactId] = useState<number | null>(null);
   const [prep, setPrep] = useState<ReleasePrep | null>(null);
@@ -37,17 +37,50 @@ export const ReleasesView: React.FC = () => {
       let artId = wantArtifact;
       if (!artId) {
         const detail = await api.run(b.repo, b.id);
-        artId = detail.artifacts.find((a) => a.id)?.id;
-        if (!artId) throw new Error('This build has no artifact to release. It may have expired (GitHub keeps artifacts for 90 days by default). Run the build again.');
+        const available = Array.isArray(detail?.artifacts) ? detail.artifacts : [];
+        // Prefer the canonical WyBuild TWA artifact, not an unrelated/expired artifact from the same run.
+        artId = available.find((a) => !!a?.id && /^wb-twa-/i.test(a.name || ''))?.id
+          ?? available.find((a) => !!a?.id)?.id;
+        if (!artId) throw new Error('GitHub did not return a downloadable artifact for this build. It may have expired or artifact access may be unavailable. Run the build again, then retry.');
       }
-      const p = await api.releasePrepare(b.repo, artId);
+      const response = await api.releasePrepare(b.repo, artId);
       if (my !== seq.current) return;
+      if (!response || !Array.isArray(response.files)) {
+        throw new Error('GitHub returned an incomplete release-preparation response. Reload the page and retry; no release has been published.');
+      }
+      const files = response.files
+        .filter((f) => f && typeof f.name === 'string' && /\.(apk|aab)$/i.test(f.name))
+        .map((f) => ({
+          name: f.name,
+          size: Number.isFinite(Number(f.size)) ? Number(f.size) : 0,
+          kind: f.kind === 'aab' || /\.aab$/i.test(f.name) ? 'aab' as const : 'apk' as const,
+          sha256: String(f.sha256 || ''),
+        }));
+      if (!files.length) throw new Error('This artifact does not contain a readable APK or AAB. Choose another build artifact or run the build again.');
+      const p: ReleasePrep = {
+        ...response,
+        files,
+        packageId: String(response.packageId || ''),
+        versionName: String(response.versionName || ''),
+        versionCode: String(response.versionCode || ''),
+        tag: String(response.tag || `build-${b.id}`),
+        name: String(response.name || response.tag || `Build ${b.id}`),
+        notes: String(response.notes || ''),
+        notesSource: response.notesSource === 'github' ? 'github' : 'fallback',
+        target: {
+          sha: String(response.target?.sha || b.commitHash || ''),
+          branch: String(response.target?.branch || b.branch || ''),
+        },
+        canPush: response.canPush !== false,
+        releaseExists: !!response.releaseExists,
+        tagExists: !!response.tagExists,
+      };
       setArtifactId(artId); setPrep(p);
       setTag(p.tag); setTitle(p.name); setNotes(p.notes);
       setPicked(new Set(p.files.map((f) => f.name)));
       setPrerelease(false); setDraft(false);
     } catch (e: any) {
-      if (my === seq.current) setError(e?.message || 'Could not read the build artifact.');
+      if (my === seq.current) setError(e instanceof Error ? e.message : 'Could not read the build artifact.');
     } finally { if (my === seq.current) setLoading(false); }
   }, [candidates]);
 
@@ -78,7 +111,7 @@ export const ReleasesView: React.FC = () => {
     setPublishing(true); setError('');
     try {
       setResult(await api.releasePublish({ repo: build.repo, artifactId, tag: tag.trim(), name: title.trim(), body: notes, files: [...picked], prerelease, draft }));
-    } catch (e: any) { setError(e?.message || 'Publishing failed.'); }
+    } catch (e: any) { setError(e instanceof Error ? e.message : 'Publishing failed.'); }
     finally { setPublishing(false); }
   };
 
@@ -121,7 +154,7 @@ export const ReleasesView: React.FC = () => {
                     <FileCode className="w-4 h-4 text-emerald-400 shrink-0" />
                     <span className="min-w-0 flex-1">
                       <span className="block font-mono text-white break-all">{f.name}</span>
-                      <span className="block text-[11px] text-slate-500 font-mono">{f.kind.toUpperCase()} · {mb(f.size)} · SHA-256 {f.sha256.slice(0, 16)}…</span>
+                      <span className="block text-[11px] text-slate-500 font-mono">{f.kind.toUpperCase()} · {mb(f.size)} · SHA-256 {(f.sha256 || '').slice(0, 16)}{f.sha256 ? '…' : 'not provided'}</span>
                     </span>
                   </label>
                 ))}
@@ -132,7 +165,7 @@ export const ReleasesView: React.FC = () => {
               <div>
                 <label className="text-xs text-slate-500 flex items-center gap-1"><Tag className="w-3 h-3" /> Tag</label>
                 <input className={input} value={tag} onChange={(e) => setTag(e.target.value)} placeholder="v1.0.0" />
-                <p className="text-[11px] text-slate-500 mt-1">Created on commit {prep.target.sha.slice(0, 7)} ({prep.target.branch}){prep.previousTag ? ` · previous release ${prep.previousTag}` : ''}</p>
+                <p className="text-[11px] text-slate-500 mt-1">Created on commit {(prep.target?.sha || '').slice(0, 7) || 'unknown commit'} ({prep.target?.branch || 'unknown branch'}){prep.previousTag ? ` · previous release ${prep.previousTag}` : ''}</p>
               </div>
               <div>
                 <label className="text-xs text-slate-500">Release title</label>
@@ -167,7 +200,7 @@ export const ReleasesView: React.FC = () => {
           <div className="p-5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 space-y-3">
             <div className="flex items-center gap-2 text-emerald-200 font-semibold"><CheckCircle2 className="w-5 h-5" /> {result.draft ? 'Draft saved' : 'Release published'}: {result.tag}</div>
             <ul className="text-xs text-slate-300 space-y-1">
-              {result.assets.map((a) => <li key={a.name} className="font-mono break-all">{a.name} · {mb(a.size)}</li>)}
+              {(Array.isArray(result.assets) ? result.assets : []).map((a) => <li key={a.name} className="font-mono break-all">{a.name} · {mb(a.size)}</li>)}
             </ul>
             <a href={result.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold"><ExternalLink className="w-4 h-4" /> Open on GitHub</a>
           </div>

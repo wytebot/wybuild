@@ -42,3 +42,11 @@
 - Every build artifact now includes `native/wybuild-native.js` (promise API with web fallbacks) and policy guidance in NATIVE-FEATURES.md.
 - Files: WyBuildActivity.java, WyBuildReminderReceiver.java (new; referenced by class NAME only, so the activity compiles even if the file is absent; manifest-registered only with Reminders), twa-native.py, twa-prepare.mjs, api/index.js (nativeFeatures allowlist, version 21->22), wybuild-twa.yml, TwaView.tsx, types.
 - Verified: Java structure/syntax (javac without Android SDK: no syntax errors), Python patcher run against a mock Bubblewrap manifest, JS kit and api syntax. NOT verified: a full Gradle build, on-device behaviour.
+
+
+## v28 pipeline history, logs, artifacts and release safety
+
+- Run details no longer fail as one unit when GitHub's jobs or artifacts endpoint temporarily fails. The run summary, available pipeline stages, logs and artifacts load independently, with non-fatal issues shown in the Build screen.
+- Pipeline rendering now includes steps from every job in a workflow, not only the first job. Job logs are fetched independently and skipped/cancelled steps are not incorrectly marked as failures.
+- Build history requests up to 100 recent runs per repository rather than silently limiting history to 15. TWA runs are identified from the authoritative workflow endpoint, not only the commit title GitHub happens to show.
+- Release preparation now validates the artifact response and normalizes missing fields before rendering. Incomplete GitHub responses display actionable errors instead of triggering `Cannot read properties...` rendering crashes. The release flow still requires server-side artifact validation before any APK/AAB can be published.

@@ -327,11 +327,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       }
       setBuilds((prev) => {
-        const detailed = new Map<string, BuildRecord>(prev.filter((b) => b.steps.length > 0).map((b): [string, BuildRecord] => [b.id, b]));
+        const detailed = new Map<string, BuildRecord>(prev.filter((b) => b.steps.length > 0 || b.artifacts.length > 0 || !!b.errorDiagnosis || !!b.detailWarnings?.length).map((b): [string, BuildRecord] => [b.id, b]));
         return list.map((b) => {
           const proj = projectsRef.current.find((p) => repoFromUrl(p.repoUrl) === b.repo);
           const d = detailed.get(b.id);
-          const base = d && d.status === b.status ? { ...b, steps: d.steps, artifacts: d.artifacts, errorDiagnosis: d.errorDiagnosis, twa: d.twa ?? b.twa } : b;
+          const base = d && d.status === b.status ? { ...b, steps: d.steps, artifacts: d.artifacts, errorDiagnosis: d.errorDiagnosis, detailWarnings: d.detailWarnings, twa: d.twa ?? b.twa } : b;
           return { ...base, projectId: proj?.id || '', projectName: proj?.name || b.projectName };
         });
       });

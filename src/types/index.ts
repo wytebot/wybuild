@@ -158,6 +158,8 @@ export interface BuildRecord {
   runnerType: 'shared-standard' | 'priority-dedicated';
   steps: BuildStep[];
   artifacts: BuildArtifact[];
+  /** Non-fatal GitHub API issues while fetching jobs, logs, or generated artifacts. */
+  detailWarnings?: string[];
   testReport?: TestReport;
   errorDiagnosis?: ErrorDiagnosis;
   repo?: string;
