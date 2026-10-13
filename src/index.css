@@ -46,3 +46,25 @@
 :root { color-scheme: dark; }
 body { background:#030505; }
 /* calm neon-black palette: low luminance, restrained green accents */
+
+
+/* Branded saved-account picker (intentionally not a native browser select). */
+.wy-account-chooser{position:relative;text-align:left;padding:14px;border:1px solid rgba(148,163,184,.19);border-radius:15px;background:linear-gradient(145deg,rgba(52,211,153,.055),transparent 55%),rgba(15,23,42,.72);box-shadow:0 10px 28px rgba(0,0,0,.18)}
+.wy-account-eyebrow{margin:0 0 9px;color:#94a3b8;font-size:10px;font-weight:800;letter-spacing:.12em}
+.wy-account-trigger{display:flex;align-items:center;gap:11px;width:100%;min-height:62px;padding:10px 12px;border:1px solid rgba(148,163,184,.26);border-radius:11px;background:#080d14;color:#f8fafc;text-align:left;cursor:pointer;transition:border-color .16s,background .16s}
+.wy-account-trigger:hover,.wy-account-trigger:focus-visible{border-color:#34d399;background:#0c1718;outline:none}
+.wy-account-avatar{display:grid;place-items:center;flex:0 0 38px;width:38px;height:38px;overflow:hidden;border:1px solid rgba(148,163,184,.25);border-radius:50%;background:linear-gradient(135deg,#164e43,#172b34);color:#a7f3d0}
+.wy-account-avatar img{display:block;width:100%;height:100%;object-fit:cover}
+.wy-account-copy{display:flex;flex:1;min-width:0;flex-direction:column;gap:3px}
+.wy-account-copy strong{overflow:hidden;color:#f1f5f9;font-size:13px;font-weight:700;text-overflow:ellipsis;white-space:nowrap}
+.wy-account-copy small{overflow:hidden;color:#94a3b8;font-size:12px;text-overflow:ellipsis;white-space:nowrap}
+.wy-account-chevron{flex:0 0 auto;color:#94a3b8;transition:transform .16s}.wy-account-chevron.is-open{transform:rotate(180deg)}
+.wy-account-menu{display:grid;gap:4px;max-height:260px;overflow:auto;margin-top:7px;padding:5px;border:1px solid rgba(148,163,184,.24);border-radius:12px;background:#070b11;box-shadow:0 16px 36px rgba(0,0,0,.48);animation:wyAccountIn .13s ease-out}
+.wy-account-option{display:flex;align-items:center;gap:10px;width:100%;padding:9px;border:1px solid transparent;border-radius:9px;background:transparent;color:#f8fafc;text-align:left;cursor:pointer}
+.wy-account-option:hover,.wy-account-option:focus-visible{border-color:rgba(52,211,153,.22);background:rgba(52,211,153,.08);outline:none}
+.wy-account-option.is-selected{border-color:rgba(52,211,153,.3);background:rgba(52,211,153,.1)}
+.wy-account-option .wy-account-avatar{width:34px;height:34px;flex-basis:34px}.wy-account-check{flex:0 0 auto;color:#34d399}
+.wy-account-continue{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;min-height:42px;margin-top:10px;padding:10px 14px;border:1px solid transparent;border-radius:9px;background:#059669;color:white;font-size:13px;font-weight:750;text-decoration:none;transition:background .15s,opacity .15s}
+.wy-account-continue:hover{background:#10b981}.wy-account-continue.is-disabled{opacity:.48;cursor:not-allowed}
+@keyframes wyAccountIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
+@media(prefers-reduced-motion:reduce){.wy-account-menu{animation:none}.wy-account-chevron{transition:none}}

@@ -215,7 +215,7 @@ function getSession(req) {
 
 function requireSession(req) {
   const s = getSession(req);
-  if (!s) throw new HttpError(401, 'Not signed in');
+  if (!s) throw new HttpError(401, 'Your WyBuild login session has expired or is missing. Sign in again to continue.', 'SESSION_EXPIRED', { hint: 'Return to the login screen and choose Continue with GitHub. Your projects and subscription are not deleted.' });
   return s;
 }
 
@@ -281,7 +281,7 @@ function describeGithubFailure(r, data, ctx, request) {
   const writesWorkflow = /\/contents\/\.github\/workflows\//.test(request) && /^(PUT|DELETE)/.test(request);
   const lacksWorkflowScope = scopes !== null && !scopes.split(/,\s*/).includes('workflow');
   const details = { request, githubStatus: status, githubMessage: gm || undefined, oauthScopes: granted };
-  if (status === 401) return { code: 'GITHUB_AUTH', message: `GitHub rejected your login${where} (401 ${gm || 'Bad credentials'}).`, hint: 'Sign out of WyBuild and sign in with GitHub again.', details, http: 401 };
+  if (status === 401) return { code: 'GITHUB_AUTH_EXPIRED', message: `WyBuild could not authenticate with GitHub${where}. The saved GitHub authorization is expired, revoked, or no longer valid (GitHub returned 401). This is not a password error.`, hint: 'Sign out of WyBuild, then sign in with GitHub again and approve the requested permissions.', details: { ...details, githubMessage: gm || undefined }, http: 401 };
   if (status === 403 && remaining === '0') {
     const when = reset ? new Date(Number(reset) * 1000).toISOString().slice(11, 16) + ' UTC' : 'shortly';
     return { code: 'GITHUB_RATE_LIMIT', message: `GitHub API rate limit reached${where}.`, hint: `Wait until about ${when} and retry.`, details, http: 429 };
@@ -450,16 +450,18 @@ async function getCharge(chargeId) {
 }
 
 async function activateFromCharge(charge, expected, fallbackLogin) {
-  if (!charge || charge.status !== 'succeeded') return false;
-  const ref = String(charge.reference || '');
+  if (!charge || String(charge.status || '').toLowerCase() !== 'succeeded') return false;
+  const ref = String(charge.reference || '').trim();
+  if (!ref || !/^wb-[A-Za-z0-9-]{8,42}$/i.test(ref)) return false;
   const pending = await kv.get(`wb:tx:${ref}`);
   if (!pending || pending.login !== fallbackLogin && fallbackLogin) return false;
-  if (!expected || Number(charge.amount) < Number(expected.amount) || String(charge.currency) !== String(expected.currency)) return false;
+  if (!expected || !Number.isFinite(Number(charge.amount)) || Number(charge.amount) !== Number(expected.amount) || String(charge.currency || '').toUpperCase() !== String(expected.currency || '').toUpperCase()) return false;
   const returnedCustomerId = charge.customer_id || charge.customer?.id || '';
-  if (pending.customerId && returnedCustomerId && String(returnedCustomerId) !== String(pending.customerId)) return false;
+  if (!returnedCustomerId || !pending.customerId || String(returnedCustomerId) !== String(pending.customerId)) return false;
   const pmd = charge.payment_method_details || charge.payment_method || {};
-  const customerId = charge.customer_id || charge.customer?.id || pending.customerId || '';
-  const paymentMethodId = pmd.id || pending.paymentMethodId || '';
+  const customerId = String(returnedCustomerId);
+  const paymentMethodId = pmd.id || '';
+  if (pending.paymentMethodId && paymentMethodId && String(paymentMethodId) !== String(pending.paymentMethodId)) return false;
   if (!customerId || !paymentMethodId) throw new HttpError(502, 'Payment succeeded but recurring billing details were not returned');
 
   // Only mark the charge as processed once we know we can activate it, otherwise a retry/webhook would be skipped forever.
@@ -1536,6 +1538,8 @@ async function route(req, res, path, query) {
     url.searchParams.set('client_id', env('GITHUB_CLIENT_ID'));
     url.searchParams.set('redirect_uri', `${appUrl(req)}/api/auth/callback`);
     url.searchParams.set('scope', 'repo workflow');
+    const accountHint = String(query.login || '').trim().replace(/[^A-Za-z0-9-]/g, '').slice(0, 39);
+    if (accountHint) { url.searchParams.set('login', accountHint); url.searchParams.set('prompt', 'login'); }
     url.searchParams.set('state', state);
     return redirect(res, url.toString());
   }

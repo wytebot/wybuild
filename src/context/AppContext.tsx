@@ -119,7 +119,21 @@ const EMPTY_SUB: SubscriptionInfo = {
   customerEmail: '',
 };
 
-const errMsg = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong');
+const errMsg = (e: unknown) => {
+  if (e instanceof ApiError) {
+    if (e.code === 'SESSION_EXPIRED' || e.status === 401 && e.code !== 'GITHUB_AUTH_EXPIRED') return 'Your WyBuild login session has expired. Sign in again to continue.';
+    if (e.code === 'GITHUB_AUTH_EXPIRED') return `${e.reason}${e.hint ? ` Fix: ${e.hint}` : ''}`;
+    if (e.code === 'NETWORK') return `${e.reason}${e.hint ? ` ${e.hint}` : ''}`;
+    if (e.code === 'LIMIT') return `${e.reason}${e.hint ? ` ${e.hint}` : ''}`;
+    return e.message;
+  }
+  if (e instanceof Error) {
+    if (/failed to fetch|networkerror|network request failed/i.test(e.message)) return 'Could not reach WyBuild. Check your internet connection and retry.';
+    if (/timeout|timed out/i.test(e.message)) return 'The request took too long and was stopped. Check your connection and retry.';
+    return e.message;
+  }
+  return 'Something went wrong. Please retry; if it continues, reload the app and contact support with the action you were performing.';
+};
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [authState, setAuthState] = useState<'loading' | 'anon' | 'authed'>('loading');
@@ -277,6 +291,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       const me = await api.me();
       setUser(me.user);
+      try {
+        const key = 'wybuild:githubAccounts';
+        const old = JSON.parse(localStorage.getItem(key) || '[]');
+        const account = { login: me.user.login, name: me.user.name || me.user.login, avatar: me.user.avatar || '' };
+        if (account.login) localStorage.setItem(key, JSON.stringify([account, ...old.filter((a: any) => a?.login?.toLowerCase() !== account.login.toLowerCase())].slice(0, 5)));
+      } catch { /* account chooser is optional when local storage is unavailable */ }
       setUsage(me.usage);
       setSubscription(me.subscription ?? { ...EMPTY_SUB, customerEmail: me.user.email });
       setLifetimeFree(!!me.lifetimeFree || ['wytebot', 'wytzbot'].includes(me.user.login.toLowerCase()));

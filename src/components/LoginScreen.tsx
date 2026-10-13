@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Github, KeyRound, ChevronDown, Loader2 } from 'lucide-react';
+import { Github, KeyRound, ChevronDown, Loader2, Check, UserRound } from 'lucide-react';
 import { api, ApiError } from '../services/api';
 
 export const LoginScreen: React.FC = () => {
@@ -7,6 +7,10 @@ export const LoginScreen: React.FC = () => {
   const [token, setToken] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [accounts, setAccounts] = useState<Array<{login:string;name:string;avatar?:string}>>(() => { try { return JSON.parse(localStorage.getItem('wybuild:githubAccounts') || '[]').filter((a: any) => a && typeof a.login === 'string').slice(0,5); } catch { return []; } });
+  const [selectedAccount, setSelectedAccount] = useState('');
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const githubLoginUrl = selectedAccount ? `/api/auth/login?login=${encodeURIComponent(selectedAccount)}` : '/api/auth/login';
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -31,13 +35,22 @@ export const LoginScreen: React.FC = () => {
             Turn your web app or PWA into a signed Android app with Web → Android, powered by GitHub Actions. Sign in with GitHub to pick a repository and build.
           </p>
         </div>
-        <a
-          href="/api/auth/login"
-          className="inline-flex items-center justify-center gap-2 w-full px-4 py-2.5 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold transition"
-        >
-          <Github className="w-4 h-4" />
-          <span>Continue with GitHub</span>
-        </a>
+        {accounts.length > 0 && <div className="wy-account-chooser">
+          <div className="wy-account-eyebrow">PREVIOUSLY USED ACCOUNTS</div>
+          <button type="button" className="wy-account-trigger" aria-haspopup="listbox" aria-expanded={accountMenuOpen} onClick={() => setAccountMenuOpen(v => !v)}>
+            <span className="wy-account-avatar">{accounts.find(a => a.login === selectedAccount)?.avatar ? <img src={accounts.find(a => a.login === selectedAccount)?.avatar} alt="" /> : <UserRound size={19} />}</span>
+            <span className="wy-account-copy"><strong>{accounts.find(a => a.login === selectedAccount)?.name || 'Choose an account'}</strong><small>{selectedAccount ? `@${selectedAccount}` : 'Select a saved GitHub account'}</small></span>
+            <ChevronDown className={`wy-account-chevron ${accountMenuOpen ? 'is-open' : ''}`} size={18} />
+          </button>
+          {accountMenuOpen && <div className="wy-account-menu" role="listbox" aria-label="Saved GitHub accounts" onKeyDown={e => { if (e.key === 'Escape') setAccountMenuOpen(false); }}>
+            {accounts.map(a => <button type="button" role="option" aria-selected={selectedAccount === a.login} className={`wy-account-option ${selectedAccount === a.login ? 'is-selected' : ''}`} key={a.login} onClick={() => { setSelectedAccount(a.login); setAccountMenuOpen(false); }}>
+              <span className="wy-account-avatar">{a.avatar ? <img src={a.avatar} alt="" /> : <UserRound size={18} />}</span><span className="wy-account-copy"><strong>{a.name || a.login}</strong><small>@{a.login}</small></span>{selectedAccount === a.login && <Check size={17} className="wy-account-check" />}
+            </button>)}
+          </div>}
+          <a href={githubLoginUrl} aria-disabled={!selectedAccount} onClick={e => { if (!selectedAccount) e.preventDefault(); }} className={`wy-account-continue ${selectedAccount ? '' : 'is-disabled'}`}><Github className="w-4 h-4" /><span>Continue as @{selectedAccount || '…'}</span></a>
+        </div>}
+        <a href="/api/auth/login" className="inline-flex items-center justify-center gap-2 w-full px-4 py-2.5 rounded-md border border-white/10 hover:bg-white/5 text-white text-sm font-semibold transition"><Github className="w-4 h-4" /><span>Continue with another GitHub account</span></a>
+        <p className="text-[11px] text-slate-500">Previously used account names are stored on this device only. GitHub may still ask you to confirm the account or sign in again.</p>
         <p className="text-[11px] text-slate-500">
           Needs the repo and workflow scopes so WyBuild can add its workflow, start runs and store your signing key as encrypted repository secrets.
         </p>
