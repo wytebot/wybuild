@@ -36,3 +36,13 @@ The browser callback and `/api/billing/status` remain as reconciliation fallback
 ## Important
 
 After deploying, make one small sandbox/test payment and confirm the Vercel function log contains no `Invalid signature` or `Flutterwave webhook reconciliation failed` errors. Do not paste secret keys into the repository.
+
+
+## Kivora Ad Studio payments
+
+WyBuild's same authenticated Flutterwave v4 webhook also handles Kivora campaign payments. Configure these additional **WyBuild** environment variables:
+
+- `KIVORA_PAYMENT_CONFIRM_URL=https://YOUR-KIVORA-DOMAIN/api/wybuild-payment-confirmation`
+- `KIVORA_WEBHOOK_SHARED_SECRET=<long-random-secret>`
+
+Set the exact same secret in Kivora as `WYBUILD_WEBHOOK_SHARED_SECRET`. Keep it server-side in both deployments. When a KIVORA reference arrives, WyBuild verifies the webhook signature, fetches the charge directly from Flutterwave v4, and forwards only the authoritative charge fields to Kivora over HTTPS. Kivora matches the reference and exact NGN amount against its stored campaign before activating it. Do **not** configure Kivora's own `/api/flutterwave-webhook` as a second Flutterwave webhook for this flow; configure Flutterwave to call WyBuild's `/api/billing/webhook` endpoint.

@@ -243,11 +243,12 @@ export const BuildsView: React.FC = () => {
                           <span className="w-4 h-4 rounded-full border-2 border-amber-400 border-t-transparent animate-spin shrink-0" />
                         )}
                         {step.status === 'pending' && <Clock className="w-4 h-4 text-slate-600 shrink-0" />}
+                        {step.status === 'skipped' && <Clock className="w-4 h-4 text-slate-500 shrink-0" />}
 
                         <div className="min-w-0">
                           <p className="text-slate-200 font-medium break-words">{step.name}</p>
                           <span className="text-[10px] text-slate-500 font-mono">
-                            {step.status === 'success' ? `${Math.round(step.durationMs / 100) / 10}s` : step.status}
+                            {step.status === 'success' || step.status === 'failed' ? `${step.status} · ${Math.round(step.durationMs / 100) / 10}s` : step.status}
                           </span>
                         </div>
                       </div>
