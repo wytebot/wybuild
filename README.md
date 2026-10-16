@@ -55,3 +55,5 @@ WyBuild ships its own manifest, install icons, service worker and offline page. 
 - optional `WYBUILD_PLAY_SIGNING_SHA256`
 
 The endpoint returns HTTP 503 until a real package ID and valid SHA-256 certificate fingerprint are configured; WyBuild never generates a placeholder fingerprint.
+
+The Capacitor workflow installs the Firebase JavaScript SDK required by the Firebase Authentication and Messaging bridge modules (workflow v27).

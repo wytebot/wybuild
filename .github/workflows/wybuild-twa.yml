@@ -1,4 +1,4 @@
-# wybuild-twa-workflow-version: 26
+# wybuild-twa-workflow-version: 27
 name: WyBuild Capacitor + Gradle (TWA fallback)
 concurrency:
   group: wybuild-${{ github.workflow }}-${{ github.ref }}
@@ -160,7 +160,10 @@ jobs:
             '@capacitor/network': '^7', '@capacitor/preferences': '^7', '@capacitor/push-notifications': '^7',
             '@capacitor/screen-orientation': '^7', '@capacitor/share': '^7', '@capacitor/splash-screen': '^7',
             '@capacitor/status-bar': '^7', '@capacitor-firebase/authentication': '^7',
-            '@capacitor-firebase/messaging': '^7', '@aparajita/capacitor-biometric-auth': '^9', esbuild: '^0.25'
+            // Firebase web SDK is required by the Capacitor Firebase plugins' web entry points.
+            // Without it esbuild fails to resolve firebase/auth and firebase/messaging.
+            
+            '@capacitor-firebase/messaging': '^7', firebase: '^11.0.0', '@aparajita/capacitor-biometric-auth': '^9', esbuild: '^0.25'
           };
           fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
           NODEPKG
