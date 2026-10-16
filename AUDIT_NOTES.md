@@ -69,3 +69,11 @@
 ## Fix v28 — Java toolchain
 
 The workflow now provisions Temurin Java 21 for the Capacitor/Gradle build. The previous workflow used Java 17 while Capacitor Android requested Java source release 21, causing `invalid source release: 21` at `:capacitor-android:compileReleaseJavaWithJavac`. Both workflow copies and the server-side workflow version marker are updated to v28.
+
+
+## Fix v30 — prevent incomplete Capacitor web payloads
+
+- Fixed a GitHub Actions environment-scope bug: `GITHUB_ENV` values are not available until a later step, so `WYBUILD_WEB_DIR` is now also exported in the current step before the native bridge is bundled and `capacitor.config.json` is generated.
+- Added explicit checks that the built `index.html`, injected native bridge, and copied Android `assets/public` files exist before Gradle packages the APK. This should fail with a useful build error instead of allowing an incomplete local web payload to become an APK.
+- Bumped both workflow copies and the server-side workflow marker to v30.
+- Static checks performed on this patch: workflow copies and version markers agree; shell blocks are checked separately where possible; ZIP integrity verified. A full Android/Gradle build and on-device launch were not performed in this environment.

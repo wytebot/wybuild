@@ -1,4 +1,4 @@
-# wybuild-twa-workflow-version: 28
+# wybuild-twa-workflow-version: 30
 name: WyBuild Capacitor + Gradle (TWA fallback)
 concurrency:
   group: wybuild-${{ github.workflow }}-${{ github.ref }}
@@ -113,6 +113,9 @@ jobs:
                 echo "WYBUILD_ENGINE=capacitor" >> "$GITHUB_ENV"
                 echo "WYBUILD_ENGINE=capacitor" > "$WB_OUT/engine.txt"
                 echo "WYBUILD_WEB_DIR=$WEB_DIR" >> "$GITHUB_ENV"
+                # GITHUB_ENV affects later steps only. Export this value now too because
+                # bridge bundling and Capacitor config happen later in this SAME run step.
+                export WYBUILD_WEB_DIR="$WEB_DIR"
                 echo "Capacitor selected: built web assets found in $WEB_DIR."
               else
                 echo "::notice::The repository build completed but no dist/build/www/out index.html was found; using the URL-based native-shell fallback."
@@ -201,6 +204,27 @@ jobs:
           NODE
           if [ -f android/capacitor.settings.gradle ]; then npx cap sync android; else if [ -d android ]; then mv android "$WB_OUT/original-android"; fi; npx cap add android; fi
           npx cap sync android
+          # Fail with a clear diagnostic instead of producing an APK that opens to a blank screen
+          # when the local web payload or injected bridge was not copied into Android assets.
+          node --input-type=module <<'NODECHECK'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const webDir = process.env.WYBUILD_WEB_DIR;
+          if (!webDir || !fs.existsSync(path.join(webDir, 'index.html'))) {
+            throw new Error(`Capacitor web payload is missing (WYBUILD_WEB_DIR=${webDir || '<empty>'}).`);
+          }
+          if (!fs.existsSync(path.join(webDir, 'wybuild-native-bridge.js'))) {
+            throw new Error('WyBuild native bridge bundle is missing from the built web directory.');
+          }
+          const packaged = path.join('android', 'app', 'src', 'main', 'assets', 'public');
+          if (!fs.existsSync(path.join(packaged, 'index.html'))) {
+            throw new Error(`Capacitor did not copy index.html into ${packaged}.`);
+          }
+          if (!fs.existsSync(path.join(packaged, 'wybuild-native-bridge.js'))) {
+            throw new Error(`Capacitor did not copy wybuild-native-bridge.js into ${packaged}.`);
+          }
+          console.log(`Verified local web payload and native bridge in ${packaged}.`);
+          NODECHECK
           echo "WYBUILD_PACKAGE=$(node -p 'require("./.wybuild-out/capacitor-meta.json").packageId')" >> "$GITHUB_ENV"
           echo "WYBUILD_VERSION=$(node -p 'require("./.wybuild-out/capacitor-meta.json").versionName')" >> "$GITHUB_ENV"
           echo "WYBUILD_VERSION_CODE=$(node -p 'require("./.wybuild-out/capacitor-meta.json").versionCode')" >> "$GITHUB_ENV"
