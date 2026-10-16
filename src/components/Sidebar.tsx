@@ -1,6 +1,6 @@
 import React from 'react';
 import { useApp } from '../context/AppContext';
-import { Home, Terminal, Wrench, KeyRound, CreditCard, Server, X, Smartphone, LogOut, Rocket } from 'lucide-react';
+import { Home, Terminal, Wrench, KeyRound, CreditCard, Server, X, Smartphone, LogOut, Rocket, Users, Bug, FolderKanban } from 'lucide-react';
 
 interface SidebarProps { open: boolean; onClose: () => void; }
 
@@ -15,10 +15,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, onClose }) => {
   };
   const items = [
     ['dashboard', 'Build', Home],
+    ['projects', 'Projects', FolderKanban],
     ['twa', 'Web → Android', Smartphone],
     ['builds', 'Logs', Terminal],
     ['releases', 'Releases', Rocket],
+    ['errors', 'Errors', Bug],
     ['tools', 'Free tools', Wrench],
+    ['team', 'Team', Users],
     ['settings', 'Keystore', KeyRound],
     ['billing', isPro ? 'Pro active' : 'Upgrade', CreditCard],
   ] as const;

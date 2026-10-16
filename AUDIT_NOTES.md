@@ -50,3 +50,17 @@
 - Pipeline rendering now includes steps from every job in a workflow, not only the first job. Job logs are fetched independently and skipped/cancelled steps are not incorrectly marked as failures.
 - Build history requests up to 100 recent runs per repository rather than silently limiting history to 15. TWA runs are identified from the authoritative workflow endpoint, not only the commit title GitHub happens to show.
 - Release preparation now validates the artifact response and normalizes missing fields before rendering. Incomplete GitHub responses display actionable errors instead of triggering `Cannot read properties...` rendering crashes. The release flow still requires server-side artifact validation before any APK/AAB can be published.
+
+
+## v29 audit pass (Capacitor workflow v26)
+
+- Fixed a fatal path-resolution error in the Capacitor setup step: generated metadata was being loaded from `../.wybuild-out` while the step was still at the repository root.
+- Capacitor plugins are now declared in the ephemeral checkout's `package.json` before `npm install`/`cap sync`, so native plugin registration is not dependent on `--no-save` discovery behaviour.
+- A source `npm run build` failure now fails clearly rather than silently packaging the live URL instead of the source app.
+- Release signing now resolves the keystore from the Android root project (rather than the app module directory), and Java properties escape special characters in passwords/aliases.
+- Firebase setup adds the Google Services Gradle plugin in either plugin-DSL or buildscript-style templates, validates `google-services.json` package IDs, and fails with an actionable message when Firebase sign-in/push is selected without config.
+- Engine-specific native selections are guarded: Firebase sign-in/push require Capacitor source builds; share-target receiving is URL-shell-only; TWA builds reject native bridge features instead of silently ignoring them.
+- Workflow version is now 26 so existing installed workflows refresh their copies of the updated workflow/helpers.
+- Navigation now includes the Projects, Releases, Errors and Team views, which existed in the app but were not all reachable from the sidebar/search. Legacy project cards defensively handle missing `dartDefines`.
+- Static checks passed: all 31 TS/TSX files transpile without syntax diagnostics; API/bridge/helper JavaScript syntax checks pass; all 13 workflow shell blocks pass `bash -n`; Python helper syntax passes; mock finalizer tests pass for permissions, versioning/signing, Firebase Gradle wiring and missing Firebase configuration.
+- Not run in this audit environment: full `npm run build`, GitHub Actions execution, Gradle `assembleRelease`/`bundleRelease`, real Firebase sign-in/push, or physical-device tests. These require installed dependencies, the Android SDK/runner, Firebase credentials/configuration and device/runtime validation.

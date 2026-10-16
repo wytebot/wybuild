@@ -39,10 +39,19 @@ const NATIVE_ALWAYS = [
   { id: 'rate', label: 'Rate app & settings', hint: 'Open the store listing or Android app settings' },
 ] as const;
 
+const CAPACITOR_NATIVE = [
+  'Camera/photo picker', 'Geolocation', 'Local notifications', 'Firebase sign-in (provider setup required)',
+  'Remote push registration (FCM setup required)', 'Biometric authentication', 'Clipboard', 'Device and battery info',
+  'Filesystem and downloads (app-private Documents by default)', 'Haptics', 'Network status/events', 'Share out',
+  'Open browser', 'Status bar', 'Screen orientation', 'Preferences storage', 'Keyboard control', 'Action sheets and alerts',
+] as const;
+
 const NATIVE_OPT_IN = [
   { id: 'biometric', label: 'Biometric unlock', hint: 'Fingerprint / face / device PIN gate for private areas (adds USE_BIOMETRIC). Local unlock only.' },
-  { id: 'sharetarget', label: 'Share target', hint: 'Your app appears in the Android Share sheet and receives shared text' },
+  { id: 'sharetarget', label: 'Share target (URL shell only)', hint: 'URL-based native shell receives shared text; not supported by Capacitor source builds' },
   { id: 'reminders', label: 'Local reminders', hint: 'Schedule notifications from your site, even when the app is closed (adds POST_NOTIFICATIONS)' },
+  { id: 'googleauth', label: 'Native Firebase sign-in', hint: 'Capacitor source builds only. Google needs Firebase Android configuration; Apple provider support depends on provider/plugin setup.' },
+  { id: 'push', label: 'Remote push notifications', hint: 'Capacitor source builds only. Requires matching google-services.json, Firebase Messaging, and server-side token delivery.' },
 ] as const;
 
 const SCREEN_MODES = [
@@ -52,8 +61,8 @@ const SCREEN_MODES = [
 ] as const;
 
 const SHELLS = [
-  { id: 'standalone', label: 'Standalone app (recommended)', hint: 'Your site runs inside the app itself: no address bar or browser toolbar ever, fullscreen really hides the bars, links follow your rules. Nothing to publish on your site.' },
-  { id: 'twa', label: 'Trusted Web Activity', hint: "Chrome renders your site. Needs assetlinks.json on your domain, otherwise Chrome's address bar appears. Required for Web Push and Play Billing." },
+  { id: 'standalone', label: 'Capacitor / native app (recommended)', hint: 'Buildable source repositories use Capacitor + Android Gradle and bundled native plugins. URL-only sites use WyBuild’s native WebView shell.' },
+  { id: 'twa', label: 'Trusted Web Activity', hint: "Use the Chrome-rendered site shell. Requires assetlinks.json for a fullscreen experience; native Capacitor plugins are not bundled into this mode." },
 ] as const;
 
 const input = 'w-full h-11 bg-[#050707] border border-white/[.08] rounded-lg px-3 text-white focus:border-emerald-400/50 focus:outline-none';
@@ -232,7 +241,7 @@ export const TwaView: React.FC = () => {
       const installedNow = !wf.installed || !wf.upToDate;
       if (installedNow) { setStage('Installing the WyBuild workflow…'); await api.installWorkflow(r, ri.defaultBranch, 'twa'); }
       const branch = ri.defaultBranch;
-      const project = { name: twaCfg.name || new URL(twaCfg.webUrl).hostname, description: 'Trusted Web Activity build', repoUrl: `https://github.com/${r}`, branch, kind: 'twa' as const, twa: { ...twaCfg, shortcuts: twaCfg.shortcuts.filter(x => x.name && x.url), fallbackType: 'customtabs' as const, useKeystore: true, storeReady: true }, config: { target: 'apk' as const, mode: 'release' as const, flutterVersion: 'stable', dartDefines: [], obfuscate: false, splitDebugInfo: false, runTests: false, customArgs: '' } };
+      const project = { name: twaCfg.name || new URL(twaCfg.webUrl).hostname, description: 'Capacitor / Android web app build', repoUrl: `https://github.com/${r}`, branch, kind: 'twa' as const, twa: { ...twaCfg, shortcuts: twaCfg.shortcuts.filter(x => x.name && x.url), fallbackType: 'customtabs' as const, useKeystore: true, storeReady: true }, config: { target: 'apk' as const, mode: 'release' as const, flutterVersion: 'stable', dartDefines: [], obfuscate: false, splitDebugInfo: false, runTests: false, customArgs: '' } };
       let id = editingId;
       if (id) updateProject(id, project);
       else { const res = addProject(project); if (!res.success || !res.id) throw new Error(res.error || 'Could not save the project.'); id = res.id; setEditingId(id); }
@@ -267,7 +276,7 @@ export const TwaView: React.FC = () => {
   return <div className="max-w-4xl mx-auto p-3 sm:p-6 space-y-4 text-xs">
     <header>
       <div className="flex items-center gap-2"><Smartphone className="w-5 h-5 text-emerald-300"/><h1 className="text-xl font-bold text-white">Web → Android</h1></div>
-      <p className="text-slate-500 mt-1">Pick the repo, tap Discover once, press Build. WyBuild installs the workflow and signs the app for you.</p>
+      <p className="text-slate-500 mt-1">Pick the repo, tap Discover once, press Build. Buildable web source uses Capacitor + Android Gradle; URL-only sites keep the native-shell fallback. WyBuild installs the workflow and signs the app for you.</p>
     </header>
 
     {saved.length > 0 && <div className="flex gap-2 overflow-x-auto pb-1">{saved.map(p => <button key={p.id} onClick={() => loadProject(p)} className={`px-3 py-2 rounded-lg border whitespace-nowrap ${editingId === p.id ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200' : 'border-white/[.07] text-slate-400'}`}>{p.name}</button>)}<button onClick={reset} className="px-3 py-2 text-slate-500">+ New</button></div>}
@@ -328,7 +337,7 @@ export const TwaView: React.FC = () => {
         <div><label className="text-slate-500">Launcher name <span className="text-slate-600">(under the icon)</span></label><input className={input} value={cfg.launcherName} onChange={e => set('launcherName', e.target.value)} placeholder="Same as app name"/></div>
         <div><label className="text-slate-500">Icon</label><div className="flex gap-2">{cfg.iconUrl && /^https:\/\//.test(cfg.iconUrl) && <img src={cfg.iconUrl} alt="" className="h-11 w-11 rounded-lg bg-black/40 object-contain shrink-0" onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}/>}<input className={input} value={cfg.iconUrl} onChange={e => set('iconUrl', e.target.value)} placeholder="Detected from manifest"/></div></div>
       </div>
-      <p className="text-slate-600 mt-2">The package ID is generated from the domain and reused on future builds so updates keep the same Android identity. You can set your own (like com.yourbrand.app), but changing it on a published app makes Android treat the new build as a different app, so users cannot update to it. The version code rises automatically on every build (time-based), so Google Play never rejects an upload as "version code already used". Set a minimum only if Play reports a higher one.</p>
+      <p className="text-slate-600 mt-2">The package ID is generated from the domain and reused on future builds so updates keep the same Android identity. You can set your own (like com.yourbrand.app), but changing it on a published app makes Android treat the new build as a different app, so users cannot update to it. The version code rises automatically with each workflow run, so Google Play is less likely to reject an upload as "version code already used". Set a minimum only if Play reports a higher one.</p>
     </section>
 
     <section className={card}>
@@ -339,12 +348,14 @@ export const TwaView: React.FC = () => {
     </section>
 
     <section className={card}>
-      <div className="flex items-center justify-between gap-2"><div className="flex items-center gap-2 text-white font-semibold"><Smartphone className="w-4 h-4 text-emerald-300"/>Native app features</div><span className="text-[10px] text-slate-500">{(cfg.shell || 'standalone') === 'twa' ? 'STANDALONE ONLY' : `${NATIVE_ALWAYS.length + (cfg.nativeFeatures || []).length} ACTIVE`}</span></div>
-      <p className="text-slate-500 mt-1">Real Android features your site calls through <span className="font-mono text-slate-400">wybuild-native.js</span> (shipped with every build). Stores review the app's behaviour, so use these on screens people actually use and tick only what you need.</p>
+      <div className="flex items-center justify-between gap-2"><div className="flex items-center gap-2 text-white font-semibold"><Smartphone className="w-4 h-4 text-emerald-300"/>Native app features</div><span className="text-[10px] text-slate-500">{(cfg.shell || 'standalone') === 'twa' ? 'TWA MODE' : 'ENGINE-DEPENDENT'}</span></div>
+      <p className="text-slate-500 mt-1">Native capabilities depend on the selected engine. Capacitor source builds bundle <span className="font-mono text-slate-400">window.WyBuildNative</span>; the URL-based native shell uses its own bridge. Google Play reviews the app's behaviour, so request only permissions and features the app genuinely uses.</p>
       {(cfg.shell || 'standalone') === 'twa' ? <p className="text-amber-300/80 mt-3">The Trusted Web Activity shell lets Chrome render your site, so the native bridge is not available. Switch to the standalone app shell to use these.</p> : <>
+        <p className="mt-2 text-[11px] text-slate-500">WyBuild auto-selects Capacitor + Gradle only when the repository has a package.json build script and produces index.html. URL-only projects use the separate native WebView shell. If a selected feature is unsupported by the detected engine, the build stops with an explanation instead of silently ignoring it.</p>
         <div className="grid sm:grid-cols-2 gap-2 mt-3">{NATIVE_OPT_IN.map(f => { const on = (cfg.nativeFeatures || []).includes(f.id); return <button key={f.id} type="button" onClick={() => set('nativeFeatures', on ? (cfg.nativeFeatures || []).filter(x => x !== f.id) : [...(cfg.nativeFeatures || []), f.id])} className={`text-left rounded-xl border p-3 flex gap-3 ${on ? 'border-emerald-400/30 bg-emerald-400/[.06]' : 'border-white/[.06] bg-black/20'}`}><span className={`w-5 h-5 rounded border flex items-center justify-center shrink-0 ${on ? 'bg-emerald-400 border-emerald-400 text-black' : 'border-slate-600'}`}>{on && <Check className="w-3.5 h-3.5"/>}</span><span><b className="text-slate-200 block">{f.label}</b><span className="text-[11px] text-slate-500">{f.hint}</span></span></button>; })}</div>
-        <p className="text-[11px] text-slate-500 mt-3 mb-1">Always included (no permission needed)</p>
-        <div className="grid sm:grid-cols-2 gap-2">{NATIVE_ALWAYS.map(f => <div key={f.id} className="rounded-xl border border-white/[.06] bg-black/20 p-3 flex gap-3"><span className="w-5 h-5 rounded border border-emerald-400/40 bg-emerald-400/10 text-emerald-300 flex items-center justify-center shrink-0"><Check className="w-3.5 h-3.5"/></span><span><b className="text-slate-300 block">{f.label}</b><span className="text-[11px] text-slate-500">{f.hint}</span></span></div>)}</div>
+        <p className="text-[11px] text-slate-500 mt-3 mb-1">Capacitor source-build bridge (when the source build succeeds)</p>
+        <div className="grid sm:grid-cols-2 gap-2">{CAPACITOR_NATIVE.map(label => <div key={label} className="rounded-xl border border-white/[.06] bg-black/20 p-3 flex gap-3"><span className="w-5 h-5 rounded border border-emerald-400/40 bg-emerald-400/10 text-emerald-300 flex items-center justify-center shrink-0"><Check className="w-3.5 h-3.5"/></span><span className="text-[11px] text-slate-400">{label}</span></div>)}</div>
+        <details className="mt-3"><summary className="cursor-pointer text-[11px] text-slate-500">URL-only native shell features</summary><div className="grid sm:grid-cols-2 gap-2 mt-2">{NATIVE_ALWAYS.map(f => <div key={f.id} className="rounded-xl border border-white/[.06] bg-black/20 p-3 flex gap-3"><span className="w-5 h-5 rounded border border-emerald-400/40 bg-emerald-400/10 text-emerald-300 flex items-center justify-center shrink-0"><Check className="w-3.5 h-3.5"/></span><span><b className="text-slate-300 block">{f.label}</b><span className="text-[11px] text-slate-500">{f.hint}</span></span></div>)}</div></details>
         <p className="text-slate-600 mt-3">Google Play judges whether the app is more than a website and whether each declared permission is used. Add the script to your site and use these features in real screens; do not enable features you will not use.</p>
       </>}
     </section>
@@ -374,7 +385,7 @@ export const TwaView: React.FC = () => {
     <section className={card}>
       <div className="flex items-center gap-2 text-white font-semibold"><Smartphone className="w-4 h-4 text-emerald-300"/>Screen &amp; gestures</div>
       <p className="text-slate-500 mt-1">Built into the APK and AAB at build time.</p>
-      <div className="grid sm:grid-cols-2 gap-2 mt-3">{SHELLS.map(m => { const on = (cfg.shell || 'standalone') === m.id; return <button key={m.id} type="button" onClick={() => set('shell', m.id)} className={`text-left rounded-xl border p-3 ${on ? 'border-emerald-400/30 bg-emerald-400/[.06]' : 'border-white/[.06] bg-black/20'}`}><b className="text-slate-200 block">{m.label}</b><span className="text-[11px] text-slate-500">{m.hint}</span></button>; })}</div>
+      <div className="grid sm:grid-cols-2 gap-2 mt-3">{SHELLS.map(m => { const on = (cfg.shell || 'standalone') === m.id; return <button key={m.id} type="button" onClick={() => { set('shell', m.id); if (m.id === 'twa') set('nativeFeatures', []); }} className={`text-left rounded-xl border p-3 ${on ? 'border-emerald-400/30 bg-emerald-400/[.06]' : 'border-white/[.06] bg-black/20'}`}><b className="text-slate-200 block">{m.label}</b><span className="text-[11px] text-slate-500">{m.hint}</span></button>; })}</div>
       <div className="grid sm:grid-cols-3 gap-2 mt-3">{SCREEN_MODES.map(m => { const on = (cfg.display === 'minimal-ui' ? 'standalone' : cfg.display) === m.id; return <button key={m.id} type="button" onClick={() => set('display', m.id)} className={`text-left rounded-xl border p-3 ${on ? 'border-emerald-400/30 bg-emerald-400/[.06]' : 'border-white/[.06] bg-black/20'}`}><b className="text-slate-200 block">{m.label}</b><span className="text-[11px] text-slate-500">{m.hint}</span></button>; })}</div>
       <button type="button" onClick={() => set('predictiveBack', !cfg.predictiveBack)} className={`mt-2 w-full text-left rounded-xl border p-3 flex gap-3 ${cfg.predictiveBack ? 'border-emerald-400/30 bg-emerald-400/[.06]' : 'border-white/[.06] bg-black/20'}`}><span className={`w-5 h-5 rounded border flex items-center justify-center shrink-0 ${cfg.predictiveBack ? 'bg-emerald-400 border-emerald-400 text-black' : 'border-slate-600'}`}>{cfg.predictiveBack && <Check className="w-3.5 h-3.5"/>}</span><span><b className="text-slate-200 block">Predictive back gesture</b><span className="text-[11px] text-slate-500">Android 13+ shows the back-swipe preview animation. Older phones ignore it.</span></span></button>
       <div className="mt-3"><label className="text-slate-500">Google Play app-signing SHA-256 <span className="text-slate-600">(optional)</span></label><input className={`${input} font-mono`} value={cfg.playSigningFingerprint || ''} onChange={e => set('playSigningFingerprint', e.target.value.trim())} placeholder="Play Console → Setup → App signing → SHA-256"/></div>

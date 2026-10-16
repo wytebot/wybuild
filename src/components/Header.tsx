@@ -6,9 +6,13 @@ interface Props { onOpenNewProject:()=>void; onOpenQuickBuild:()=>void; onToggle
 
 const PAGES = [
   ['dashboard', 'Build', 'repo build dashboard'],
+  ['projects', 'Projects', 'repositories apps configuration'],
   ['twa', 'Web → Android', 'website twa pwa web app android apk'],
-  ['builds', 'Logs', 'build logs errors artifacts'],
+  ['builds', 'Logs', 'build logs pipelines artifacts'],
+  ['releases', 'Releases', 'publish apk aab github release'],
+  ['errors', 'Errors', 'build errors diagnostics telemetry'],
   ['tools', 'Free tools', 'free developer tools'],
+  ['team', 'Team', 'team members access'],
   ['settings', 'Keystore', 'release signing keystore'],
   ['billing', 'Pro', 'payment subscription automation'],
 ] as const;

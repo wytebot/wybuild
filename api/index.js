@@ -10,7 +10,7 @@ import JSZip from 'jszip';
 
 const TWA_WORKFLOW_FILE = 'wybuild-twa.yml';
 const TWA_WORKFLOW_PATH = `.github/workflows/${TWA_WORKFLOW_FILE}`;
-const TWA_WORKFLOW_VERSION = 24;
+const TWA_WORKFLOW_VERSION = 26;
 const TWA_MIN_SDK = 24; // androidbrowserhelper 2.7.x declares minSdk 24; a lower value fails the manifest merge
 // every file committed to a repo for each workflow kind: [path in repo, path in ./workflow]
 const WORKFLOW_KINDS = {
@@ -26,6 +26,8 @@ const WORKFLOW_KINDS = {
       ['.github/wybuild/twa-native.py', 'wybuild/twa-native.py'],
       ['.github/wybuild/WyBuildActivity.java', 'wybuild/WyBuildActivity.java'],
       ['.github/wybuild/WyBuildReminderReceiver.java', 'wybuild/WyBuildReminderReceiver.java'],
+      ['.github/wybuild/capacitor-bridge.entry.js', 'wybuild/capacitor-bridge.entry.js'],
+      ['.github/wybuild/capacitor-finalize.py', 'wybuild/capacitor-finalize.py'],
     ],
   },
 };
@@ -1202,7 +1204,7 @@ function defaultPackageId(hostname) {
 }
 
 const PKG_RE = /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/;
-const NATIVE_OPTIN = ['biometric', 'sharetarget', 'reminders'];
+const NATIVE_OPTIN = ['biometric', 'sharetarget', 'reminders', 'googleauth', 'push'];
 const PERM_RE = /^[A-Za-z][A-Za-z0-9_.]*$/;
 const str = (v, max = 200) => String(v ?? '').trim().slice(0, max);
 

@@ -1,6 +1,6 @@
 # WyBuild
 
-WyBuild focuses on **Web → Android** builds for web apps and PWAs using a GitHub Actions Trusted Web Activity workflow.
+WyBuild focuses on **Web → Android** builds for web apps and PWAs using a GitHub Actions **Capacitor + Android Gradle workflow** for buildable web source repositories, with the existing native-shell/Bubblewrap path retained for URL-only and non-buildable projects.
 
 ## Plans
 - Free: unlimited project display, 5 cloud build starts/month, 1 concurrent build, 15-minute build timeout.
@@ -9,7 +9,14 @@ WyBuild focuses on **Web → Android** builds for web apps and PWAs using a GitH
 - Pro: $9.99/month (displayed as ₦15,000) or $99/year (displayed as ₦150,000). NGN values are fixed display equivalents.
 
 ## Workflows
-Only the Web → Android/TWA workflow is installed by WyBuild. The former standalone Flutter build/export workflow is no longer supported.
+WyBuild installs one Web → Android workflow. It detects a buildable local web project and uses Capacitor + Android Gradle with a bundled native-plugin bridge; URL-only sites and explicit TWA configurations use the existing native-shell/Bubblewrap fallback. The former standalone Flutter build/export workflow is no longer supported. See `WYBUILD-CAPACITOR-NATIVE-FEATURES.md` for the native bridge API, Firebase login, FCM push, permissions and security setup.
+
+
+### Capacitor source builds (workflow v26)
+
+When a connected repository contains a `package.json` build script and produces a static `index.html` in `dist/`, `build/`, `www/`, `out/` or `public/`, WyBuild uses Capacitor and Gradle. The CI runner installs the Android plugins, bundles `window.WyBuildNative`, configures selected manifest permissions, applies the existing release signing key, and emits APK/AAB artifacts. Generated Android files and temporary npm dependency changes are not committed to the user's repository.
+
+The native bridge includes camera/photo selection, geolocation, local and remote notification APIs, Firebase sign-in entry points, biometrics, filesystem operations, sharing, clipboard, haptics, device/network state, status bar, orientation, keyboard, browser, preferences and dialogs. Provider/server configuration is still required for authentication and remote push; see `WYBUILD-CAPACITOR-NATIVE-FEATURES.md`. A remote URL alone cannot acquire arbitrary Capacitor JavaScript APIs, so URL-only projects retain the existing native shell rather than being excluded.
 
 ## Free tools
 JSON formatter, Base64 encoder/decoder, URL encoder, regex tester and text analyzer run entirely in the browser and do not consume WyBuild API/storage resources.

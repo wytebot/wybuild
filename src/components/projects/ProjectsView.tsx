@@ -151,9 +151,9 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({ onOpenNewProject }) 
                       tests enabled
                     </span>
                   )}
-                  {project.config.dartDefines.length > 0 && (
+                  {(project.config.dartDefines || []).length > 0 && (
                     <span className="text-[10px] font-mono text-slate-300 bg-slate-800 px-1.5 py-0.5 rounded">
-                      {project.config.dartDefines.length} defines
+                      {(project.config.dartDefines || []).length} defines
                     </span>
                   )}
                 </div>
