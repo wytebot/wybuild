@@ -1,4 +1,4 @@
-# wybuild-twa-workflow-version: 27
+# wybuild-twa-workflow-version: 28
 name: WyBuild Capacitor + Gradle (TWA fallback)
 concurrency:
   group: wybuild-${{ github.workflow }}-${{ github.ref }}
@@ -90,7 +90,7 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "21" # Capacitor 7 Android plugins compile with Java 21
 
       - name: Detect and build a local web source (Capacitor primary engine)
         id: engine

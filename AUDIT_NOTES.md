@@ -64,3 +64,8 @@
 - Navigation now includes the Projects, Releases, Errors and Team views, which existed in the app but were not all reachable from the sidebar/search. Legacy project cards defensively handle missing `dartDefines`.
 - Static checks passed: all 31 TS/TSX files transpile without syntax diagnostics; API/bridge/helper JavaScript syntax checks pass; all 13 workflow shell blocks pass `bash -n`; Python helper syntax passes; mock finalizer tests pass for permissions, versioning/signing, Firebase Gradle wiring and missing Firebase configuration.
 - Not run in this audit environment: full `npm run build`, GitHub Actions execution, Gradle `assembleRelease`/`bundleRelease`, real Firebase sign-in/push, or physical-device tests. These require installed dependencies, the Android SDK/runner, Firebase credentials/configuration and device/runtime validation.
+
+
+## Fix v28 — Java toolchain
+
+The workflow now provisions Temurin Java 21 for the Capacitor/Gradle build. The previous workflow used Java 17 while Capacitor Android requested Java source release 21, causing `invalid source release: 21` at `:capacitor-android:compileReleaseJavaWithJavac`. Both workflow copies and the server-side workflow version marker are updated to v28.
