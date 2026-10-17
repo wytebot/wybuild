@@ -10,7 +10,7 @@ import JSZip from 'jszip';
 
 const TWA_WORKFLOW_FILE = 'wybuild-twa.yml';
 const TWA_WORKFLOW_PATH = `.github/workflows/${TWA_WORKFLOW_FILE}`;
-const TWA_WORKFLOW_VERSION = 30;
+const TWA_WORKFLOW_VERSION = 31;
 const TWA_MIN_SDK = 24; // androidbrowserhelper 2.7.x declares minSdk 24; a lower value fails the manifest merge
 // every file committed to a repo for each workflow kind: [path in repo, path in ./workflow]
 const WORKFLOW_KINDS = {
@@ -44,11 +44,25 @@ const fmtBytes = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Ma
 
 async function loadArtifactZip(session, repo, artifactId) {
   if (!/^\d+$/.test(String(artifactId || ''))) throw new HttpError(400, 'Invalid artifact id', 'BAD_ARTIFACT');
-  const meta = await ghJson(session, `/repos/${repo}/actions/artifacts/${artifactId}`, undefined, 'reading the build artifact');
-  if (meta.expired) throw new HttpError(410, 'This build artifact has expired on GitHub.', 'ARTIFACT_GONE', { hint: 'Run the build again; artifacts are kept for the repository retention period (90 days by default).' });
-  if (!/^wb-twa-/.test(meta.name || '')) throw new HttpError(400, 'Only artifacts produced by a WyBuild build can be released.', 'NOT_WYBUILD_ARTIFACT');
+  const sref = await signedArtifactRef(artifactId);
+  let meta, r;
+  if (sref) { // signed build kept on the signer repo
+    const sg = signerState();
+    if (!sg.ok || sref.repo !== String(repo).toLowerCase()) throw new HttpError(404, 'Signed build not found.', 'ARTIFACT_GONE');
+    const seen = await gh(session, `/repos/${repo}/actions/runs/${sref.runId}`);
+    if (!seen.ok) throw new HttpError(404, 'Signed build not found.', 'ARTIFACT_GONE');
+    const mr = await signerGh(`/repos/${sg.repo}/actions/artifacts/${artifactId}`);
+    if (!mr.ok) throw new HttpError(404, 'The signed build is no longer available. Build again.', 'ARTIFACT_GONE');
+    meta = await mr.json();
+    if (!/^wb-signed-/.test(meta.name || '')) throw new HttpError(400, 'Only artifacts produced by a WyBuild build can be released.', 'NOT_WYBUILD_ARTIFACT');
+    r = await signerGh(`/repos/${sg.repo}/actions/artifacts/${artifactId}/zip`, { redirect: 'manual' });
+  } else {
+    meta = await ghJson(session, `/repos/${repo}/actions/artifacts/${artifactId}`, undefined, 'reading the build artifact');
+    if (!/^wb-twa-/.test(meta.name || '')) throw new HttpError(400, 'Only signed artifacts produced by a WyBuild build can be released.', 'NOT_WYBUILD_ARTIFACT');
+  }
+  if (meta.expired) throw new HttpError(410, 'This build artifact has expired on GitHub.', 'ARTIFACT_GONE', { hint: 'Run the build again; artifacts are kept for the repository retention period (90 days by default), signed builds for 14 days.' });
   if (meta.size_in_bytes > MAX_ARTIFACT_BYTES) throw new HttpError(413, `This artifact is ${fmtBytes(meta.size_in_bytes)}, above the ${fmtBytes(MAX_ARTIFACT_BYTES)} limit WyBuild can process.`, 'ARTIFACT_TOO_LARGE');
-  const r = await gh(session, `/repos/${repo}/actions/artifacts/${artifactId}/zip`, { redirect: 'manual' });
+  if (!r) r = await gh(session, `/repos/${repo}/actions/artifacts/${artifactId}/zip`, { redirect: 'manual' });
   const loc = r.headers.get('location');
   if (!loc) throw new HttpError(404, `GitHub has no downloadable artifact ${artifactId} in ${repo} (HTTP ${r.status}).`, 'ARTIFACT_GONE', { hint: 'Run the build again.' });
   const dl = await fetch(loc); // pre-signed storage URL: must NOT carry the GitHub token
@@ -762,6 +776,7 @@ const STEP_STATUS = (s) => {
 };
 
 const DIAGNOSES = [
+  { re: /WyBuild could not sign this build|waiting for WyBuild to sign|WyBuild could not start signing|stopped the signing request/i, category: 'keystore', title: 'The build worked, but WyBuild could not sign it', fix: 'The release key lives on the WyBuild signing service, not in your repository. The error line above names the reason (certificate mismatch, signer not configured, or signing timeout). The WyBuild owner can see details in the signing repo run.' },
   { re: /provided androidSdk isn'?t correct|given androidSdk isn'?t correct/i, category: 'twa_config', title: 'Bubblewrap rejected the Android SDK folder', fix: 'Bubblewrap needs an Android SDK folder with a top-level bin/ or tools/ directory, which the GitHub runner does not have. Reinstall the TWA workflow (v9 builds a compatible SDK folder automatically) and rebuild.' },
   { re: /Unexpected EOF|stdin|EOF.*prompt|Is a terminal|inquirer|Cannot read.*(?:password|input)/i, category: 'twa_config', title: 'Bubblewrap asked a question and nobody could answer', fix: 'Bubblewrap needed input (usually the keystore password or "update project?"). Check WB_KEYSTORE_PASSWORD and WB_KEY_PASSWORD and re-run the updated TWA workflow.' },
   { re: /exceeded the maximum execution time|timed out|The operation was canceled|timeout.*bubblewrap|Terminated/i, category: 'twa_config', title: 'Build hung and was stopped (timeout)', fix: 'The failed step ran out of time, most often while signing. Reinstall the TWA workflow (v5 closes stdin and times out with a clear error) and verify the keystore alias/passwords.' },
@@ -883,7 +898,7 @@ async function runDetail(session, repo, id) {
 
   const aab = build.target === 'appbundle';
   build.artifacts = (arts.artifacts || [])
-    .filter((artifact) => artifact && !artifact.expired)
+    .filter((artifact) => artifact && !artifact.expired && !/^wb-unsigned-/.test(artifact.name || '')) // never offer the throw-away-signed hand-off
     .map((artifact) => ({
       name: `${artifact.name || `artifact-${artifact.id}`}.zip`,
       type: build.kind === 'twa' ? 'bundle' : aab ? 'aab' : 'apk',
@@ -893,6 +908,21 @@ async function runDetail(session, repo, id) {
       downloadUrl: `/api/artifact?repo=${encodeURIComponent(repo)}&id=${artifact.id}`,
       sha256: String(artifact.digest || '').replace('sha256:', ''),
     }));
+  // Remote signing: the signed files live on the signer repo; list them like any other artifact of this run.
+  try {
+    const rec = await kv.get(signKey(repo, id));
+    if (rec) {
+      build.signing = { state: rec.state, error: rec.error || undefined, fingerprint: rec.fingerprint || undefined };
+      if (rec.state === 'signed' && rec.artifactId) {
+        build.artifacts.push({
+          name: `${rec.artifactName || `wb-signed-${id}`}.zip`, type: 'bundle', sizeBytes: 0, sizeFormatted: 'signed',
+          id: rec.artifactId, downloadUrl: `/api/artifact?repo=${encodeURIComponent(repo)}&id=${rec.artifactId}`, sha256: '',
+        });
+      } else if (rec.state === 'failed') {
+        warnings.push(`Signing failed: ${rec.error || 'unknown reason'}`);
+      }
+    }
+  } catch { /* the build itself is still shown */ }
   build.detailWarnings = warnings;
   return build;
 }
@@ -1099,6 +1129,114 @@ async function ensureSigning(session, repo) {
   });
 }
 
+/* ------------------------------ remote signing ------------------------------
+   The default release key never leaves WyBuild. A user's repository workflow builds the app with a throw-away key and hands
+   the unsigned result to WyBuild; the private signer repo (WB_SIGNER_REPO, secrets = the release keystore) signs it with
+   apksigner/jarsigner, verifies the certificate and publishes the signed files, which WyBuild then serves. */
+const SIGNER_WORKFLOW = 'wybuild-sign.yml';
+function signerState() {
+  const repo = env('WB_SIGNER_REPO').trim(), token = env('WB_SIGNER_TOKEN'), secret = env('WB_SIGNER_SECRET');
+  const missing = [['WB_SIGNER_REPO', repo], ['WB_SIGNER_TOKEN', token], ['WB_SIGNER_SECRET', secret]].filter(([, v]) => !v).map(([n]) => n);
+  if (missing.length) return { ok: false, problem: `The WyBuild Vercel environment is missing ${missing.join(', ')}.` };
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) return { ok: false, problem: 'WB_SIGNER_REPO must look like owner/name.' };
+  if (secret.length < 24) return { ok: false, problem: 'WB_SIGNER_SECRET must be at least 24 characters.' };
+  return { ok: true, repo };
+}
+function signerGh(path, init = {}) {
+  return fetch(`https://api.github.com${path}`, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${env('WB_SIGNER_TOKEN')}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      'User-Agent': 'wybuild',
+      ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+    },
+  });
+}
+// the run's short-lived GitHub token is kept encrypted and only until the signer has fetched the unsigned build
+const sealKey = () => crypto.createHash('sha256').update(`wb-sign-token\0${env('SESSION_SECRET')}`).digest();
+function sealText(t) {
+  const iv = crypto.randomBytes(12);
+  const c = crypto.createCipheriv('aes-256-gcm', sealKey(), iv);
+  const enc = Buffer.concat([c.update(String(t), 'utf8'), c.final()]);
+  return Buffer.concat([iv, c.getAuthTag(), enc]).toString('base64');
+}
+function unsealText(b64) {
+  const b = Buffer.from(String(b64), 'base64');
+  const d = crypto.createDecipheriv('aes-256-gcm', sealKey(), b.subarray(0, 12));
+  d.setAuthTag(b.subarray(12, 28));
+  return Buffer.concat([d.update(b.subarray(28)), d.final()]).toString('utf8');
+}
+const SIGN_TTL = 60 * 60 * 24 * 14; // signed files are kept 14 days on the signer repo
+const signKey = (repo, runId) => `wb:sign:${String(repo).toLowerCase()}:${runId}`;
+const signTokKey = (repo, runId) => `wb:signtok:${String(repo).toLowerCase()}:${runId}`;
+const signedArtifactRef = async (artifactId) => { try { return (await kv.get(`wb:signedart:${artifactId}`)) || null; } catch { return null; } };
+const cleanRunRef = (b) => {
+  const repo = String(b.repo || '').toLowerCase(), runId = String(b.runId || '');
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !/^\d+$/.test(runId)) throw new HttpError(400, 'Invalid request');
+  return { repo, runId };
+};
+function signerAuth(req) {
+  const st = signerState();
+  if (!st.ok) throw new HttpError(503, st.problem, 'SIGNER_NOT_CONFIGURED');
+  const got = crypto.createHash('sha256').update(String(req.headers.authorization || '').replace(/^Bearer\s+/i, '')).digest();
+  const want = crypto.createHash('sha256').update(env('WB_SIGNER_SECRET')).digest();
+  if (!crypto.timingSafeEqual(got, want)) throw new HttpError(401, 'Unauthorized', 'NOT_AUTHORIZED');
+  return st;
+}
+// the run proves itself with the one-time ticket WyBuild issued for exactly this repo + run
+async function ticketRunBinding(b) {
+  const { repo, runId } = cleanRunRef(b);
+  const ticket = String(b.ticket || '');
+  if (!/^[0-9a-f]{48}$/.test(ticket)) throw new HttpError(403, 'No WyBuild ticket on this run.', 'NOT_AUTHORIZED');
+  const h = ticketHash(ticket);
+  const [t, used] = await Promise.all([kv.get(`wb:ticket:${h}`), kv.get(`wb:ticket-used:${h}`)]);
+  if (!t || t.repo !== repo || used !== `${repo}:${runId}`) throw new HttpError(403, 'This build ticket is invalid, expired or belongs to another run.', 'NOT_AUTHORIZED');
+  return { t, repo, runId };
+}
+const runTokenFetch = (token, path, init = {}) => fetch(`https://api.github.com${path}`, {
+  ...init,
+  headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'wybuild' },
+});
+async function findUnsignedArtifact(token, repo, runId) {
+  const r = await runTokenFetch(token, `/repos/${repo}/actions/runs/${runId}/artifacts?per_page=100`);
+  if (!r.ok) throw new HttpError(502, `GitHub would not list the artifacts of run ${runId} (HTTP ${r.status}).`, 'ARTIFACT_LIST');
+  const art = ((await r.json()).artifacts || []).find((a) => a.name === `wb-unsigned-${runId}` && !a.expired);
+  if (!art) throw new HttpError(409, 'The unsigned build artifact was not found on this run.', 'NO_UNSIGNED_ARTIFACT');
+  if (art.size_in_bytes > MAX_ARTIFACT_BYTES) throw new HttpError(413, `The unsigned build is ${fmtBytes(art.size_in_bytes)}, above the ${fmtBytes(MAX_ARTIFACT_BYTES)} limit.`, 'ARTIFACT_TOO_LARGE');
+  return art;
+}
+async function removeDefaultKeystore(session, repo) {
+  for (const n of SECRET_NAMES) {
+    const r = await gh(session, `/repos/${repo}/actions/secrets/${n}`, { method: 'DELETE' });
+    if (!r.ok && r.status !== 404) {
+      throw new HttpError(502, `Could not remove secret ${n} from ${repo} (GitHub ${r.status}).`, 'SECRET_DELETE_FAILED', { hint: `Your GitHub account needs admin access to ${repo} to remove the old signing secrets.` });
+    }
+  }
+  await kv.del(defaultMarkerKey(repo)).catch(() => {});
+}
+// Decides how a build is signed. 'repo' = the owner's own key already lives in the repo's secrets (unchanged).
+// 'remote' = the WyBuild default key; it stays on the signing service and is never copied into the repo.
+async function prepareSigning(session, repo) {
+  const names = await repoSecretNames(session, repo);
+  const marker = await defaultMarker(repo);
+  if (hasCoreSecrets(names) && !marker) return 'repo';
+  const st = defaultKeystoreState();
+  if (st.state === 'ok') {
+    const sg = signerState();
+    if (!sg.ok) {
+      throw new HttpError(409, `Secure signing is not set up on this WyBuild deployment. ${sg.problem}`, 'SIGNER_NOT_CONFIGURED', {
+        hint: 'Set WB_SIGNER_REPO, WB_SIGNER_TOKEN and WB_SIGNER_SECRET in the WyBuild Vercel project and redeploy (see SECURE-SIGNING.md). WyBuild will not copy the release key into your repository.',
+      });
+    }
+    if (marker) await removeDefaultKeystore(session, repo).catch(() => {}); // old versions copied the key into the repo: take it out again
+    return 'remote';
+  }
+  await ensureSigning(session, repo); // throws NO_KEYSTORE / KEYSTORE_INCOMPLETE with the precise reason
+  return 'repo';
+}
+
 async function keystoresFor(session, repos) {
   const out = [];
   for (const repo of repos) {
@@ -1130,9 +1268,9 @@ async function keystoresFor(session, repos) {
 /* Build tickets: every dispatch carries a one-time ticket that the workflow's first step redeems at
    /api/build/authorize. A run started by hand from the GitHub Actions tab has no valid ticket and is refused. */
 const ticketHash = (t) => crypto.createHash('sha256').update(String(t)).digest('hex');
-async function issueBuildTicket(session, repo, branch) {
+async function issueBuildTicket(session, repo, branch, signMode = 'repo') {
   const ticket = crypto.randomBytes(24).toString('hex');
-  await kv.set(`wb:ticket:${ticketHash(ticket)}`, { login: session.login, repo: String(repo).toLowerCase(), branch, at: Date.now() }, { ex: 60 * 60 * 3 });
+  await kv.set(`wb:ticket:${ticketHash(ticket)}`, { login: session.login, repo: String(repo).toLowerCase(), branch, signMode, at: Date.now() }, { ex: 60 * 60 * 3 });
   return ticket;
 }
 async function redeemBuildTicket(b) {
@@ -1756,6 +1894,88 @@ async function route(req, res, path, query) {
     return send(res, 200, { ok: true });
   }
 
+  /* ---- remote signing (runner -> WyBuild, signer -> WyBuild). No session: proven by ticket or signer secret ---- */
+  if (path === 'build/complete' && post) {
+    const b = bodyOf(req);
+    const { t, repo, runId } = await ticketRunBinding(b);
+    if (t.signMode !== 'remote') throw new HttpError(403, 'This build was not started for remote signing.', 'NOT_AUTHORIZED');
+    if (String(b.runAttempt || '1') !== '1') throw new HttpError(403, 'Re-running a build from GitHub is not allowed.', 'NOT_AUTHORIZED');
+    const sg = signerState();
+    if (!sg.ok) throw new HttpError(503, `Secure signing is not configured. ${sg.problem}`, 'SIGNER_NOT_CONFIGURED');
+    const key = signKey(repo, runId);
+    const existing = await kv.get(key);
+    if (existing) return send(res, 200, { ok: true, state: existing.state }); // runner retry: never sign twice
+    const token = String(b.token || '');
+    if (!/^[A-Za-z0-9_.\-]{20,600}$/.test(token)) throw new HttpError(400, 'Invalid run token');
+    // confirm with GitHub, using the run's own token, that this really is a WyBuild build started from the app
+    const rr = await runTokenFetch(token, `/repos/${repo}/actions/runs/${runId}`);
+    if (!rr.ok) throw new HttpError(403, `GitHub did not confirm this run (HTTP ${rr.status}).`, 'NOT_AUTHORIZED');
+    const run = await rr.json();
+    const okRun = String(run.id) === runId && String(run.repository?.full_name || '').toLowerCase() === repo && run.event === 'workflow_dispatch'
+      && Number(run.run_attempt || 1) === 1 && run.status === 'in_progress' && String(run.path || '').startsWith(TWA_WORKFLOW_PATH);
+    if (!okRun) throw new HttpError(403, 'This run is not an in-progress WyBuild build started from the WyBuild app.', 'NOT_AUTHORIZED');
+    await findUnsignedArtifact(token, repo, runId);
+    const claimed = await kv.set(key, { state: 'queued', login: t.login, requestedAt: Date.now() }, { nx: true, ex: 60 * 60 * 24 * 120 });
+    if (!claimed) return send(res, 200, { ok: true, state: 'queued' });
+    await kv.set(signTokKey(repo, runId), sealText(token), { ex: 60 * 40 });
+    const d = await signerGh(`/repos/${sg.repo}/actions/workflows/${SIGNER_WORKFLOW}/dispatches`, {
+      method: 'POST',
+      body: JSON.stringify({ ref: env('WB_SIGNER_REF') || 'main', inputs: { repo, run_id: runId } }),
+    });
+    if (d.status !== 204) {
+      const msg = `Could not start the WyBuild signing service (GitHub ${d.status}). Check WB_SIGNER_TOKEN, WB_SIGNER_REPO and that ${SIGNER_WORKFLOW} exists on its default branch.`;
+      await kv.set(key, { state: 'failed', login: t.login, error: msg }, { ex: SIGN_TTL });
+      await kv.del(signTokKey(repo, runId)).catch(() => {});
+      throw new HttpError(502, msg, 'SIGNER_DISPATCH_FAILED');
+    }
+    return send(res, 200, { ok: true, state: 'queued' });
+  }
+
+  if (path === 'build/sign-status' && post) {
+    const { repo, runId } = await ticketRunBinding(bodyOf(req));
+    const rec = await kv.get(signKey(repo, runId));
+    return send(res, 200, rec ? { state: rec.state, error: rec.error, fingerprint: rec.fingerprint } : { state: 'waiting' });
+  }
+
+  if (path === 'sign/fetch' && post) {
+    signerAuth(req);
+    const { repo, runId } = cleanRunRef(bodyOf(req));
+    const key = signKey(repo, runId);
+    const rec = await kv.get(key);
+    if (!rec || !['queued', 'signing'].includes(rec.state)) throw new HttpError(409, 'There is no pending signing request for this run.', 'NO_REQUEST');
+    const sealed = await kv.get(signTokKey(repo, runId));
+    if (!sealed) throw new HttpError(410, 'The build run has ended; its access expired before signing started.', 'RUN_TOKEN_EXPIRED');
+    const token = unsealText(sealed);
+    const art = await findUnsignedArtifact(token, repo, runId);
+    const z = await runTokenFetch(token, `/repos/${repo}/actions/artifacts/${art.id}/zip`, { redirect: 'manual' });
+    const loc = z.headers.get('location');
+    if (!loc) throw new HttpError(502, `GitHub gave no download for the unsigned build (HTTP ${z.status}).`, 'ARTIFACT_DOWNLOAD');
+    await kv.set(key, { ...rec, state: 'signing', startedAt: Date.now() }, { ex: 60 * 60 * 24 * 120 });
+    return send(res, 200, { ok: true, downloadUrl: loc }); // pre-signed storage URL, valid for about a minute
+  }
+
+  if (path === 'sign/done' && post) {
+    const sg = signerAuth(req);
+    const b = bodyOf(req);
+    const { repo, runId } = cleanRunRef(b);
+    const key = signKey(repo, runId);
+    const rec = await kv.get(key);
+    if (!rec) throw new HttpError(409, 'There is no signing request for this run.', 'NO_REQUEST');
+    if (b.ok === true) {
+      const artifactId = String(b.artifactId || ''), name = String(b.artifactName || '');
+      if (!/^\d+$/.test(artifactId) || !/^wb-signed-[\w.-]+$/.test(name)) throw new HttpError(400, 'Invalid signed artifact');
+      const mr = await signerGh(`/repos/${sg.repo}/actions/artifacts/${artifactId}`);
+      const meta = mr.ok ? await mr.json() : null;
+      if (!meta || meta.name !== name || meta.expired) throw new HttpError(409, 'The signed artifact is not on the signing repository.', 'NO_SIGNED_ARTIFACT');
+      await kv.set(key, { ...rec, state: 'signed', artifactId: Number(artifactId), artifactName: name, fingerprint: String(b.fingerprint || '').slice(0, 120), signedAt: Date.now() }, { ex: SIGN_TTL });
+      await kv.set(`wb:signedart:${artifactId}`, { repo, runId }, { ex: SIGN_TTL });
+    } else {
+      await kv.set(key, { ...rec, state: 'failed', error: String(b.error || 'Signing failed.').slice(0, 600) }, { ex: SIGN_TTL });
+    }
+    await kv.del(signTokKey(repo, runId)).catch(() => {});
+    return send(res, 200, { ok: true });
+  }
+
   /* everything below needs a session */
   const session = requireSession(req);
 
@@ -1841,7 +2061,7 @@ async function route(req, res, path, query) {
       const now = new Date();
       usage = { monthlyBuildsUsed: 0, monthlyLimit: isLifetimeFree(session.login) ? PLANS.lifetimeFree.monthlyLimit : PLANS.free.monthlyLimit, concurrentLimit: isLifetimeFree(session.login) ? PLANS.lifetimeFree.concurrentLimit : PLANS.free.concurrentLimit, resetsAt: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)).toISOString() };
     }
-    return send(res, 200, { user: { login: session.login, name: session.name, avatar: session.avatar, email: session.email }, subscription: sub, usage, lifetimeFree: isLifetimeFree(session.login), pricing: PRICING, pricingNgn: PRICING_NGN, defaultKeystore: !!defaultKeystore(), defaultKeystoreProblem: defaultKeystoreState().problem || undefined });
+    return send(res, 200, { user: { login: session.login, name: session.name, avatar: session.avatar, email: session.email }, subscription: sub, usage, lifetimeFree: isLifetimeFree(session.login), pricing: PRICING, pricingNgn: PRICING_NGN, defaultKeystore: !!defaultKeystore(), defaultKeystoreProblem: defaultKeystoreState().problem || undefined, signerProblem: defaultKeystoreState().state === 'ok' ? (signerState().problem || undefined) : undefined });
   }
 
   if (path === 'repos' && m === 'GET') {
@@ -1995,7 +2215,7 @@ async function route(req, res, path, query) {
     }
     // install the keystore variables together with the workflow so the repo is ready for its first build
     let signing = 'none';
-    try { await ensureSigning(session, repo); signing = await signingStatus(session, repo); } catch { /* reported at build time with a precise reason */ }
+    try { await prepareSigning(session, repo); signing = await signingStatus(session, repo); } catch { /* reported at build time with a precise reason */ }
     return send(res, 200, { ok: true, branch: target, signing });
   }
 
@@ -2127,12 +2347,11 @@ async function route(req, res, path, query) {
       const stale = await twaStaleFiles(session, repo, branch, req);
       if (stale.length) throw new HttpError(409, `The WyBuild TWA workflow in ${repo} is outdated (${stale.map((x) => x.split('/').pop()).join(', ')} differ from v${TWA_WORKFLOW_VERSION}).`, 'WORKFLOW_OUTDATED', { hint: 'WyBuild reinstalls it automatically; if you see this, press Build again.', details: { stale } });
     }
-    if (useKeystore) await ensureSigning(session, repo);
-    else await ensureSigning(session, repo).catch(() => {}); // still leave the secrets in place for later builds
+    const signMode = useKeystore ? await prepareSigning(session, repo) : 'repo'; // 'remote' = WyBuild signs, the key never enters the repo
 
     const reservation = await reserveBuildSlot(session, repo);
     const inflightKey = reservation.inflightKey;
-    const wbTicket = await issueBuildTicket(session, repo, branch);
+    const wbTicket = await issueBuildTicket(session, repo, branch, signMode);
     const r = await gh(session, `/repos/${repo}/actions/workflows/${TWA_WORKFLOW_FILE}/dispatches`, {
       method: 'POST',
       body: JSON.stringify({
@@ -2142,6 +2361,7 @@ async function route(req, res, path, query) {
           twa_config: JSON.stringify(twa),
           output,
           use_keystore: String(useKeystore),
+          sign_mode: signMode,
           store_ready: String(storeReady),
           timeout_minutes: String((await usageFor(session.login)).plan.monthlyLimit >= 9999 ? 60 : 15),
           bubblewrap_version: /^(\d+\.\d+\.\d+)$/.test(String(b.bubblewrapVersion || '')) ? b.bubblewrapVersion : '1.25.0',
@@ -2281,6 +2501,17 @@ async function route(req, res, path, query) {
   if (path === 'artifact' && m === 'GET') {
     const repo = checkRepo(query.repo);
     if (!/^\d+$/.test(query.id || '')) throw new HttpError(400, 'Invalid artifact id');
+    const sref = await signedArtifactRef(query.id);
+    if (sref) { // a signed build lives on the signer repo; the caller must be able to see the build run in their own repo
+      const sg = signerState();
+      if (!sg.ok || sref.repo !== repo.toLowerCase()) throw new HttpError(404, 'Signed build not found.', 'ARTIFACT_GONE');
+      const seen = await gh(session, `/repos/${repo}/actions/runs/${sref.runId}`);
+      if (!seen.ok) throw new HttpError(404, 'Signed build not found.', 'ARTIFACT_GONE');
+      const sz = await signerGh(`/repos/${sg.repo}/actions/artifacts/${query.id}/zip`, { redirect: 'manual' });
+      const sloc = sz.headers.get('location');
+      if (!sloc) throw new HttpError(404, 'The signed build has expired (kept 14 days). Build again to get a fresh signed copy.', 'ARTIFACT_GONE');
+      return redirect(res, sloc);
+    }
     const r = await gh(session, `/repos/${repo}/actions/artifacts/${query.id}/zip`, { redirect: 'manual' });
     const loc = r.headers.get('location');
     if (!loc) throw new HttpError(404, `GitHub has no downloadable artifact ${query.id} in ${repo} (HTTP ${r.status}).`, 'ARTIFACT_GONE', { hint: 'Artifacts expire after the repository retention period (default 90 days) or when the run is deleted. Rebuild to get a fresh one.' });
@@ -2296,6 +2527,7 @@ async function route(req, res, path, query) {
         hint: 'Set WB_KEYSTORE_BASE64, WB_KEYSTORE_PASSWORD, WB_KEY_ALIAS and WB_KEY_PASSWORD in the WyBuild Vercel project and redeploy.',
       });
     }
+    if (signerState().ok) { await removeDefaultKeystore(session, repo); return send(res, 200, { ok: true, signing: 'default' }); } // remote signing: drop the repo's own key, builds are then signed by WyBuild
     await installDefaultKeystore(session, repo, st);
     return send(res, 200, { ok: true, signing: 'default' });
   }

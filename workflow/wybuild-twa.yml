@@ -1,5 +1,6 @@
-# wybuild-twa-workflow-version: 30
+# wybuild-twa-workflow-version: 31
 name: WyBuild Capacitor + Gradle (TWA fallback)
+# v31: release signing happens on the WyBuild signing service. This repository only builds; the release key never enters it.
 concurrency:
   group: wybuild-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -38,28 +39,36 @@ on:
         description: One-time build ticket issued by WyBuild. Builds started from the GitHub Actions tab have none and are refused.
         type: string
         default: ""
+      sign_mode:
+        description: remote = WyBuild signs the finished build on its own service (default key). repo = sign here with this repository's own WB_KEYSTORE_* secrets.
+        type: string
+        default: "repo"
 
 jobs:
   twa:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read # lets WyBuild's signing service fetch this run's unsigned artifact with the run's own short-lived token
     timeout-minutes: ${{ fromJSON(inputs.timeout_minutes) }}
     env:
       TWA_CONFIG: ${{ inputs.twa_config }}
       OUTPUT: ${{ inputs.output }}
       USE_KEYSTORE: ${{ inputs.use_keystore }}
       STORE_READY: ${{ inputs.store_ready }}
+      SIGN_MODE: ${{ inputs.sign_mode }}
       WB_OUT: ${{ github.workspace }}/.wybuild-out
       WB_TOOLS: ${{ github.workspace }}/.wybuild-tools
-      WB_KEYSTORE_B64: ${{ secrets.WB_KEYSTORE_BASE64 }}
-      WB_KEYSTORE_PASSWORD: ${{ secrets.WB_KEYSTORE_PASSWORD }}
-      WB_KEY_ALIAS_SECRET: ${{ secrets.WB_KEY_ALIAS }}
-      WB_KEY_PASSWORD: ${{ secrets.WB_KEY_PASSWORD }}
+      WB_KEYSTORE_B64: ${{ inputs.sign_mode != 'remote' && secrets.WB_KEYSTORE_BASE64 || '' }} # never mapped into the job in remote-signing mode
+      WB_KEYSTORE_PASSWORD: ${{ inputs.sign_mode != 'remote' && secrets.WB_KEYSTORE_PASSWORD || '' }} # never mapped into the job in remote-signing mode
+      WB_KEY_ALIAS_SECRET: ${{ inputs.sign_mode != 'remote' && secrets.WB_KEY_ALIAS || '' }} # never mapped into the job in remote-signing mode
+      WB_KEY_PASSWORD: ${{ inputs.sign_mode != 'remote' && secrets.WB_KEY_PASSWORD || '' }} # never mapped into the job in remote-signing mode
     steps:
       - name: Authorize with WyBuild
         # Builds must be started from the WyBuild app: it checks the plan and quota, then hands this run a
         # one-time ticket. Running the workflow by hand from the Actions tab has no ticket and stops here.
         env:
-          WB_APP_URL: "https://wybuild-black.vercel.app"
+          WB_APP_URL: "__WYBUILD_APP_URL__"
           WB_TICKET: ${{ inputs.wb_ticket }}
         run: |
           set -uo pipefail
@@ -300,7 +309,14 @@ jobs:
         run: |
           set -euo pipefail
           KS="$WB_OUT/wybuild-release.jks"
-          if [ "$USE_KEYSTORE" = "true" ]; then
+          if [ "$SIGN_MODE" = "remote" ]; then
+            # The release key is NOT in this repository. The build is signed with a throw-away key that exists only on this
+            # runner; WyBuild's signing service strips that signature and signs the finished build with the release key.
+            echo "::notice::Release signing is done by WyBuild after this build. The release key never enters this repository."
+            ALIAS="wybuild-temp"; SPASS="$(openssl rand -hex 12)"; KPASS="$SPASS"
+            keytool -genkeypair -alias "$ALIAS" -keyalg RSA -keysize 2048 -validity 10000 -keystore "$KS" \
+              -storepass "$SPASS" -keypass "$KPASS" -dname "CN=WyBuild Build Key, O=WyBuild, C=US" >/dev/null
+          elif [ "$USE_KEYSTORE" = "true" ]; then
             test -n "$WB_KEYSTORE_B64" || { echo "::error::WB_KEYSTORE_BASE64 secret is missing. Upload your release keystore in WyBuild > Keystores. A release key is required for APKMirror/Uptodown."; exit 1; }
             # Normalize whitespace introduced by multiline GitHub secrets, then decode strictly.
             # Do not print the secret or its contents.
@@ -399,13 +415,14 @@ jobs:
           if [ -n "$BT" ] && [ -f "$DIST/$NAME.apk" ]; then "$BT/apksigner" verify --verbose "$DIST/$NAME.apk"; fi
           if [ -f "$DIST/$NAME.aab" ]; then jarsigner -verify -verbose -certs "$DIST/$NAME.aab" >/dev/null; fi
           cp "$META" "$DIST/capacitor-config.json"
+          if [ "$SIGN_MODE" = "remote" ]; then SIGN_LINE="Signing: built with a throw-away key; WyBuild's signing service replaces it with the release key and verifies v1/v2/v3 signatures."; else SIGN_LINE="Signing: release keystore validated by WyBuild; APK/AAB signature verification passed."; fi
           cat > "$DIST/store-readiness.md" <<EOF
           # WyBuild Capacitor release
           - Engine: Capacitor + Android Gradle
           - Package: $(node -p 'require("../.wybuild-out/capacitor-meta.json").packageId')
           - Version: $(node -p 'require("../.wybuild-out/capacitor-meta.json").versionName')
           - Version code: $(node -p 'require("../.wybuild-out/capacitor-meta.json").versionCode')
-          - Signing: release keystore validated by WyBuild; APK/AAB signature verification passed.
+          - $SIGN_LINE
           - Native bridge: camera, location, notifications, push, Firebase Google/Apple auth, biometrics, filesystem, sharing, clipboard, haptics, device/network, orientation, status bar, keyboard and dialogs are bundled.
           - Setup-dependent: Google/Firebase login and remote push require a matching google-services.json, Firebase providers, SHA fingerprints and server-side auth configuration.
           EOF
@@ -507,7 +524,7 @@ jobs:
           exit $RC
 
       - name: Check the live site trusts this app (only the Trusted Web Activity shell needs this to hide the address bar)
-        if: ${{ env.WYBUILD_ENGINE != 'capacitor' && env.WYBUILD_SHELL == 'twa' }}
+        if: ${{ env.WYBUILD_ENGINE != 'capacitor' && env.WYBUILD_SHELL == 'twa' && env.SIGN_MODE != 'remote' }}
         continue-on-error: true
         run: |
           python3 - <<'PY'
@@ -549,10 +566,71 @@ jobs:
           PY
 
       - name: Upload artifacts
-        if: ${{ always() }}
+        if: ${{ always() && env.SIGN_MODE != 'remote' }}
         uses: actions/upload-artifact@v5
         with:
           name: wb-twa-${{ github.run_id }}
           path: .wybuild-out/dist/**
           include-hidden-files: true
           if-no-files-found: warn
+
+      # Remote signing: the build output is uploaded as an UNSIGNED hand-off (signed only with the runner's throw-away key).
+      - name: Upload unsigned build for WyBuild signing
+        id: unsigned
+        if: ${{ always() && env.SIGN_MODE == 'remote' }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: wb-unsigned-${{ github.run_id }}
+          path: .wybuild-out/dist/**
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 3
+
+      - name: Sign with WyBuild (the release key stays outside this repository)
+        if: ${{ success() && env.SIGN_MODE == 'remote' }}
+        env:
+          WB_APP_URL: "__WYBUILD_APP_URL__"
+          WB_TICKET: ${{ inputs.wb_ticket }}
+          WB_RUN_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          case "$WB_APP_URL" in
+            https://*) ;;
+            *) echo "::error::This workflow was not installed by WyBuild (missing app URL). Open WyBuild > Web to Android > Update workflow."; exit 1 ;;
+          esac
+          echo "::add-mask::$WB_RUN_TOKEN"
+          call() { # $1 = endpoint, $2 = json file; prints the HTTP status
+            curl -sS --retry 3 --retry-delay 3 --retry-all-errors -m 60 -o "$RUNNER_TEMP/wb-sign-resp.json" -w '%{http_code}' \
+              -H 'Content-Type: application/json' --data @"$2" "${WB_APP_URL%/}/api/build/$1" || echo 000
+          }
+          jq -n --arg t "$WB_TICKET" --arg repo "$GITHUB_REPOSITORY" --arg run "$GITHUB_RUN_ID" --arg att "$GITHUB_RUN_ATTEMPT" --arg tok "$WB_RUN_TOKEN" \
+            '{ticket:$t, repo:$repo, runId:$run, runAttempt:$att, token:$tok}' > "$RUNNER_TEMP/wb-complete.json"
+          CODE="$(call complete "$RUNNER_TEMP/wb-complete.json")"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::WyBuild could not start signing (HTTP $CODE). $(jq -r '.error // empty' "$RUNNER_TEMP/wb-sign-resp.json" 2>/dev/null || true)"
+            exit 1
+          fi
+          echo "Build handed to WyBuild for signing. Waiting for the signed APK/AAB..."
+          jq -n --arg t "$WB_TICKET" --arg repo "$GITHUB_REPOSITORY" --arg run "$GITHUB_RUN_ID" '{ticket:$t, repo:$repo, runId:$run}' > "$RUNNER_TEMP/wb-status.json"
+          for i in $(seq 1 120); do
+            sleep 10
+            CODE="$(call sign-status "$RUNNER_TEMP/wb-status.json")"
+            if [ "$CODE" = "200" ]; then
+              STATE="$(jq -r '.state // empty' "$RUNNER_TEMP/wb-sign-resp.json")"
+              case "$STATE" in
+                signed)
+                  FP="$(jq -r '.fingerprint // empty' "$RUNNER_TEMP/wb-sign-resp.json")"
+                  echo "WyBuild signed this build and verified the signatures."
+                  { echo "## Signed by WyBuild"; echo "- Signatures: APK v1 + v2 + v3, App Bundle jarsigner; verified against the release certificate"; [ -n "$FP" ] && echo "- Certificate SHA-256: \`$FP\`"; echo "- Download the signed files from the WyBuild Builds page."; } >> "$GITHUB_STEP_SUMMARY"
+                  exit 0 ;;
+                failed)
+                  echo "::error::WyBuild could not sign this build: $(jq -r '.error // "unknown reason"' "$RUNNER_TEMP/wb-sign-resp.json")"
+                  exit 1 ;;
+              esac
+            elif [ "$CODE" = "403" ] || [ "$CODE" = "400" ]; then
+              echo "::error::WyBuild stopped the signing request (HTTP $CODE). $(jq -r '.error // empty' "$RUNNER_TEMP/wb-sign-resp.json" 2>/dev/null || true)"
+              exit 1
+            fi
+          done
+          echo "::error::Timed out after 20 minutes waiting for WyBuild to sign this build. Start a new build from WyBuild."
+          exit 1
