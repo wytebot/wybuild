@@ -1107,13 +1107,16 @@ async function ensureSigning(session, repo) {
   const names = await repoSecretNames(session, repo);
   const marker = await defaultMarker(repo);
 
-  if (hasCoreSecrets(names)) {
-    if (marker && st.state === 'ok' && marker !== st.fingerprint) {
-      await installDefaultKeystore(session, repo, st);
-      return 'default';
-    }
-    return marker ? 'default' : 'repo';
+  // WyBuild's configured default key is authoritative when present. Refresh all four
+  // repository Actions secrets before EVERY build so new repos and existing repos receive
+  // key rotations automatically. GitHub encrypts secrets in transit; values never go to the
+  // browser or get committed to repository files. This intentionally replaces repo-level
+  // WB_KEYSTORE_* values while the WyBuild default key is configured.
+  if (st.state === 'ok') {
+    await installDefaultKeystore(session, repo, st);
+    return 'default';
   }
+  if (hasCoreSecrets(names)) return marker ? 'default' : 'repo';
   if (names && names.has('WB_KEYSTORE_BASE64') && !marker) {
     throw new HttpError(409, `${repo} has a WB_KEYSTORE_BASE64 secret but is missing its password or alias secret.`, 'KEYSTORE_INCOMPLETE', {
       hint: 'WyBuild will not overwrite a key it did not install. Upload the complete keystore in WyBuild, or add WB_KEYSTORE_PASSWORD and WB_KEY_ALIAS to the repo secrets.',
@@ -1220,21 +1223,10 @@ async function removeDefaultKeystore(session, repo) {
 // Decides how a build is signed. 'repo' = the owner's own key already lives in the repo's secrets (unchanged).
 // 'remote' = the WyBuild default key; it stays on the signing service and is never copied into the repo.
 async function prepareSigning(session, repo) {
-  const names = await repoSecretNames(session, repo);
-  const marker = await defaultMarker(repo);
-  if (hasCoreSecrets(names) && !marker) return 'repo';
-  const st = defaultKeystoreState();
-  if (st.state === 'ok') {
-    const sg = signerState();
-    if (!sg.ok) {
-      throw new HttpError(409, `Secure signing is not set up on this WyBuild deployment. ${sg.problem}`, 'SIGNER_NOT_CONFIGURED', {
-        hint: 'Set WB_SIGNER_REPO, WB_SIGNER_TOKEN and WB_SIGNER_SECRET in the WyBuild Vercel project and redeploy (see SECURE-SIGNING.md). WyBuild will not copy the release key into your repository.',
-      });
-    }
-    if (marker) await removeDefaultKeystore(session, repo).catch(() => {}); // old versions copied the key into the repo: take it out again
-    return 'remote';
-  }
-  await ensureSigning(session, repo); // throws NO_KEYSTORE / KEYSTORE_INCOMPLETE with the precise reason
+  // All builds use the repo's Actions secrets. ensureSigning synchronizes the configured
+  // WyBuild environment key into that repo on every build; no private signer service is
+  // required and no signing credentials are sent to the browser or committed as files.
+  await ensureSigning(session, repo);
   return 'repo';
 }
 
@@ -2389,7 +2381,7 @@ async function route(req, res, path, query) {
       const stale = await twaStaleFiles(session, repo, branch, req);
       if (stale.length) throw new HttpError(409, `The WyBuild TWA workflow in ${repo} is outdated (${stale.map((x) => x.split('/').pop()).join(', ')} differ from v${TWA_WORKFLOW_VERSION}).`, 'WORKFLOW_OUTDATED', { hint: 'WyBuild reinstalls it automatically; if you see this, press Build again.', details: { stale } });
     }
-    const signMode = useKeystore ? await prepareSigning(session, repo) : 'repo'; // 'remote' = WyBuild signs, the key never enters the repo
+    const signMode = await prepareSigning(session, repo); // Sync WyBuild's environment signing secrets before every build
 
     const reservation = await reserveBuildSlot(session, repo);
     const inflightKey = reservation.inflightKey;
