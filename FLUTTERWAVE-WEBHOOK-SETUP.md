@@ -31,7 +31,7 @@ Configure this exact URL in the Flutterwave dashboard for the production account
 8. The subscription is activated and stored server-side.
 9. The operation is idempotent, so duplicate webhook deliveries do not create duplicate subscriptions.
 
-The browser callback and `/api/billing/status` remain as reconciliation fallbacks if a webhook arrives late.
+The browser callback and `/api/billing/status` remain reconciliation fallbacks for WyBuild subscriptions. WyCut credits are granted only after the WyBuild webhook forwards an authoritative successful charge. Verified terminal failures are forwarded only to mark the order rejected (never to grant credits). Any downstream forwarding failure returns HTTP 500 so Flutterwave can retry.
 
 ## Important
 
@@ -57,4 +57,7 @@ Set these **in WyBuild's Vercel project**:
 - `WYCUT_PAYMENT_CONFIRM_URL=https://YOUR-WYCUT-DOMAIN/api/wybuild-payment-confirmation`
 - `WYCUT_WEBHOOK_SHARED_SECRET=<long random secret>`
 
-Set the exact same secret in WyCut as `WYBUILD_WEBHOOK_SHARED_SECRET`. WyBuild authenticates with the existing v4 OAuth credentials (`FLW_CLIENT_ID`, `FLW_CLIENT_SECRET`), retrieves the charge directly from Flutterwave, and forwards only a successful authoritative charge. WyCut verifies the shared secret and matches reference, provider transaction ID, NGN amount/currency and customer email to the stored order before granting credits. Keep the direct WyCut Flutterwave webhook disabled if using this single-webhook arrangement; do not configure two competing webhook receivers for the same merchant event.
+Set the exact same secret in WyCut as `WYBUILD_WEBHOOK_SHARED_SECRET`. WyBuild authenticates with the existing v4 OAuth credentials (`FLW_CLIENT_ID`, `FLW_CLIENT_SECRET`), retrieves the charge directly from Flutterwave, and forwards successful charges for settlement plus verified terminal failures for a no-credit rejection status. For reference-only webhook events, WyBuild uses a read-only shared-secret lookup to obtain the stored charge ID, then independently verifies it with Flutterwave. WyCut matches reference, provider transaction ID, NGN amount/currency and (when present) customer email to the stored order before granting credits. WyCut has no direct Flutterwave webhook receiver; do not register a second webhook for the same merchant event.
+
+
+When WyCut and WyBuild use the same Flutterwave merchant account, set the same `FLW_CLIENT_ID`, `FLW_CLIENT_SECRET`, `FLW_ENCRYPTION_KEY`, and matching production/sandbox `FLW_V4_BASE_URL` in both projects. `FLW_SECRET_HASH` belongs to WyBuild because it owns the registered webhook. Keep the WyCut/WyBuild shared confirmation secret separate from all Flutterwave credentials.

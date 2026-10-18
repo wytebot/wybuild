@@ -405,8 +405,10 @@ async function flw4Token() {
 function traceId() {
   return crypto.randomUUID();
 }
-function idempotencyKey(prefix = 'wybuild') {
-  return `${prefix}-${crypto.randomUUID()}`.replace(/[^A-Za-z0-9-]/g, '').slice(0, 120);
+function idempotencyKey(prefix) {
+  // A caller-supplied prefix identifies one logical write and must remain stable across retries.
+  // Read-only/unlabelled requests get a fresh trace-like value but do not depend on idempotency.
+  return String(prefix || crypto.randomUUID()).replace(/[^A-Za-z0-9-]/g, '').slice(0, 120);
 }
 
 async function flw4(path, init = {}, opts = {}) {
@@ -415,7 +417,7 @@ async function flw4(path, init = {}, opts = {}) {
     Authorization: `Bearer ${token}`,
     'Content-Type': 'application/json',
     'X-Trace-Id': traceId(),
-    'X-Idempotency-Key': idempotencyKey(opts.idempotencyPrefix || 'wybuild'),
+    ...(opts.idempotencyPrefix ? { 'X-Idempotency-Key': idempotencyKey(opts.idempotencyPrefix) } : {}),
     ...(init.headers || {}),
   };
   const r = await fetch(`${FLW_V4_BASE()}${path}`, { ...init, headers });
@@ -560,6 +562,7 @@ async function createV4Checkout(session, body, base) {
     await kv.set(`wb:cust:${session.login}`, customerId);
   }
 
+  const reference = `wb-${session.login}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`.replace(/[^A-Za-z0-9-]/g, '').slice(0, 42);
   const paymentMethod = await flw4('/payment-methods', {
     method: 'POST',
     body: JSON.stringify({
@@ -572,12 +575,10 @@ async function createV4Checkout(session, body, base) {
         encrypted_cvv: card.encrypted_cvv,
       },
     }),
-  }, { idempotencyPrefix: `payment-method-${session.login}` });
+  }, { idempotencyPrefix: `payment-method-${reference}` });
 
   const paymentMethodId = paymentMethod.data?.id;
   if (!paymentMethodId) throw new HttpError(502, 'Flutterwave did not return a payment method id');
-
-  const reference = `wb-${session.login}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`.replace(/[^A-Za-z0-9-]/g, '').slice(0, 42);
   await kv.set(`wb:tx:${reference}`, {
     login: session.login,
     cycle,
@@ -1803,14 +1804,18 @@ async function route(req, res, path, query) {
           charge = await getCharge(String(id));
         } else {
           // Some webhook payloads carry the reference but not the charge id.
-          // Resolve it only against our own pending transaction records.
+          // WyBuild subscriptions can resolve a stored charge ID from our own KV record.
           const pending = await kv.get(`wb:tx:${String(referenceHint)}`);
           if (pending?.flwChargeId) charge = await getCharge(String(pending.flwChargeId));
-          else if (pending) {
-            // Reference is enough to identify our pending payment, but activation
-            // still requires an authoritative Flutterwave charge response.
-            // There is no safe arbitrary-reference lookup endpoint here, so wait
-            // for callback/status reconciliation instead.
+          else if (/^wycut_[A-Za-z0-9-]{8,100}$/i.test(String(referenceHint || ''))) {
+            // Read-only lookup in WyCut; the returned ID is still verified directly with Flutterwave below.
+            const confirmUrl = env('WYCUT_PAYMENT_CONFIRM_URL'); const sharedSecret = env('WYCUT_WEBHOOK_SHARED_SECRET');
+            if (!confirmUrl || !sharedSecret || new URL(confirmUrl).protocol !== 'https:') throw new Error('WyCut confirmation failed: secure lookup endpoint/shared secret is not configured');
+            const lookup = await fetch(confirmUrl, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-WyBuild-Webhook-Secret': sharedSecret }, body: JSON.stringify({ source: 'wybuild-flutterwave-v4', action: 'lookup', reference: String(referenceHint) }), signal: AbortSignal.timeout(15000) });
+            const lookupData = await lookup.json().catch(() => ({}));
+            if (!lookup.ok || !lookupData?.providerChargeId) throw new Error(`WyCut confirmation failed: charge-ID lookup returned HTTP ${lookup.status}`);
+            charge = await getCharge(String(lookupData.providerChargeId));
+          } else if (pending) {
             console.info('Flutterwave webhook received reference-only event; awaiting charge reconciliation', referenceHint);
           }
         }
@@ -1825,10 +1830,39 @@ async function route(req, res, path, query) {
             if (!confirmUrl || !sharedSecret) {
               throw new Error('WyCut confirmation failed: WYCUT_PAYMENT_CONFIRM_URL / WYCUT_WEBHOOK_SHARED_SECRET is not configured');
             }
-            if (String(charge.status || '').toLowerCase() !== 'succeeded') {
-              // A valid but pending/failed charge must never be forwarded as paid.
-              console.info('WyCut Flutterwave charge is not succeeded yet', ref, String(charge.status || ''));
+            if (new URL(confirmUrl).protocol !== 'https:') throw new Error('WyCut confirmation failed: WYCUT_PAYMENT_CONFIRM_URL must use HTTPS');
+            const verifiedStatus = String(charge.status || '').toLowerCase();
+            const terminalFailure = ['failed', 'cancelled', 'canceled', 'declined', 'expired', 'rejected'].includes(verifiedStatus);
+            if (verifiedStatus !== 'succeeded' && !terminalFailure) {
+              // Pending/processing charges are not settled; a later webhook must report the final status.
+              console.info('WyCut Flutterwave charge is not final yet', ref, verifiedStatus);
             } else {
+              const forward = await fetch(confirmUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-WyBuild-Webhook-Secret': sharedSecret },
+                body: JSON.stringify({
+                  source: 'wybuild-flutterwave-v4',
+                  id: String(charge.id || id || ''),
+                  reference: ref,
+                  status: verifiedStatus,
+                  amount: Number(charge.amount),
+                  currency: String(charge.currency || '').toUpperCase(),
+                  customerEmail: String(charge.customer?.email || charge.customer_email || ''),
+                }),
+                signal: AbortSignal.timeout(15000),
+              });
+              if (!forward.ok) throw new Error(`WyCut confirmation endpoint returned HTTP ${forward.status}`);
+            }
+          } else if (/^KIVORA-[A-Za-z0-9-]+$/i.test(ref)) {
+            if (String(charge.status || '').toLowerCase() !== 'succeeded') {
+              console.info('Kivora Flutterwave charge is not succeeded yet', ref, String(charge.status || ''));
+            } else {
+              const confirmUrl = env('KIVORA_PAYMENT_CONFIRM_URL');
+              const sharedSecret = env('KIVORA_WEBHOOK_SHARED_SECRET');
+              if (!confirmUrl || !sharedSecret) {
+                throw new Error('Kivora confirmation failed: KIVORA_PAYMENT_CONFIRM_URL / KIVORA_WEBHOOK_SHARED_SECRET is not configured');
+              }
+              if (new URL(confirmUrl).protocol !== 'https:') throw new Error('Kivora confirmation failed: KIVORA_PAYMENT_CONFIRM_URL must use HTTPS');
               const forward = await fetch(confirmUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'X-WyBuild-Webhook-Secret': sharedSecret },
@@ -1839,44 +1873,26 @@ async function route(req, res, path, query) {
                   status: String(charge.status || '').toLowerCase(),
                   amount: Number(charge.amount),
                   currency: String(charge.currency || '').toUpperCase(),
-                  customerEmail: String(charge.customer?.email || charge.customer_email || ''),
                 }),
                 signal: AbortSignal.timeout(15000),
               });
-              if (!forward.ok) throw new Error(`WyCut confirmation endpoint returned HTTP ${forward.status}`);
+              if (!forward.ok) throw new Error(`Kivora confirmation endpoint returned HTTP ${forward.status}`);
             }
-          } else if (/^KIVORA-[A-Za-z0-9-]+$/i.test(ref)) {
-            const confirmUrl = env('KIVORA_PAYMENT_CONFIRM_URL');
-            const sharedSecret = env('KIVORA_WEBHOOK_SHARED_SECRET');
-            if (!confirmUrl || !sharedSecret) {
-              throw new Error('Kivora confirmation failed: KIVORA_PAYMENT_CONFIRM_URL / KIVORA_WEBHOOK_SHARED_SECRET is not configured');
-            }
-            const forward = await fetch(confirmUrl, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'X-WyBuild-Webhook-Secret': sharedSecret },
-              body: JSON.stringify({
-                source: 'wybuild-flutterwave-v4',
-                id: String(charge.id || id || ''),
-                reference: ref,
-                status: String(charge.status || '').toLowerCase(),
-                amount: Number(charge.amount),
-                currency: String(charge.currency || '').toUpperCase(),
-              }),
-              signal: AbortSignal.timeout(15000),
-            });
-            if (!forward.ok) throw new Error(`Kivora confirmation endpoint returned HTTP ${forward.status}`);
           } else {
-            const pending = await kv.get(`wb:tx:${ref}`);
-            if (pending) await activateFromCharge(charge, pending, pending.login);
+            if (String(charge.status || '').toLowerCase() === 'succeeded') {
+              const pending = await kv.get(`wb:tx:${ref}`);
+              if (pending) await activateFromCharge(charge, pending, pending.login);
+            } else {
+              console.info('WyBuild subscription charge is not succeeded yet', ref, String(charge.status || ''));
+            }
           }
         }
       } catch (e) {
         console.error('Flutterwave webhook reconciliation failed', e);
-        // Let Flutterwave retry when Kivora could not persist a verified payment.
-        // WyBuild's own subscription reconciliation remains available via callback/status.
-        if (String(e?.message || '').includes('Kivora confirmation failed') || String(e?.message || '').includes('WyCut confirmation failed') || String(e?.message || '').includes('WyCut confirmation endpoint')) {
-          return send(res, 500, { error: 'Downstream payment confirmation failed; retry webhook delivery.' });
-        }
+        // Any authoritative lookup or downstream persistence failure must be retryable.
+        // Returning 200 here would permanently lose a successful payment when a network
+        // timeout or downstream 5xx occurs, even if the error text is unexpected.
+        return send(res, 500, { error: 'Flutterwave webhook reconciliation failed; retry delivery.' });
       }
     }
     return send(res, 200, { ok: true });
@@ -2035,7 +2051,7 @@ async function route(req, res, path, query) {
     const result = await flw4(`/charges/${encodeURIComponent(chargeId)}`, {
       method: 'PUT',
       body: JSON.stringify({ authorization }),
-    }, { idempotencyPrefix: `authorize-${chargeId}-${b.type}` });
+    }, { idempotencyPrefix: `authorize-${chargeId}-${b.type}-${crypto.randomUUID()}` });
     const d = result.data;
     if (d?.status === 'succeeded') {
       const pending = await kv.get(`wb:tx:${owner.reference}`);

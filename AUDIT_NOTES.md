@@ -77,3 +77,11 @@ The workflow now provisions Temurin Java 21 for the Capacitor/Gradle build. The 
 - Added explicit checks that the built `index.html`, injected native bridge, and copied Android `assets/public` files exist before Gradle packages the APK. This should fail with a useful build error instead of allowing an incomplete local web payload to become an APK.
 - Bumped both workflow copies and the server-side workflow marker to v30.
 - Static checks performed on this patch: workflow copies and version markers agree; shell blocks are checked separately where possible; ZIP integrity verified. A full Android/Gradle build and on-device launch were not performed in this environment.
+
+## v31 — webhook and payment reliability pass (2026-10-18)
+
+- Webhook reconciliation errors now return HTTP 500 consistently, including network failures and downstream WyCut persistence failures, so Flutterwave can retry rather than receiving a false success acknowledgement.
+- WyCut confirmation URLs are required to use HTTPS.
+- Reference-only WyCut webhook events use a shared-secret-authenticated, read-only lookup on WyCut to obtain the stored provider charge ID; WyBuild still retrieves and verifies that charge directly from Flutterwave v4 before forwarding settlement. Verified terminal failures update WyCut orders to rejected without granting credits.
+- Idempotency keys are stable for the same logical write. WyCut checkout references are used for payment-method/charge keys, and WyBuild payment-method keys include the unique checkout reference. Authorization attempts use unique attempt keys so a previous incorrect OTP response is not replayed for a new code.
+- Static syntax and source audits are not a substitute for the Vercel production build or a live Flutterwave sandbox run. Verify webhook signature/raw-body behavior, v4 payloads, and duplicate/failed payment cases before live billing.
