@@ -1816,14 +1816,18 @@ async function route(req, res, path, query) {
         }
         if (charge) {
           const ref = String(charge.reference || referenceHint || '').trim();
-          // Kivora advertiser payments are verified by WyBuild's Flutterwave v4
-          // webhook too. Only forward an authoritative charge fetched directly
-          // from Flutterwave; Kivora still checks it against its own campaign.
-          if (/^KIVORA-[A-Za-z0-9-]+$/i.test(ref)) {
-            const confirmUrl = env('KIVORA_PAYMENT_CONFIRM_URL');
-            const sharedSecret = env('KIVORA_WEBHOOK_SHARED_SECRET');
+          // WyCut orders are verified by WyBuild's single Flutterwave v4 webhook.
+          // Forward only authoritative fields from getCharge(); WyCut matches the reference,
+          // amount, currency, transaction ID and stored order before granting credits.
+          if (/^wycut_[A-Za-z0-9-]{8,100}$/i.test(ref)) {
+            const confirmUrl = env('WYCUT_PAYMENT_CONFIRM_URL');
+            const sharedSecret = env('WYCUT_WEBHOOK_SHARED_SECRET');
             if (!confirmUrl || !sharedSecret) {
-              throw new Error('Kivora confirmation failed: KIVORA_PAYMENT_CONFIRM_URL / KIVORA_WEBHOOK_SHARED_SECRET is not configured');
+              throw new Error('WyCut confirmation failed: WYCUT_PAYMENT_CONFIRM_URL / WYCUT_WEBHOOK_SHARED_SECRET is not configured');
+            }
+            if (String(charge.status || '').toLowerCase() !== 'succeeded') {
+              // A valid but pending/failed charge must never be forwarded as paid.
+              console.info('WyCut Flutterwave charge is not succeeded yet', ref, String(charge.status || ''));
             } else {
               const forward = await fetch(confirmUrl, {
                 method: 'POST',
@@ -1835,10 +1839,32 @@ async function route(req, res, path, query) {
                   status: String(charge.status || '').toLowerCase(),
                   amount: Number(charge.amount),
                   currency: String(charge.currency || '').toUpperCase(),
+                  customerEmail: String(charge.customer?.email || charge.customer_email || ''),
                 }),
+                signal: AbortSignal.timeout(15000),
               });
-              if (!forward.ok) throw new Error(`Kivora confirmation endpoint returned HTTP ${forward.status}`);
+              if (!forward.ok) throw new Error(`WyCut confirmation endpoint returned HTTP ${forward.status}`);
             }
+          } else if (/^KIVORA-[A-Za-z0-9-]+$/i.test(ref)) {
+            const confirmUrl = env('KIVORA_PAYMENT_CONFIRM_URL');
+            const sharedSecret = env('KIVORA_WEBHOOK_SHARED_SECRET');
+            if (!confirmUrl || !sharedSecret) {
+              throw new Error('Kivora confirmation failed: KIVORA_PAYMENT_CONFIRM_URL / KIVORA_WEBHOOK_SHARED_SECRET is not configured');
+            }
+            const forward = await fetch(confirmUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'X-WyBuild-Webhook-Secret': sharedSecret },
+              body: JSON.stringify({
+                source: 'wybuild-flutterwave-v4',
+                id: String(charge.id || id || ''),
+                reference: ref,
+                status: String(charge.status || '').toLowerCase(),
+                amount: Number(charge.amount),
+                currency: String(charge.currency || '').toUpperCase(),
+              }),
+              signal: AbortSignal.timeout(15000),
+            });
+            if (!forward.ok) throw new Error(`Kivora confirmation endpoint returned HTTP ${forward.status}`);
           } else {
             const pending = await kv.get(`wb:tx:${ref}`);
             if (pending) await activateFromCharge(charge, pending, pending.login);
@@ -1848,8 +1874,8 @@ async function route(req, res, path, query) {
         console.error('Flutterwave webhook reconciliation failed', e);
         // Let Flutterwave retry when Kivora could not persist a verified payment.
         // WyBuild's own subscription reconciliation remains available via callback/status.
-        if (String(e?.message || '').includes('Kivora confirmation failed')) {
-          return send(res, 500, { error: 'Kivora payment confirmation failed; retry webhook delivery.' });
+        if (String(e?.message || '').includes('Kivora confirmation failed') || String(e?.message || '').includes('WyCut confirmation failed') || String(e?.message || '').includes('WyCut confirmation endpoint')) {
+          return send(res, 500, { error: 'Downstream payment confirmation failed; retry webhook delivery.' });
         }
       }
     }

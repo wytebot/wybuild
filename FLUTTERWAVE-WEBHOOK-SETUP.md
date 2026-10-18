@@ -46,3 +46,15 @@ WyBuild's same authenticated Flutterwave v4 webhook also handles Kivora campaign
 - `KIVORA_WEBHOOK_SHARED_SECRET=<long-random-secret>`
 
 Set the exact same secret in Kivora as `WYBUILD_WEBHOOK_SHARED_SECRET`. Keep it server-side in both deployments. When a KIVORA reference arrives, WyBuild verifies the webhook signature, fetches the charge directly from Flutterwave v4, and forwards only the authoritative charge fields to Kivora over HTTPS. Kivora matches the reference and exact NGN amount against its stored campaign before activating it. Do **not** configure Kivora's own `/api/flutterwave-webhook` as a second Flutterwave webhook for this flow; configure Flutterwave to call WyBuild's `/api/billing/webhook` endpoint.
+
+
+## WyCut recap purchases (same webhook, Flutterwave v4)
+
+Use the same WyBuild webhook URL in Flutterwave:
+`https://wybuild-black.vercel.app/api/billing/webhook`
+
+Set these **in WyBuild's Vercel project**:
+- `WYCUT_PAYMENT_CONFIRM_URL=https://YOUR-WYCUT-DOMAIN/api/wybuild-payment-confirmation`
+- `WYCUT_WEBHOOK_SHARED_SECRET=<long random secret>`
+
+Set the exact same secret in WyCut as `WYBUILD_WEBHOOK_SHARED_SECRET`. WyBuild authenticates with the existing v4 OAuth credentials (`FLW_CLIENT_ID`, `FLW_CLIENT_SECRET`), retrieves the charge directly from Flutterwave, and forwards only a successful authoritative charge. WyCut verifies the shared secret and matches reference, provider transaction ID, NGN amount/currency and customer email to the stored order before granting credits. Keep the direct WyCut Flutterwave webhook disabled if using this single-webhook arrangement; do not configure two competing webhook receivers for the same merchant event.
