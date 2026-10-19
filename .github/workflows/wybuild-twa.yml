@@ -1,5 +1,6 @@
-# wybuild-twa-workflow-version: 32
+# wybuild-twa-workflow-version: 33
 name: WyBuild Capacitor + Gradle (TWA fallback)
+# v33: enables the Firebase Google provider (fixes GoogleAuthProviderHandler null crash).
 # v32: Capacitor is also chosen for framework apps (Next.js static export script), keeps google-services.json from config/android, prints signing SHA-1.
 # v31: release signing happens on the WyBuild signing service. This repository only builds; the release key never enters it.
 concurrency:
