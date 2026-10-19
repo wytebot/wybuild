@@ -2,6 +2,23 @@
 
 WyBuild now selects **Capacitor + Android Gradle** when the connected GitHub repository contains a buildable web app (`package.json` with a `build` script and an `index.html` in `dist/`, `build/`, `www/`, `out/` or `public/`). URL-only websites, non-buildable repositories, and projects explicitly configured for Trusted Web Activity continue through the existing Bubblewrap native-shell path. This keeps URL conversion available instead of silently excluding it.
 
+## How WyBuild picks the web build script (workflow v32)
+
+For a repository with a `package.json`, WyBuild runs the first script that exists in this order: `wybuild:build`, `build:capacitor-web`, `build:static`, `build`.
+Capacitor is used only if that script leaves an `index.html` in `dist/`, `build/`, `www/`, `out/` or `public/`.
+
+A Next.js app with server API routes (like WyCut) does **not** do that with plain `next build` (it writes `.next/`), so it used to fall back to Bubblewrap silently.
+Give such a project a script that makes a static export into `out/` (WyCut already has `build:capacitor-web`). WyBuild now also:
+
+- defaults `NEXT_PUBLIC_API_BASE_URL` to the origin of the project's website and `NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID` to the web OAuth client in `google-services.json` (GitHub repository *variables* with those names override them);
+- warns (instead of a quiet notice) when a Next.js project ends up on the Bubblewrap fallback;
+- removes the project's own `@codetrix-studio/capacitor-google-auth` and older `@capacitor/*` packages from the throw-away build checkout so they cannot clash with the Capacitor 7 set;
+- runs an optional `wybuild/capacitor-patch.sh` from the repository root after `cap sync` (gets `WB_ANDROID_DIR` and `WB_APP_ID`) for project-specific native code;
+- finds `google-services.json` at the repo root, `config/android/`, `android/app/` or `app/`, or from a `GOOGLE_SERVICES_JSON_BASE64` variable;
+- prints the signing certificate SHA-1/SHA-256 in the run summary and warns when that SHA-1 is not registered in `google-services.json`.
+
+Native Google login works only when the signing SHA-1 (and, for Google Play installs, the Play app-signing SHA-1) is registered for the exact package ID in Firebase and the refreshed `google-services.json` is committed.
+
 ## Native bridge exposed to bundled source builds
 
 Capacitor source builds bundle a small bridge as `window.WyBuildNative`. It is available after the `wybuild-native-ready` event. Examples:
