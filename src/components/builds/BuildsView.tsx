@@ -23,7 +23,7 @@ import {
 } from 'lucide-react';
 
 export const BuildsView: React.FC = () => {
-  const { builds, activeBuildId, setActiveBuildId, cancelBuild, applyAutoFix, triggerBuild, awaitingNewBuild, setCurrentTab } = useApp();
+  const { builds, activeBuildId, setActiveBuildId, cancelBuild, applyAutoFix, triggerBuild, awaitingNewBuild, setCurrentTab, lifetimeFree } = useApp();
   const [filterProject, setFilterProject] = useState<string>('all');
   const [showQrModal, setShowQrModal] = useState<boolean>(false);
   const [aiBusy, setAiBusy] = useState<'diagnose' | 'fix' | null>(null);
@@ -198,7 +198,7 @@ export const BuildsView: React.FC = () => {
                       {aiResult?.diagnosis?.canAutoFix && !aiDone && <button onClick={applyAiFix} disabled={!!aiBusy} className="px-3.5 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold disabled:opacity-50 flex items-center gap-2"><FileCode className="w-4 h-4" />{aiBusy === 'fix' ? 'Applying fix…' : 'Apply AI Fix'}</button>}
                       {aiDone && <span className="px-3 py-2 rounded-lg bg-emerald-500/10 border border-emerald-400/30 text-emerald-200 text-xs font-bold">✓ Fix committed — ready to rebuild</span>}
                     </div>
-                    <p className="text-[11px] text-slate-500 mt-2">Costs credits based on Gemini token usage. AI will not invent Firebase files, credentials or signing secrets; those require manual configuration.</p>
+                    <p className="text-[11px] text-slate-500 mt-2">{lifetimeFree ? 'Free Forever account: AI diagnosis and repair use no credits. ' : 'Costs credits based on Gemini token usage. '}AI will not invent Firebase files, credentials or signing secrets; those require manual configuration.</p>
                     {aiError && <div className="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-200">{aiError}</div>}
                     {aiResult?.diagnosis && <div className="mt-4 space-y-3">
                       <div className="rounded-lg bg-slate-950/80 border border-slate-700 p-4">
@@ -208,7 +208,7 @@ export const BuildsView: React.FC = () => {
                         {aiResult.diagnosis.rootCause && <p className="mt-2 text-xs text-amber-200">Evidence: {aiResult.diagnosis.rootCause}</p>}
                         {Array.isArray(aiResult.diagnosis.suggestions) && <ul className="mt-3 list-disc pl-5 space-y-1 text-xs text-slate-300">{aiResult.diagnosis.suggestions.map((item: string, i: number) => <li key={i}>{item}</li>)}</ul>}
                         {Array.isArray(aiResult.diagnosis.manualSteps) && aiResult.diagnosis.manualSteps.length > 0 && <div className="mt-3 p-3 rounded border border-amber-400/20 bg-amber-500/5"><div className="text-xs font-bold text-amber-200 mb-1">Manual configuration needed</div><ul className="list-disc pl-5 space-y-1 text-xs text-slate-300">{aiResult.diagnosis.manualSteps.map((item: string, i: number) => <li key={i}>{item}</li>)}</ul></div>}
-                        <div className="mt-3 text-[10px] text-slate-500">Charged {aiResult.creditsCharged} credits · Balance {aiResult.creditsRemaining}</div>
+                        <div className="mt-3 text-[10px] text-slate-500">{lifetimeFree ? 'Free Forever · no credits used' : `Charged ${aiResult.creditsCharged} credits · Balance ${aiResult.creditsRemaining}`}</div>
                       </div>
                     </div>}
                     {aiResult?.fixResult && <div className="rounded-lg bg-slate-950/80 border border-emerald-500/20 p-4"><div className="text-xs font-bold text-emerald-200">{aiResult.fixResult.applied ? (aiResult.fixResult.fixes?.length ? 'Code changes committed to GitHub' : 'Build settings updated') : 'No safe automatic change'}</div><p className="text-xs text-slate-300 mt-1">{aiResult.fixResult.summary}</p>{aiResult.fixResult.fixes?.map((f: any) => <a key={f.path} className="block mt-2 text-xs text-emerald-300 underline break-all" href={f.commit || '#'} target="_blank" rel="noreferrer">{f.path} — {f.reason}</a>)}{aiResult.fixResult.settingsChanges?.map((item: any) => <div key={item.key} className="mt-2 text-xs text-emerald-200">{item.key}: {item.status}</div>)}{aiResult.fixResult.manualSteps?.length > 0 && <ul className="list-disc pl-5 mt-2 space-y-1 text-xs text-slate-300">{aiResult.fixResult.manualSteps.map((item: string, i: number) => <li key={i}>{item}</li>)}</ul>}<div className="mt-2 text-[10px] text-slate-500">Charged {aiResult.fixResult.creditsCharged} credits · Balance {aiResult.fixResult.creditsRemaining}</div></div>}

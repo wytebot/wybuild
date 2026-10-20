@@ -49,8 +49,8 @@ export const LoginScreen: React.FC = () => {
           </div>}
           <a href={githubLoginUrl} aria-disabled={!selectedAccount} onClick={e => { if (!selectedAccount) e.preventDefault(); }} className={`wy-account-continue ${selectedAccount ? '' : 'is-disabled'}`}><Github className="w-4 h-4" /><span>Continue as @{selectedAccount || '…'}</span></a>
         </div>}
-        <a href="/api/auth/login" className="inline-flex items-center justify-center gap-2 w-full px-4 py-2.5 rounded-md border border-white/10 hover:bg-white/5 text-white text-sm font-semibold transition"><Github className="w-4 h-4" /><span>Continue with another GitHub account</span></a>
-        <p className="text-[11px] text-slate-500">Previously used account names are stored on this device only. GitHub may still ask you to confirm the account or sign in again.</p>
+        <a href="/api/auth/login?account=other" className="inline-flex items-center justify-center gap-2 w-full px-4 py-2.5 rounded-md border border-white/10 hover:bg-white/5 text-white text-sm font-semibold transition"><Github className="w-4 h-4" /><span>Continue with another GitHub account</span></a>
+        <p className="text-[11px] text-slate-500">Previously used account names are stored on this device only. "Continue with another GitHub account" opens GitHub's account picker so you can switch to, or sign in as, a different account.</p>
         <p className="text-[11px] text-slate-500">
           Needs the repo and workflow scopes so WyBuild can add its workflow, start runs and store your signing key as encrypted repository secrets.
         </p>

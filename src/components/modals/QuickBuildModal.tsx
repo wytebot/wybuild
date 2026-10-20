@@ -8,7 +8,7 @@ interface QuickBuildModalProps {
 }
 
 export const QuickBuildModal: React.FC<QuickBuildModalProps> = ({ isOpen, onClose }) => {
-  const { projects, triggerBuild, subscription, rateLimits, openFlutterwaveCheckout } = useApp();
+  const { projects, triggerBuild, subscription, rateLimits, openFlutterwaveCheckout, lifetimeFree } = useApp();
   const [selectedProjectId, setSelectedProjectId] = useState<string>(projects[0]?.id || '');
   const [branchOverride, setBranchOverride] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -55,7 +55,7 @@ export const QuickBuildModal: React.FC<QuickBuildModalProps> = ({ isOpen, onClos
         ) : (
           <div className="p-3 rounded bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300 flex items-center gap-2">
             <Zap className="w-4 h-4 text-amber-400 fill-amber-400" />
-            <span>3 credits per successful build · failed builds refunded · no monthly subscription</span>
+            <span>{lifetimeFree ? 'Free Forever account · builds use no credits' : '3 credits per successful build · failed builds refunded · no monthly subscription'}</span>
           </div>
         )}
 

@@ -1941,7 +1941,10 @@ async function route(req, res, path, query) {
     url.searchParams.set('redirect_uri', `${appUrl(req)}/api/auth/callback`);
     url.searchParams.set('scope', 'repo workflow');
     const accountHint = String(query.login || '').trim().replace(/[^A-Za-z0-9-]/g, '').slice(0, 39);
-    if (accountHint) { url.searchParams.set('login', accountHint); url.searchParams.set('prompt', 'login'); }
+    // prompt=select_account forces GitHub's account picker, so a different account can be chosen even when the
+    // browser is already signed in to GitHub as someone else (without it GitHub approves the cached account instantly).
+    if (accountHint) url.searchParams.set('login', accountHint);
+    if (accountHint || String(query.account || '') === 'other') url.searchParams.set('prompt', 'select_account');
     url.searchParams.set('state', state);
     return redirect(res, url.toString());
   }
@@ -2252,17 +2255,19 @@ async function route(req, res, path, query) {
   const session = requireSession(req);
 
   if (path === 'credits/balance' && m === 'GET') {
-    return send(res, 200, { wallet: await creditsFor(session.login), packs: CREDIT_PACKS, currency: 'USD', model: AI_MODEL() });
+    return send(res, 200, { wallet: await creditsFor(session.login), packs: CREDIT_PACKS, currency: 'USD', model: AI_MODEL(), freeForever: isLifetimeFree(session.login) });
   }
 
   if (path === 'ai/diagnose' && post) {
     const b = bodyOf(req);
-    return send(res, 200, await aiDiagnose(session, checkRepo(b.repo), String(b.runId || '')));
+    const r = await aiDiagnose(session, checkRepo(b.repo), String(b.runId || ''));
+    return send(res, 200, isLifetimeFree(session.login) ? { ...r, creditsCharged: 0, creditsRemaining: FREE_FOREVER_BALANCE, freeForever: true } : r);
   }
 
   if (path === 'ai/fix' && post) {
     const b = bodyOf(req);
-    return send(res, 200, await aiFix(session, checkRepo(b.repo), String(b.runId || ''), String(b.branch || '')));
+    const r = await aiFix(session, checkRepo(b.repo), String(b.runId || ''), String(b.branch || ''));
+    return send(res, 200, isLifetimeFree(session.login) ? { ...r, creditsCharged: 0, creditsRemaining: FREE_FOREVER_BALANCE, freeForever: true } : r);
   }
 
   if (path === 'billing/config' && m === 'GET') {
