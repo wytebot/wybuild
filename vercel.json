@@ -21,7 +21,7 @@
       "schedule": "17 1 * * *"
     }
   ],
-  "buildCommand": "npm run build",
+  "buildCommand": "npm run build:web",
   "outputDirectory": "dist",
   "framework": "vite",
   "headers": [
