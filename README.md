@@ -2,17 +2,28 @@
 
 WyBuild focuses on **Web → Android** builds for web apps and PWAs using a GitHub Actions **Capacitor + Android Gradle workflow** for buildable web source repositories, with the existing native-shell/Bubblewrap path retained for URL-only and non-buildable projects.
 
-## Plans
-- Free: unlimited project display, 5 cloud build starts/month, 1 concurrent build, 15-minute build timeout.
-- Pro: unlimited builds, 5 concurrent builds, 60-minute build timeout, unlimited signing profiles.
-- Free Forever: GitHub accounts `wytebot` and `wytzbot` bypass the normal Free build allowance and billing.
-- Pro: $9.99/month (displayed as ₦15,000) or $99/year (displayed as ₦150,000). NGN values are fixed display equivalents.
+## Pricing: one-time AI credits (no recurring subscription)
+- No monthly or yearly WyBuild subscription is required; new recurring checkout is disabled and automatic renewals are retired.
+- Every account receives 10 one-time starter AI credits.
+- Starter: 100 credits for $4.99 (display equivalent ₦7,500); Builder: 250 credits for $9.99 (₦15,000); Studio: 700 credits for $24.99 (₦37,500). NGN values are display equivalents; Flutterwave charges USD.
+- Gemini Build Doctor meters provider token usage using the configured Gemini rates, with minimum operation charges of 2 credits for log diagnosis and 6 credits for a code-repair attempt. Higher measured costs can require additional credits.
+- Each Web → Android build reserves 3 credits before dispatch. Successful builds keep the 3-credit charge; failed/cancelled builds refund it when the completed run is next reconciled. Dispatch failures are refunded immediately.
+- Builds run in the connected user's GitHub Actions account. There is no monthly build quota; concurrency is limited to the account's configured concurrent-build limit.
+- Existing subscriptions are marked non-renewing by the legacy cron endpoint; verify old customer billing status in Flutterwave before removing old credentials.
+
+## AI Build Doctor
+A failed pipeline shows a Gemini diagnosis button. WyBuild fetches the selected GitHub Actions run's logs server-side, redacts common secret formats, and asks Gemini for root-cause evidence and actionable suggestions. If a safe code repair is possible, **Apply AI Fix** can commit up to two existing text files to the failed build's branch; the user can then rebuild. It will not invent Firebase config, signing keys, credentials or GitHub permissions, and does not edit workflow files, lockfiles, secrets, `.env` files or `google-services.json`. Every completed AI request consumes wallet credits.
+
+Set `GEMINI_API_KEY` in Vercel. `GEMINI_MODEL` determines the active Gemini model used for every diagnosis and repair request, and defaults to `gemini-2.5-flash` when omitted. Set `GEMINI_INPUT_USD_PER_MILLION` and `GEMINI_OUTPUT_USD_PER_MILLION` to the rates on your actual Google AI billing tier so credit metering follows your real model costs. Keep the API key server-side only.
+
+## Storage: Firestore only
+Set `FIREBASE_SERVICE_ACCOUNT_JSON` in Vercel (raw service-account JSON or base64-encoded JSON). WyBuild reads the Firebase project ID directly from `project_id` inside that JSON; no separate `FIREBASE_PROJECT_ID` is required. The server uses the Admin SDK and the `wb_kv` / `wb_set` collections. Firestore does not pause projects due to inactivity, although quotas, billing and limits still apply. In Firebase Console, enable Firestore TTL on the `expiresAt` field in `wb_kv` to clean up expired records automatically; the adapter also checks expiry on reads. The deployed app has no Supabase fallback. If migrating existing data, run `npm run migrate:supabase:firestore` from a trusted machine with the old Supabase URL/service-role key and `FIREBASE_SERVICE_ACCOUNT_JSON` configured; those legacy Supabase credentials are only for the one-time migration script and are not required at runtime. Test login/build/payment workflows after migration. Never commit or expose service credentials.
 
 ## Workflows
 WyBuild installs one Web → Android workflow. It detects a buildable local web project and uses Capacitor + Android Gradle with a bundled native-plugin bridge; URL-only sites and explicit TWA configurations use the existing native-shell/Bubblewrap fallback. The former standalone Flutter build/export workflow is no longer supported. See `WYBUILD-CAPACITOR-NATIVE-FEATURES.md` for the native bridge API, Firebase login, FCM push, permissions and security setup.
 
 
-### Capacitor source builds (workflow v26)
+### Capacitor source builds (workflow v34)
 
 When a connected repository contains a `package.json` build script and produces a static `index.html` in `dist/`, `build/`, `www/`, `out/` or `public/`, WyBuild uses Capacitor and Gradle. The CI runner installs the Android plugins, bundles `window.WyBuildNative`, configures selected manifest permissions, applies the existing release signing key, and emits APK/AAB artifacts. Generated Android files and temporary npm dependency changes are not committed to the user's repository.
 
@@ -56,4 +67,4 @@ WyBuild ships its own manifest, install icons, service worker and offline page. 
 
 The endpoint returns HTTP 503 until a real package ID and valid SHA-256 certificate fingerprint are configured; WyBuild never generates a placeholder fingerprint.
 
-The Capacitor workflow installs the Firebase JavaScript SDK required by the Firebase Authentication and Messaging bridge modules (workflow v27).
+The Capacitor workflow installs the Firebase JavaScript SDK required by the Firebase Authentication and Messaging bridge modules (workflow v34).

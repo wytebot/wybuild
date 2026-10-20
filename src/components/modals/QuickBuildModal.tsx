@@ -15,7 +15,7 @@ export const QuickBuildModal: React.FC<QuickBuildModalProps> = ({ isOpen, onClos
 
   if (!isOpen) return null;
 
-  const isPro = subscription.plan === 'pro';
+  const isPro = true; // subscriptions retired; builds use the connected user's GitHub Actions
   const selectedProj = projects.find((p) => p.id === selectedProjectId) || projects[0];
 
   const handleTrigger = async (e: React.FormEvent) => {
@@ -55,7 +55,7 @@ export const QuickBuildModal: React.FC<QuickBuildModalProps> = ({ isOpen, onClos
         ) : (
           <div className="p-3 rounded bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300 flex items-center gap-2">
             <Zap className="w-4 h-4 text-amber-400 fill-amber-400" />
-            <span>Dedicated Priority Server · Zero Queue Wait</span>
+            <span>3 credits per successful build · failed builds refunded · no monthly subscription</span>
           </div>
         )}
 

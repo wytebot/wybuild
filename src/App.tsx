@@ -21,16 +21,15 @@ import { NewProjectModal } from './components/modals/NewProjectModal';
 import { QuickBuildModal } from './components/modals/QuickBuildModal';
 import { LoginScreen } from './components/LoginScreen';
 import { CheckCircle2, AlertCircle } from 'lucide-react';
-import { BillingCheckoutModal } from './components/billing/BillingCheckoutModal';
-import { BillingCycle } from './types';
+import { CreditsCheckoutModal } from './components/billing/CreditsCheckoutModal';
 
 const MainLayout: React.FC = () => {
   const { currentTab, toastMessage } = useApp();
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);
   const [showQuickBuildModal, setShowQuickBuildModal] = useState(false);
   const [showBillingModal, setShowBillingModal] = useState(false);
-  const [billingCycle, setBillingCycle] = useState<BillingCycle>('monthly');
-  const [showPaymentSuccess, setShowPaymentSuccess] = useState(false);
+  const [creditPack, setCreditPack] = useState<string>('starter');
+  const [showCreditsSuccess, setShowCreditsSuccess] = useState<boolean>(() => typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('credits') === 'success');
   // Menu starts open on desktop, closed (drawer) on phones/tablets.
   const [navOpen, setNavOpen] = useState<boolean>(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches);
 
@@ -53,17 +52,14 @@ const MainLayout: React.FC = () => {
   }, [currentTab]);
 
   useEffect(() => {
-    const onBillingOpen = (event: Event) => {
-      const cycle = (event as CustomEvent<{ cycle?: BillingCycle }>).detail?.cycle;
-      setBillingCycle(cycle === 'yearly' ? 'yearly' : 'monthly');
+    const onCreditsOpen = (event: Event) => {
+      const pack = (event as CustomEvent<{ pack?: string }>).detail?.pack;
+      setCreditPack(['starter', 'builder', 'studio'].includes(pack || '') ? String(pack) : 'starter');
       setShowBillingModal(true);
     };
-    const onPaymentSuccess = () => setShowPaymentSuccess(true);
-    window.addEventListener('wybuild:billing-open', onBillingOpen);
-    window.addEventListener('wybuild:payment-success', onPaymentSuccess);
+    window.addEventListener('wybuild:credits-open', onCreditsOpen);
     return () => {
-      window.removeEventListener('wybuild:billing-open', onBillingOpen);
-      window.removeEventListener('wybuild:payment-success', onPaymentSuccess);
+      window.removeEventListener('wybuild:credits-open', onCreditsOpen);
     };
   }, []);
 
@@ -117,21 +113,12 @@ const MainLayout: React.FC = () => {
         isOpen={showQuickBuildModal}
         onClose={() => setShowQuickBuildModal(false)}
       />
-      {showPaymentSuccess && (
-        <div className="fixed inset-0 z-[120] bg-black/75 backdrop-blur-sm flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Payment successful">
-          <div className="w-full max-w-sm rounded-2xl border border-emerald-400/25 bg-slate-950 p-6 shadow-2xl text-center">
-            <div className="mx-auto mb-4 h-12 w-12 rounded-full bg-emerald-500/15 border border-emerald-400/30 flex items-center justify-center text-emerald-300 text-2xl">✓</div>
-            <h2 className="text-xl font-bold text-white">Payment successful</h2>
-            <p className="mt-2 text-sm text-slate-400">Flutterwave payment was confirmed on the server. Your WyBuild Pro access is now active.</p>
-            <button onClick={() => setShowPaymentSuccess(false)} className="mt-5 w-full rounded-lg bg-emerald-500 py-3 text-sm font-bold text-black">Continue with Pro</button>
-          </div>
-        </div>
-      )}
-      <BillingCheckoutModal
+      <CreditsCheckoutModal
         isOpen={showBillingModal}
-        initialCycle={billingCycle}
+        initialPack={creditPack}
         onClose={() => setShowBillingModal(false)}
       />
+      {showCreditsSuccess && <div className="fixed inset-0 z-[130] bg-black/75 backdrop-blur-sm flex items-center justify-center p-4"><div className="w-full max-w-sm rounded-2xl border border-emerald-400/25 bg-slate-950 p-6 text-center shadow-2xl"><div className="mx-auto mb-4 h-12 w-12 rounded-full bg-emerald-500/15 border border-emerald-400/30 flex items-center justify-center text-2xl text-emerald-300">✓</div><h2 className="text-xl font-bold text-white">Credits purchased</h2><p className="mt-2 text-sm text-slate-400">Flutterwave confirmed your one-time payment. Your credit wallet has been updated.</p><button onClick={() => { setShowCreditsSuccess(false); window.history.replaceState({}, '', window.location.pathname); }} className="mt-5 w-full rounded-lg bg-emerald-500 py-3 text-sm font-bold text-black">Continue</button></div></div>}
     </div>
   );
 };

@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "migrate:supabase:firestore": "node scripts/migrate-supabase-to-firestore.mjs"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",
@@ -47,7 +48,8 @@
     "@capacitor-firebase/messaging": "^7",
     "firebase": "^11.0.0",
     "@aparajita/capacitor-biometric-auth": "^9",
-    "esbuild": "^0.25"
+    "esbuild": "^0.25",
+    "firebase-admin": "^13.0.0"
   },
   "devDependencies": {
     "@types/jszip": "^3.4.1",

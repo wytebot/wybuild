@@ -14,8 +14,7 @@ Configure this exact URL in the Flutterwave dashboard for the production account
 - `FLW_SECRET_HASH`
 - `FLW_V4_BASE_URL=https://f4bexperience.flutterwave.com`
 - `APP_URL=https://wybuild-black.vercel.app`
-- `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY`
+- `FIREBASE_SERVICE_ACCOUNT_JSON` (Firestore storage; project ID is read from the JSON)
 
 `FLW_SECRET_HASH` must exactly match the secret hash configured in Flutterwave. Do not put it in frontend code.
 
@@ -61,3 +60,8 @@ Set the exact same secret in WyCut as `WYBUILD_WEBHOOK_SHARED_SECRET`. WyBuild a
 
 
 When WyCut and WyBuild use the same Flutterwave merchant account, set the same `FLW_CLIENT_ID`, `FLW_CLIENT_SECRET`, `FLW_ENCRYPTION_KEY`, and matching production/sandbox `FLW_V4_BASE_URL` in both projects. `FLW_SECRET_HASH` belongs to WyBuild because it owns the registered webhook. Keep the WyCut/WyBuild shared confirmation secret separate from all Flutterwave credentials.
+
+
+## WyBuild one-time AI credit packs
+
+New WyBuild purchases use the same Flutterwave v4 webhook but are non-recurring. The server identifies `wbc-...` references, fetches the authoritative charge from Flutterwave, validates the stored pack amount/currency/customer and grants the matching credits idempotently. Do not use browser callback data as proof of payment. The old subscription checkout is disabled and the scheduled renewal handler no longer creates recurring charges.

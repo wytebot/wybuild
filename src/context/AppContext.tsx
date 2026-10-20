@@ -516,8 +516,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const openFlutterwaveCheckout = (cycle: BillingCycle) => {
-    window.dispatchEvent(new CustomEvent('wybuild:billing-open', { detail: { cycle } }));
+  const openFlutterwaveCheckout = (_cycle: BillingCycle) => {
+    // Legacy callers now open a one-time credit pack picker; recurring subscriptions are retired.
+    window.dispatchEvent(new CustomEvent('wybuild:credits-open', { detail: { pack: 'starter' } }));
   };
 
   const triggerBuild = async (projectId: string, branch?: string): Promise<{ success: boolean; error?: string }> => {

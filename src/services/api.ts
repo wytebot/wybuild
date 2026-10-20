@@ -116,6 +116,9 @@ export interface ReleaseResult { ok: true; url: string; draft: boolean; tag: str
 
 export const api = {
   me: () => request<{ user: AuthUser; subscription: SubscriptionInfo | null; usage: UsageInfo; lifetimeFree?: boolean; pricing?: Record<BillingCycle, number>; pricingNgn?: Record<BillingCycle, number>; defaultKeystore?: boolean; defaultKeystoreProblem?: string }>('me'),
+  creditsBalance: () => request<{ wallet: { balance: number; updatedAt?: string | null }; packs: Record<string, { credits: number; amount: number; currency: string; ngn: number }>; currency: string; model: string }>('credits/balance'),
+  aiDiagnose: (body: { repo: string; runId: string | number }) => post<{ diagnosis: { title: string; category: string; summary: string; rootCause: string; suggestions: string[]; canAutoFix: boolean; filesToInspect?: string[]; manualSteps?: string[] }; model: string; creditsCharged: number; creditsRemaining: number; usage?: { inputTokens: number; outputTokens: number } }>('ai/diagnose', body),
+  aiFix: (body: { repo: string; runId: string | number; branch: string }) => post<{ applied: boolean; summary: string; fixes: { path: string; reason: string; commit: string }[]; settingsChanges: { key: string; value: string; where: string }[]; manualSteps: string[]; creditsCharged: number; creditsRemaining: number; model: string }>('ai/fix', body),
   logout: () => post<{ ok: true }>('auth/logout', {}),
   loginWithToken: (token: string) => post<{ ok: true; login: string; tokenType: 'classic' | 'fine-grained' }>('auth/token', { token }),
   repos: () => request<{ repos: RepoInfo[] }>('repos').then((r) => r.repos),
@@ -145,6 +148,10 @@ export const api = {
     post<{ ok: true }>('keystore', body),
   deleteKeystore: (repo: string) => request<{ ok: true }>(`keystore?repo=${enc(repo)}`, { method: 'DELETE' }),
   billingConfig: () => request<{ encryptionKey: string; currency: string; pricing: Record<BillingCycle, number>; pricingNgn?: Record<BillingCycle, number> }>('billing/config'),
+  creditCheckout: (body: {
+    pack: string;
+    card: { nonce: string; encrypted_card_number: string; encrypted_expiry_month: string; encrypted_expiry_year: string; encrypted_cvv: string };
+  }) => post<{ chargeId: string; reference: string; status: string; nextAction: any; redirectUrl?: string | null; pack: string; credits: number }>('billing/checkout', body),
   checkout: (body: {
     cycle: BillingCycle;
     card: {

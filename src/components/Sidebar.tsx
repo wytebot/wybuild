@@ -6,7 +6,6 @@ interface SidebarProps { open: boolean; onClose: () => void; }
 
 export const Sidebar: React.FC<SidebarProps> = ({ open, onClose }) => {
   const { currentTab, setCurrentTab, subscription, lifetimeFree, rateLimits, user, logout } = useApp();
-  const isPro = subscription.plan === 'pro';
   const [legalOpen, setLegalOpen] = React.useState(false);
   const go = (id: string, tool?: string) => {
     setCurrentTab(id as any);
@@ -23,7 +22,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, onClose }) => {
     ['tools', 'Free tools', Wrench],
     ['team', 'Team', Users],
     ['settings', 'Keystore', KeyRound],
-    ['billing', isPro ? 'Pro active' : 'Upgrade', CreditCard],
+    ['billing', 'AI Credits', CreditCard],
   ] as const;
   return <>
     <div onClick={onClose} className={`fixed inset-0 z-40 bg-black/65 lg:hidden ${open ? '' : 'hidden'}`} />
@@ -36,7 +35,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, onClose }) => {
         {items.map(([id,label,Icon]) => <button key={id} onClick={() => go(id, id === 'settings' ? 'keystore' : undefined)} className={`w-full min-h-11 px-3 rounded-lg flex items-center gap-3 text-sm ${currentTab===id ? 'bg-emerald-400/10 text-emerald-200 border border-emerald-400/15' : 'text-slate-400 hover:bg-white/[.03] hover:text-white'}`}><Icon className="w-4 h-4"/><span>{label}</span></button>)}
       </nav>
       <div className="m-3 p-3 rounded-lg bg-white/[.02] border border-white/[.05] text-[11px] text-slate-500">
-        <div className="flex justify-between"><span>{lifetimeFree ? 'Free Forever' : isPro ? 'Pro' : 'Free builds'}</span><span className="text-slate-300 font-mono">{lifetimeFree || isPro ? 'Active' : `${Math.min(rateLimits.monthlyBuildsUsed, 5)}/5`}</span></div>
+        <div className="flex justify-between"><span>{'Builds'}</span><span className="text-slate-300 font-mono">{'Unlimited'}</span></div>
       </div>
       <div className="mx-3 mb-2 border-t border-white/[.05] pt-2">
         <button onClick={() => setLegalOpen(v => !v)} className="w-full px-1 py-2 flex items-center justify-between text-[11px] font-semibold text-slate-500 hover:text-slate-300">

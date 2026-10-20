@@ -131,7 +131,7 @@ export interface TestReport {
 export interface ErrorDiagnosis {
   id: string;
   title: string;
-  category: 'gradle' | 'flutter_sdk' | 'keystore' | 'dependency' | 'permissions' | 'twa_config';
+  category: 'gradle' | 'flutter_sdk' | 'keystore' | 'dependency' | 'permissions' | 'twa_config' | 'firebase';
   severity: 'critical' | 'warning';
   matchedPattern: string;
   description: string;

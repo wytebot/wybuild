@@ -1,0 +1,11 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // WyBuild stores private account, build, billing and credit records here.
+    // Only the server's Firebase Admin SDK should access these collections; Admin SDK access
+    // bypasses client rules and is protected by the Vercel service-account environment variable.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

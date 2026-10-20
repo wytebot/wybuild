@@ -70,7 +70,32 @@ const native = {
   },
   haptics: { impact: (style = 'medium') => safe(() => Haptics.impact({ style: ({ light: ImpactStyle.Light, heavy: ImpactStyle.Heavy, medium: ImpactStyle.Medium })[style] || ImpactStyle.Medium })), success: () => safe(() => Haptics.notification({ type: NotificationType.Success })), vibrate: (duration = 300) => safe(() => Haptics.vibrate({ duration })) },
   network: { status: () => safe(() => Network.getStatus()), watch: (callback) => Network.addListener('networkStatusChange', callback) },
-  app: { info: () => safe(() => App.getInfo()), exit: () => safe(() => App.exitApp()) },
+  app: {
+    info: () => safe(() => App.getInfo()), exit: () => safe(() => App.exitApp()),
+    onBack: (callback) => App.addListener('backButton', callback),
+    onStateChange: (callback) => App.addListener('appStateChange', callback),
+  },
+  // Opt-in swipe detector for app-specific navigation. It observes gestures but never prevents
+  // native scrolling; callbacks run only for clear horizontal swipes that dominate vertical movement.
+  gestures: {
+    onSwipe: (callback, options = {}) => {
+      const threshold = Math.max(35, Number(options.threshold || 65));
+      let start = null;
+      const down = (event) => { const t = event.touches?.[0]; if (t) start = { x: t.clientX, y: t.clientY, at: Date.now() }; };
+      const up = (event) => {
+        const t = event.changedTouches?.[0];
+        if (!start || !t) { start = null; return; }
+        const dx = t.clientX - start.x, dy = t.clientY - start.y, elapsed = Date.now() - start.at;
+        if (Math.abs(dx) >= threshold && Math.abs(dx) > Math.abs(dy) * 1.35 && elapsed < 800) {
+          try { callback({ direction: dx > 0 ? 'right' : 'left', distance: Math.round(Math.abs(dx)), durationMs: elapsed, startX: start.x, endX: t.clientX }); } catch {}
+        }
+        start = null;
+      };
+      document.addEventListener('touchstart', down, { passive: true });
+      document.addEventListener('touchend', up, { passive: true });
+      return { remove: async () => { document.removeEventListener('touchstart', down); document.removeEventListener('touchend', up); } };
+    },
+  },
   share: (title, text, url) => safe(() => Share.share({ title, text, url })),
   openBrowser: (url) => safe(() => Browser.open({ url: String(url) })),
   statusBar: { show: () => safe(() => StatusBar.show()), hide: () => safe(() => StatusBar.hide()), dark: () => safe(() => StatusBar.setStyle({ style: Style.Dark })), light: () => safe(() => StatusBar.setStyle({ style: Style.Light })) },

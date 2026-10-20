@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { api } from '../../services/api';
 import { useApp } from '../../context/AppContext';
 import { TerminalViewer } from './TerminalViewer';
 import { TwaBuildPanel } from '../twa/TwaBuildPanel';
@@ -25,6 +26,10 @@ export const BuildsView: React.FC = () => {
   const { builds, activeBuildId, setActiveBuildId, cancelBuild, applyAutoFix, triggerBuild, awaitingNewBuild, setCurrentTab } = useApp();
   const [filterProject, setFilterProject] = useState<string>('all');
   const [showQrModal, setShowQrModal] = useState<boolean>(false);
+  const [aiBusy, setAiBusy] = useState<'diagnose' | 'fix' | null>(null);
+  const [aiResult, setAiResult] = useState<any>(null);
+  const [aiError, setAiError] = useState('');
+  const [aiDone, setAiDone] = useState(false);
 
   // while a new run is being created the old build (and its logs) must not stay on screen
   const selectedBuild = awaitingNewBuild ? undefined : builds.find((b) => b.id === activeBuildId) || builds[0];
@@ -34,6 +39,24 @@ export const BuildsView: React.FC = () => {
     : [];
 
   const isRunning = selectedBuild?.status === 'running';
+
+  const runAiDiagnosis = async () => {
+    if (!selectedBuild?.repo || !selectedBuild.runId) { setAiError('This build is missing its GitHub repository/run reference. Refresh build history and try again.'); return; }
+    setAiBusy('diagnose'); setAiError(''); setAiResult(null); setAiDone(false);
+    try { const result = await api.aiDiagnose({ repo: selectedBuild.repo, runId: selectedBuild.runId }); setAiResult(result); }
+    catch (e) { setAiError(e instanceof Error ? e.message : 'AI diagnosis failed.'); }
+    finally { setAiBusy(null); }
+  };
+  const applyAiFix = async () => {
+    if (!selectedBuild?.repo || !selectedBuild.runId) return;
+    setAiBusy('fix'); setAiError('');
+    try {
+      const result = await api.aiFix({ repo: selectedBuild.repo, runId: selectedBuild.runId, branch: selectedBuild.branch });
+      setAiResult((prev: any) => ({ ...prev, fixResult: result }));
+      setAiDone(result.applied);
+    } catch (e) { setAiError(e instanceof Error ? e.message : 'AI repair failed.'); }
+    finally { setAiBusy(null); }
+  };
 
   return (
     <div className="h-full flex flex-col md:flex-row overflow-y-auto md:overflow-hidden">
@@ -156,6 +179,43 @@ export const BuildsView: React.FC = () => {
                 )}
               </div>
             </div>
+
+            {/* Gemini-assisted build repair. The Fix button commits only safe, existing text files. */}
+            {selectedBuild.status === 'failed' && (
+              <section className="p-5 rounded-lg bg-indigo-950/30 border border-indigo-500/30 space-y-3">
+                <div className="flex items-start gap-3">
+                  <Sparkles className="w-5 h-5 text-indigo-300 shrink-0 mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-sm font-bold text-white">Gemini Build Doctor</h3>
+                      <span className="text-[10px] uppercase tracking-wider rounded-full px-2 py-1 bg-indigo-400/10 text-indigo-200 border border-indigo-300/20">Credit based · no subscription</span>
+                    </div>
+                    <p className="text-xs text-slate-300 mt-1">Reads the failed GitHub Actions logs, explains the root cause and suggests next steps. If a safe code fix is possible, you can let it commit the change to this branch before rebuilding.</p>
+                    <div className="flex flex-wrap gap-2 mt-3">
+                      <button onClick={runAiDiagnosis} disabled={!!aiBusy} className="px-3.5 py-2 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-white text-xs font-bold disabled:opacity-50 flex items-center gap-2">
+                        <Sparkles className="w-4 h-4" />{aiBusy === 'diagnose' ? 'Reading logs…' : 'Diagnose with Gemini'}
+                      </button>
+                      {aiResult?.diagnosis?.canAutoFix && !aiDone && <button onClick={applyAiFix} disabled={!!aiBusy} className="px-3.5 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold disabled:opacity-50 flex items-center gap-2"><FileCode className="w-4 h-4" />{aiBusy === 'fix' ? 'Applying fix…' : 'Apply AI Fix'}</button>}
+                      {aiDone && <span className="px-3 py-2 rounded-lg bg-emerald-500/10 border border-emerald-400/30 text-emerald-200 text-xs font-bold">✓ Fix committed — ready to rebuild</span>}
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-2">Costs credits based on Gemini token usage. AI will not invent Firebase files, credentials or signing secrets; those require manual configuration.</p>
+                    {aiError && <div className="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-200">{aiError}</div>}
+                    {aiResult?.diagnosis && <div className="mt-4 space-y-3">
+                      <div className="rounded-lg bg-slate-950/80 border border-slate-700 p-4">
+                        <div className="text-[10px] uppercase tracking-wider text-indigo-300">{aiResult.diagnosis.category} · {aiResult.model}</div>
+                        <h4 className="mt-1 text-sm font-bold text-white">{aiResult.diagnosis.title}</h4>
+                        <p className="mt-2 text-xs text-slate-300 leading-relaxed">{aiResult.diagnosis.summary}</p>
+                        {aiResult.diagnosis.rootCause && <p className="mt-2 text-xs text-amber-200">Evidence: {aiResult.diagnosis.rootCause}</p>}
+                        {Array.isArray(aiResult.diagnosis.suggestions) && <ul className="mt-3 list-disc pl-5 space-y-1 text-xs text-slate-300">{aiResult.diagnosis.suggestions.map((item: string, i: number) => <li key={i}>{item}</li>)}</ul>}
+                        {Array.isArray(aiResult.diagnosis.manualSteps) && aiResult.diagnosis.manualSteps.length > 0 && <div className="mt-3 p-3 rounded border border-amber-400/20 bg-amber-500/5"><div className="text-xs font-bold text-amber-200 mb-1">Manual configuration needed</div><ul className="list-disc pl-5 space-y-1 text-xs text-slate-300">{aiResult.diagnosis.manualSteps.map((item: string, i: number) => <li key={i}>{item}</li>)}</ul></div>}
+                        <div className="mt-3 text-[10px] text-slate-500">Charged {aiResult.creditsCharged} credits · Balance {aiResult.creditsRemaining}</div>
+                      </div>
+                    </div>}
+                    {aiResult?.fixResult && <div className="rounded-lg bg-slate-950/80 border border-emerald-500/20 p-4"><div className="text-xs font-bold text-emerald-200">{aiResult.fixResult.applied ? (aiResult.fixResult.fixes?.length ? 'Code changes committed to GitHub' : 'Build settings updated') : 'No safe automatic change'}</div><p className="text-xs text-slate-300 mt-1">{aiResult.fixResult.summary}</p>{aiResult.fixResult.fixes?.map((f: any) => <a key={f.path} className="block mt-2 text-xs text-emerald-300 underline break-all" href={f.commit || '#'} target="_blank" rel="noreferrer">{f.path} — {f.reason}</a>)}{aiResult.fixResult.settingsChanges?.map((item: any) => <div key={item.key} className="mt-2 text-xs text-emerald-200">{item.key}: {item.status}</div>)}{aiResult.fixResult.manualSteps?.length > 0 && <ul className="list-disc pl-5 mt-2 space-y-1 text-xs text-slate-300">{aiResult.fixResult.manualSteps.map((item: string, i: number) => <li key={i}>{item}</li>)}</ul>}<div className="mt-2 text-[10px] text-slate-500">Charged {aiResult.fixResult.creditsCharged} credits · Balance {aiResult.fixResult.creditsRemaining}</div></div>}
+                  </div>
+                </div>
+              </section>
+            )}
 
             {/* Error Diagnostics Banner if failed */}
             {selectedBuild.errorDiagnosis && (

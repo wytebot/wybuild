@@ -26,7 +26,7 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({ onOpenNewProject }) 
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [triggeringId, setTriggeringId] = useState<string | null>(null);
 
-  const isPro = subscription.plan === 'pro';
+  const isPro = true; // subscriptions retired; connected repositories are not plan-gated
   const freeSlotsRemaining = Math.max(0, 10 - projects.length);
 
   const handleTrigger = async (projId: string) => {
@@ -63,7 +63,7 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({ onOpenNewProject }) 
           ) : (
             <div className="px-3.5 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs flex items-center gap-2 text-amber-300">
               <Sparkles className="w-4 h-4 text-amber-400" />
-              <span>Unlimited Projects Active</span>
+              <span>Unlimited Projects</span>
             </div>
           )}
 

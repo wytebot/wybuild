@@ -2,7 +2,7 @@
 
 WyBuild now selects **Capacitor + Android Gradle** when the connected GitHub repository contains a buildable web app (`package.json` with a `build` script and an `index.html` in `dist/`, `build/`, `www/`, `out/` or `public/`). URL-only websites, non-buildable repositories, and projects explicitly configured for Trusted Web Activity continue through the existing Bubblewrap native-shell path. This keeps URL conversion available instead of silently excluding it.
 
-## How WyBuild picks the web build script (workflow v32)
+## How WyBuild picks the web build script (workflow v34)
 
 For a repository with a `package.json`, WyBuild runs the first script that exists in this order: `wybuild:build`, `build:capacitor-web`, `build:static`, `build`.
 Capacitor is used only if that script leaves an `index.html` in `dist/`, `build/`, `www/`, `out/` or `public/`.
@@ -39,6 +39,17 @@ const login = await window.WyBuildNative.auth.google();
 await window.WyBuildNative.notifications.permissions();
 await window.WyBuildNative.notifications.schedule('Reminder', 'Your task is due soon');
 
+// Observe Android's native back button and clear horizontal swipes without blocking scroll.
+const back = await window.WyBuildNative.app.onBack(() => {
+  if (window.history.length > 1) window.history.back();
+  else window.WyBuildNative.app.exit();
+});
+const swipe = await window.WyBuildNative.gestures.onSwipe(({ direction }) => {
+  if (direction === 'right' && window.history.length > 1) window.history.back();
+});
+// When the screen/component is removed, clean up listeners:
+// await back.remove(); await swipe.remove();
+
 // Register for FCM push and send the resulting token to your authenticated backend.
 window.WyBuildNative.push.onToken(({ value }) => {
   fetch('/your-authenticated-backend/push/register', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -57,7 +68,7 @@ await window.WyBuildNative.push.register();
 - Biometric authentication entry point.
 - Filesystem read/write/list/delete and URL-to-file downloads.
 - Native share sheet, clipboard, haptics, device/battery information, network state/events.
-- Native browser, status bar, orientation lock, keyboard dismissal, app information/exit, preferences storage, action sheets and dialogs.
+- Native browser, status bar, orientation lock, keyboard dismissal, app lifecycle/back-button listeners, opt-in horizontal swipe gestures, app information/exit, preferences storage, action sheets and dialogs.
 - Capacitor plugins also contribute their required Android manifest declarations; WyBuild adds explicitly selected permissions from the UI and keeps camera/microphone/GPS hardware optional where appropriate.
 
 The bridge is bundled only into the **built local website**. An arbitrary remote URL cannot automatically call Capacitor plugin APIs unless its website code includes a compatible bridge. URL-only builds retain the legacy native shell and its existing feature set; they do not receive the bundled Capacitor JavaScript bridge.
@@ -110,3 +121,10 @@ Capacitor plugins work most reliably when the website is bundled locally and its
 - Firebase sign-in and remote push require a valid root `google-services.json` matching the configured Android package ID.
 - Remote push and native Firebase sign-in are Capacitor source-build features. Android share-target receiving is currently URL-shell only; a Capacitor source build refuses that combination instead of pretending it was installed. Outgoing share is available through `WyBuildNative.share`.
 - Capacitor bridge file writes use the app's private Documents directory by default, not the public Downloads collection.
+
+
+## Native value and app-store readiness
+
+WyBuild can compile a real Android application package with Capacitor's Android project, native plugin implementations, a custom launcher activity, system/back handling, local notifications, camera/media picker, filesystem, native share sheet, haptics, device/network information, biometric prompts, and optional Firebase authentication/push. For a bundled-source project these plugins are installed and synchronized during the Gradle build; they are not merely JavaScript stubs. The website must actually invoke these capabilities to provide meaningful native utility. A remote URL-only shell cannot automatically add JavaScript-native integrations to an arbitrary third-party website.
+
+Google Play review is not guaranteed by adding plugins or changing the APK wrapper. The app must provide distinct user value, work reliably, disclose data use, request permissions contextually, comply with target API and policy requirements, and avoid low-value repetitive web wrappers. Test on physical devices and complete the Play Console data-safety, privacy, app-access and content declarations. Push and native Firebase login remain opt-in because each app requires its own matching Firebase configuration and signing fingerprints.
