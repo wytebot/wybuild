@@ -113,7 +113,8 @@ async function twaStaleFiles(session, repo, branch, req) {
 const SESSION_COOKIE = 'wb_session';
 const STATE_COOKIE = 'wb_state';
 const STALE_ACTIVE_MS = 3 * 60 * 60 * 1000;
-const LIFETIME_FREE_LOGINS = new Set(['wytebot', 'wytzbot']);
+const LIFETIME_FREE_LOGINS = new Set(['wytebot', 'wytzbot', ...String(process.env.WYBUILD_FREE_LOGINS || '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean)]);
+const FREE_FOREVER_BALANCE = 999999;
 const PLANS = {
   // Cloud builds run in the connected user's GitHub Actions account; AI diagnosis/repair uses the separate credit wallet.
   free: { monthlyLimit: Number.MAX_SAFE_INTEGER, concurrentLimit: 3 },
@@ -465,6 +466,7 @@ const aiCostRates = () => ({
   output: Math.max(0, Number(env('GEMINI_OUTPUT_USD_PER_MILLION') || 2.50)),
 });
 async function creditsFor(login) {
+  if (isLifetimeFree(login)) return { balance: FREE_FOREVER_BALANCE, updatedAt: null, unlimited: true };
   let wallet = await kv.get(`wb:credits:${login}`);
   if (!wallet) {
     wallet = { balance: 10, starterGranted: true, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
@@ -474,6 +476,7 @@ async function creditsFor(login) {
   return { balance: Math.max(0, Number(wallet.balance || 0)), updatedAt: wallet.updatedAt || null };
 }
 async function debitCredits(login, amount, reason, metadata = {}) {
+  if (isLifetimeFree(login)) return FREE_FOREVER_BALANCE; // Free Forever accounts are never charged
   // Short per-user lock prevents two simultaneous AI requests from spending the same wallet balance.
   const lockKey = `wb:credits-lock:${login}`;
   const locked = await kv.set(lockKey, crypto.randomUUID(), { nx: true, ex: 30 });
@@ -491,6 +494,7 @@ async function debitCredits(login, amount, reason, metadata = {}) {
   } finally { await kv.del(lockKey).catch(() => {}); }
 }
 async function refundCredits(login, amount, reason, metadata = {}) {
+  if (isLifetimeFree(login)) return FREE_FOREVER_BALANCE;
   const lockKey = `wb:credits-lock:${login}`;
   const locked = await kv.set(lockKey, crypto.randomUUID(), { nx: true, ex: 30 });
   if (!locked) throw new HttpError(409, 'Another credit activity is updating this wallet. Retry shortly.', 'CREDITS_BUSY');
