@@ -1,6 +1,6 @@
 import React from 'react';
 import { useApp } from '../context/AppContext';
-import { Home, Terminal, Wrench, KeyRound, CreditCard, Server, X, Smartphone, LogOut, Rocket, Users, Bug, FolderKanban } from 'lucide-react';
+import { Home, Terminal, Wrench, KeyRound, CreditCard, Server, X, Smartphone, LogOut, Rocket, Users, Bug, FolderKanban, HelpCircle } from 'lucide-react';
 
 interface SidebarProps { open: boolean; onClose: () => void; }
 
@@ -23,6 +23,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, onClose }) => {
     ['team', 'Team', Users],
     ['settings', 'Keystore', KeyRound],
     ['billing', 'AI Credits', CreditCard],
+    ['howitworks', 'How it works', HelpCircle],
   ] as const;
   return <>
     <div onClick={onClose} className={`fixed inset-0 z-40 bg-black/65 lg:hidden ${open ? '' : 'hidden'}`} />

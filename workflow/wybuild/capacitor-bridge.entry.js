@@ -96,6 +96,118 @@ const native = {
       return { remove: async () => { document.removeEventListener('touchstart', down); document.removeEventListener('touchend', up); } };
     },
   },
+  // Opt-in pull-to-refresh. Nothing happens until the site calls enable(); the site decides what "refresh" means.
+  pullToRefresh: (() => {
+    let active = null;
+    const ensureStyle = () => { if (document.getElementById('wy-ptr-style')) return; const s = document.createElement('style'); s.id = 'wy-ptr-style'; s.textContent = '@keyframes wy-ptr-spin{to{transform:rotate(360deg)}}'; document.head.appendChild(s); };
+    const scrolledAncestor = (el) => { for (let n = el; n && n !== document.body && n !== document.documentElement; n = n.parentElement) { const oy = getComputedStyle(n).overflowY; if ((oy === 'auto' || oy === 'scroll') && n.scrollTop > 0) return true; } return false; };
+    const disable = () => { if (active) { active.remove(); active = null; } };
+    const enable = (options = {}) => {
+      disable();
+      ensureStyle();
+      const threshold = Math.max(50, Number(options.threshold || 80));
+      const maxPull = Math.max(threshold + 20, Number(options.maxPull || 140));
+      const onRefresh = typeof options.onRefresh === 'function' ? options.onRefresh : () => location.reload();
+      const bubble = document.createElement('div');
+      bubble.setAttribute('aria-hidden', 'true');
+      bubble.style.cssText = 'position:fixed;left:50%;top:env(safe-area-inset-top,0px);width:40px;height:40px;margin-left:-20px;border-radius:50%;background:#fff;color:#0f172a;box-shadow:0 2px 10px rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;z-index:2147483647;pointer-events:none;opacity:0;transform:translateY(-48px);font:600 18px/1 system-ui,sans-serif;will-change:transform,opacity';
+      const arrow = '\u2193';
+      let start = null, pulling = false, armed = false, refreshing = false;
+      const hide = () => { bubble.style.transition = 'transform .2s ease, opacity .2s ease'; bubble.style.transform = 'translateY(-48px)'; bubble.style.opacity = '0'; setTimeout(() => { bubble.remove(); bubble.style.transition = ''; }, 220); };
+      const reset = () => { start = null; pulling = false; armed = false; };
+      const down = (e) => {
+        const t = e.touches?.[0], el = e.target;
+        if (refreshing || !t || e.touches.length !== 1 || window.scrollY > 0 || scrolledAncestor(el) || /^(INPUT|TEXTAREA|SELECT)$/.test(el?.tagName || '') || el?.isContentEditable) { start = null; return; }
+        start = { x: t.clientX, y: t.clientY };
+      };
+      const move = (e) => {
+        const t = e.touches?.[0];
+        if (!start || !t || refreshing) return;
+        const dx = t.clientX - start.x, dy = t.clientY - start.y;
+        if (!pulling) {
+          if (Math.abs(dx) > Math.abs(dy) || dy < -8) { start = null; return; }
+          if (dy < 8) return;
+          pulling = true; bubble.textContent = arrow; document.body.appendChild(bubble);
+        }
+        if (window.scrollY > 0) { reset(); hide(); return; }
+        const pull = Math.min(maxPull, Math.max(0, dy) * 0.55);
+        if (!armed && pull >= threshold) { armed = true; Haptics.impact({ style: ImpactStyle.Light }).catch(() => {}); }
+        if (armed && pull < threshold) armed = false;
+        bubble.style.opacity = String(Math.min(1, pull / threshold));
+        bubble.style.transform = 'translateY(' + (pull - 48) + 'px) rotate(' + (armed ? 180 : 0) + 'deg)';
+      };
+      const up = (e) => {
+        if (!pulling) { start = null; return; }
+        const go = armed && e.type === 'touchend';
+        reset();
+        if (!go) { hide(); return; }
+        refreshing = true;
+        bubble.innerHTML = '<span style="width:18px;height:18px;border:2px solid #cbd5e1;border-top-color:#0f172a;border-radius:50%;animation:wy-ptr-spin .7s linear infinite"></span>';
+        bubble.style.transform = 'translateY(' + (threshold * 0.6) + 'px)';
+        Promise.resolve().then(() => onRefresh()).catch(() => {}).finally(() => { refreshing = false; hide(); });
+      };
+      const prevOverscroll = document.documentElement.style.overscrollBehaviorY;
+      document.documentElement.style.overscrollBehaviorY = 'contain';
+      document.addEventListener('touchstart', down, { passive: true });
+      document.addEventListener('touchmove', move, { passive: true });
+      document.addEventListener('touchend', up, { passive: true });
+      document.addEventListener('touchcancel', up, { passive: true });
+      active = { remove: () => { document.removeEventListener('touchstart', down); document.removeEventListener('touchmove', move); document.removeEventListener('touchend', up); document.removeEventListener('touchcancel', up); document.documentElement.style.overscrollBehaviorY = prevOverscroll; bubble.remove(); } };
+      return { remove: async () => disable() };
+    };
+    return { enable, disable };
+  })(),
+  // Opt-in edge swipe-to-go-back for in-app navigation. Android's own system back gesture (gesture navigation) already
+  // fires app.onBack(); this adds the same behaviour for in-app swipes that start just inside the screen edge.
+  swipeBack: (() => {
+    let active = null;
+    const disable = () => { if (active) { active.remove(); active = null; } };
+    const enable = (options = {}) => {
+      disable();
+      const edge = Math.max(16, Number(options.edge || 40));
+      const threshold = Math.max(40, Number(options.threshold || 80));
+      const rtl = getComputedStyle(document.documentElement).direction === 'rtl';
+      const onBack = typeof options.onBack === 'function' ? options.onBack : () => { if (history.length > 1) history.back(); else if (options.exitAtRoot) App.exitApp(); };
+      const hint = document.createElement('div');
+      hint.setAttribute('aria-hidden', 'true');
+      hint.textContent = rtl ? '\u203A' : '\u2039';
+      hint.style.cssText = 'position:fixed;top:50%;' + (rtl ? 'right' : 'left') + ':0;width:36px;height:36px;margin-top:-18px;border-radius:50%;background:rgba(15,23,42,.85);color:#fff;display:flex;align-items:center;justify-content:center;z-index:2147483647;pointer-events:none;opacity:0;font:600 22px/1 system-ui,sans-serif;will-change:transform,opacity';
+      let start = null, shown = false;
+      const fromEdge = (x) => (rtl ? x >= window.innerWidth - edge : x <= edge);
+      const hideHint = () => { shown = false; hint.remove(); };
+      const down = (e) => { const t = e.touches?.[0]; start = t && e.touches.length === 1 && fromEdge(t.clientX) ? { x: t.clientX, y: t.clientY, at: Date.now() } : null; };
+      const move = (e) => {
+        const t = e.touches?.[0];
+        if (!start || !t) return;
+        const dx = (rtl ? -1 : 1) * (t.clientX - start.x), dy = t.clientY - start.y;
+        if (Math.abs(dy) > 12 && Math.abs(dy) > Math.abs(dx) * 1.2) { start = null; hideHint(); return; }
+        if (dx > 10) {
+          if (!shown) { document.body.appendChild(hint); shown = true; }
+          const p = Math.min(1, dx / threshold);
+          hint.style.opacity = String(p);
+          hint.style.transform = 'translateX(' + (rtl ? -1 : 1) * (Math.min(dx, threshold) * 0.5 - 18) + 'px)';
+        }
+      };
+      const up = (e) => {
+        const t = e.changedTouches?.[0];
+        hideHint();
+        if (!start || !t) { start = null; return; }
+        const dx = (rtl ? -1 : 1) * (t.clientX - start.x), dy = t.clientY - start.y, elapsed = Date.now() - start.at;
+        start = null;
+        if (e.type === 'touchend' && dx >= threshold && dx > Math.abs(dy) * 1.5 && elapsed < 900) {
+          Haptics.impact({ style: ImpactStyle.Light }).catch(() => {});
+          try { onBack({ direction: rtl ? 'left' : 'right', distance: Math.round(dx), durationMs: elapsed }); } catch {}
+        }
+      };
+      document.addEventListener('touchstart', down, { passive: true });
+      document.addEventListener('touchmove', move, { passive: true });
+      document.addEventListener('touchend', up, { passive: true });
+      document.addEventListener('touchcancel', up, { passive: true });
+      active = { remove: () => { document.removeEventListener('touchstart', down); document.removeEventListener('touchmove', move); document.removeEventListener('touchend', up); document.removeEventListener('touchcancel', up); hint.remove(); } };
+      return { remove: async () => disable() };
+    };
+    return { enable, disable };
+  })(),
   share: (title, text, url) => safe(() => Share.share({ title, text, url })),
   openBrowser: (url) => safe(() => Browser.open({ url: String(url) })),
   statusBar: { show: () => safe(() => StatusBar.show()), hide: () => safe(() => StatusBar.hide()), dark: () => safe(() => StatusBar.setStyle({ style: Style.Dark })), light: () => safe(() => StatusBar.setStyle({ style: Style.Light })) },

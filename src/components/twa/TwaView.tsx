@@ -43,7 +43,7 @@ const CAPACITOR_NATIVE = [
   'Camera/photo picker', 'Geolocation', 'Local notifications', 'Firebase sign-in (provider setup required)',
   'Remote push registration (FCM setup required)', 'Biometric authentication', 'Clipboard', 'Device and battery info',
   'Filesystem and downloads (app-private Documents by default)', 'Haptics', 'Network status/events', 'Share out',
-  'Open browser', 'Status bar', 'Screen orientation', 'Preferences storage', 'Keyboard control', 'Action sheets and alerts',
+  'Pull to refresh and edge swipe back (opt-in; your site enables them)', 'Open browser', 'Status bar', 'Screen orientation', 'Preferences storage', 'Keyboard control', 'Action sheets and alerts',
 ] as const;
 
 const NATIVE_OPT_IN = [
@@ -52,6 +52,8 @@ const NATIVE_OPT_IN = [
   { id: 'reminders', label: 'Local reminders', hint: 'Schedule notifications from your site, even when the app is closed (adds POST_NOTIFICATIONS)' },
   { id: 'googleauth', label: 'Native Firebase sign-in', hint: 'Capacitor source builds only. Google needs Firebase Android configuration; Apple provider support depends on provider/plugin setup.' },
   { id: 'push', label: 'Remote push notifications', hint: 'Capacitor source builds only. Requires matching google-services.json, Firebase Messaging, and server-side token delivery.' },
+  { id: 'pulltorefresh', label: 'Pull to refresh', hint: 'Capacitor source builds only. Adds WyBuildNative.pullToRefresh. You must implement it in your site: call enable({ onRefresh }) and decide what refreshing does.' },
+  { id: 'swipeback', label: 'Edge swipe to go back', hint: 'Capacitor source builds only. Adds WyBuildNative.swipeBack. You must implement it in your site: call enable({ onBack }) or use the default history back.' },
 ] as const;
 
 const SCREEN_MODES = [

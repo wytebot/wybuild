@@ -1568,7 +1568,7 @@ function defaultPackageId(hostname) {
 }
 
 const PKG_RE = /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/;
-const NATIVE_OPTIN = ['biometric', 'sharetarget', 'reminders', 'googleauth', 'push'];
+const NATIVE_OPTIN = ['biometric', 'sharetarget', 'reminders', 'googleauth', 'push', 'pulltorefresh', 'swipeback'];
 const PERM_RE = /^[A-Za-z][A-Za-z0-9_.]*$/;
 const str = (v, max = 200) => String(v ?? '').trim().slice(0, max);
 

@@ -128,3 +128,26 @@ Capacitor plugins work most reliably when the website is bundled locally and its
 WyBuild can compile a real Android application package with Capacitor's Android project, native plugin implementations, a custom launcher activity, system/back handling, local notifications, camera/media picker, filesystem, native share sheet, haptics, device/network information, biometric prompts, and optional Firebase authentication/push. For a bundled-source project these plugins are installed and synchronized during the Gradle build; they are not merely JavaScript stubs. The website must actually invoke these capabilities to provide meaningful native utility. A remote URL-only shell cannot automatically add JavaScript-native integrations to an arbitrary third-party website.
 
 Google Play review is not guaranteed by adding plugins or changing the APK wrapper. The app must provide distinct user value, work reliably, disclose data use, request permissions contextually, comply with target API and policy requirements, and avoid low-value repetitive web wrappers. Test on physical devices and complete the Play Console data-safety, privacy, app-access and content declarations. Push and native Firebase login remain opt-in because each app requires its own matching Firebase configuration and signing fingerprints.
+
+
+## Pull to refresh and edge swipe back (opt-in, your site implements them)
+
+Select **Pull to refresh** and/or **Edge swipe to go back** in Native app features. They are Capacitor source-build features: the URL-based native shell does not include them. WyBuild only supplies the gesture handling. Nothing is active until your site enables it, because only your app knows what "refresh" and "back" mean.
+
+```js
+window.addEventListener('wybuild-native-ready', () => {
+  // Pull down at the top of the page. Return a promise to keep the spinner up until the work is done.
+  WyBuildNative.pullToRefresh.enable({
+    onRefresh: () => queryClient.invalidateQueries(), // default: location.reload()
+    threshold: 80,                                      // optional
+  });
+
+  // Swipe right from the left edge (left from the right edge in RTL).
+  WyBuildNative.swipeBack.enable({
+    onBack: () => router.back(),                        // default: history.back()
+    exitAtRoot: true,                                   // optional: exit the app when there is no history
+  });
+});
+```
+
+Both return `{ remove() }`, and `WyBuildNative.pullToRefresh.disable()` / `WyBuildNative.swipeBack.disable()` turn them off (for example on a map or canvas screen). Pull to refresh is ignored when the page or an inner scroller is not at the top, and inside inputs. On Android gesture navigation the system back swipe already fires `WyBuildNative.app.onBack(...)`; `swipeBack` covers in-app swipes that start just inside the edge.

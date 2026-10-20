@@ -15,6 +15,7 @@ const PAGES = [
   ['team', 'Team', 'team members access'],
   ['settings', 'Keystore', 'release signing keystore'],
   ['billing', 'AI Credits', 'one-time credit wallet Gemini build repair'],
+  ['howitworks', 'How it works', 'help guide steps errors troubleshooting fix'],
 ] as const;
 
 export const Header: React.FC<Props> = ({onOpenNewProject,onOpenQuickBuild,onToggleMenu}) => {

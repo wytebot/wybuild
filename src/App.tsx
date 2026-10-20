@@ -17,6 +17,7 @@ import { DevToolsView } from './components/tools/DevToolsView';
 import { TeamView } from './components/team/TeamView';
 import { BillingView } from './components/billing/BillingView';
 import { SettingsView } from './components/settings/SettingsView';
+import { HowItWorksView } from './components/help/HowItWorksView';
 import { NewProjectModal } from './components/modals/NewProjectModal';
 import { QuickBuildModal } from './components/modals/QuickBuildModal';
 import { LoginScreen } from './components/LoginScreen';
@@ -87,6 +88,7 @@ const MainLayout: React.FC = () => {
           {currentTab === 'team' && <TeamView />}
           {currentTab === 'billing' && <BillingView />}
           {currentTab === 'settings' && <SettingsView />}
+          {currentTab === 'howitworks' && <HowItWorksView />}
           {currentTab === 'dashboard' && (
             <DashboardOverview
               onOpenNewProject={() => setShowNewProjectModal(true)}
