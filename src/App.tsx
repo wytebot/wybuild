@@ -25,7 +25,7 @@ import { CheckCircle2, AlertCircle } from 'lucide-react';
 import { CreditsCheckoutModal } from './components/billing/CreditsCheckoutModal';
 
 const MainLayout: React.FC = () => {
-  const { currentTab, toastMessage } = useApp();
+  const { currentTab, toastMessage, builds, setActiveBuildId, setCurrentTab, authState, user, repos } = useApp();
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);
   const [showQuickBuildModal, setShowQuickBuildModal] = useState(false);
   const [showBillingModal, setShowBillingModal] = useState(false);
@@ -33,6 +33,75 @@ const MainLayout: React.FC = () => {
   const [showCreditsSuccess, setShowCreditsSuccess] = useState<boolean>(() => typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('credits') === 'success');
   // Menu starts open on desktop, closed (drawer) on phones/tablets.
   const [navOpen, setNavOpen] = useState<boolean>(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches);
+
+  // Route build-completion notification deep links directly to the matching build history item.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const repo = params.get('notifyRepo');
+    const runId = params.get('notifyRun');
+    const notifyTab = params.get('notifyTab');
+    if (!repo || !runId || !builds.length) return;
+    const match = builds.find((b) => String(b.runId || b.id) === runId && String(b.repo || '').toLowerCase() === repo.toLowerCase());
+    if (!match) return;
+    setCurrentTab('builds');
+    setActiveBuildId(match.id);
+    if (notifyTab === 'artifacts' || notifyTab === 'logs') { try { localStorage.setItem('wybuild_notify_tab', notifyTab); } catch {} }
+    params.delete('notifyRepo'); params.delete('notifyRun'); params.delete('notifyTab');
+    const query = params.toString();
+    window.history.replaceState({}, '', `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`);
+  }, [builds, setActiveBuildId, setCurrentTab]);
+
+  // Register Firebase Cloud Messaging on native Capacitor builds. The server keeps tokens
+  // private and maps them to the authenticated GitHub account and repositories.
+  useEffect(() => {
+    if (authState !== 'authed' || !user?.login) return;
+    let disposed = false;
+    let tokenListener: { remove: () => Promise<void> } | undefined;
+    let actionListener: { remove: () => Promise<void> } | undefined;
+    let readyHandler: (() => void) | undefined;
+    const register = async () => {
+      const native = (window as any).WyBuildNative;
+      if (disposed || !native?.isNative?.() || !native?.push) return;
+      try {
+        tokenListener = await native.push.onToken(async (event: any) => {
+          const token = String(event?.value || event?.token || '');
+          if (!token || disposed) return;
+          await fetch('/api/push/register', {
+            method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token, platform: native.platform?.() || 'android', repos: repos.map((r) => r.fullName).filter(Boolean) }),
+          }).catch(() => {});
+        });
+        actionListener = await native.push.onAction(async (event: any) => {
+          const data = event?.notification?.data || event?.data || {};
+          const rawUrl = String(data.url || '');
+          if (!rawUrl) return;
+          try {
+            const target = new URL(rawUrl, window.location.origin);
+            // Never let a push payload navigate the app to an arbitrary external site.
+            const trustedWebHost = target.hostname === 'wybuild-black.vercel.app';
+            if (target.origin !== window.location.origin && !trustedWebHost) return;
+            // Native Capacitor builds use a local WebView origin; keep navigation inside the app shell.
+            window.location.assign(`${target.pathname}${target.search}${target.hash}`);
+          } catch { /* malformed notification links are ignored */ }
+        });
+        await native.push.channel?.();
+        await native.push.register();
+      } catch (error) {
+        console.warn('WyBuild push registration was not completed:', error);
+      }
+    };
+    if ((window as any).WyBuildNative) void register();
+    else {
+      readyHandler = () => { void register(); };
+      window.addEventListener('wybuild-native-ready', readyHandler, { once: true });
+    }
+    return () => {
+      disposed = true;
+      if (readyHandler) window.removeEventListener('wybuild-native-ready', readyHandler);
+      void tokenListener?.remove().catch(() => {});
+      void actionListener?.remove().catch(() => {});
+    };
+  }, [authState, user?.login]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setNavOpen((v) => (window.matchMedia('(max-width: 1023px)').matches ? false : v)); };

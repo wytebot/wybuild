@@ -68,3 +68,39 @@ body { background:#030505; }
 .wy-account-continue:hover{background:#10b981}.wy-account-continue.is-disabled{opacity:.48;cursor:not-allowed}
 @keyframes wyAccountIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
 @media(prefers-reduced-motion:reduce){.wy-account-menu{animation:none}.wy-account-chevron{transition:none}}
+
+
+/* WyBuild scroll quality layer: native-feeling vertical and horizontal scrolling. */
+html {
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  scrollbar-gutter: stable;
+}
+body {
+  min-height: 100%;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
+/* Make intentional scroll containers smooth on touch devices without stealing gestures. */
+:where(*, *::before, *::after) { -webkit-tap-highlight-color: transparent; }
+:where([class*="overflow-x-auto"], [class*="overflow-x-scroll"], [data-scroll-x], .wy-scroll-x) {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  touch-action: pan-x pan-y;
+}
+:where([class*="overflow-y-auto"], [class*="overflow-y-scroll"], [data-scroll-y], .wy-scroll-y) {
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  touch-action: pan-y;
+}
+/* Keep code and data tables horizontally reachable on narrow screens. */
+pre, .wy-scroll-x, [data-scroll-x] { max-width: 100%; }
+table { max-width: 100%; }
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { scroll-behavior: auto !important; }
+}

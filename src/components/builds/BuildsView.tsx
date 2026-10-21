@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { api } from '../../services/api';
 import { useApp } from '../../context/AppContext';
 import { TerminalViewer } from './TerminalViewer';
@@ -39,6 +39,17 @@ export const BuildsView: React.FC = () => {
     : [];
 
   const isRunning = selectedBuild?.status === 'running';
+
+  useEffect(() => {
+    let tab = '';
+    try { tab = localStorage.getItem('wybuild_notify_tab') || ''; } catch {}
+    if (!tab || !selectedBuild) return;
+    const timer = window.setTimeout(() => {
+      const target = document.querySelector(`[data-build-notify-target="${tab}"]`);
+      if (target) { target.scrollIntoView({ behavior: 'smooth', block: 'start' }); try { localStorage.removeItem('wybuild_notify_tab'); } catch {} }
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [selectedBuild?.id, selectedBuild?.artifacts?.length, allLogs.length]);
 
   const runAiDiagnosis = async () => {
     if (!selectedBuild?.repo || !selectedBuild.runId) { setAiError('This build is missing its GitHub repository/run reference. Refresh build history and try again.'); return; }
@@ -159,7 +170,18 @@ export const BuildsView: React.FC = () => {
                 </div>
               </div>
 
-              <div className="flex items-center gap-2.5 shrink-0">
+              <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                {selectedBuild.repo && selectedBuild.runId && (
+                  <a
+                    href={`https://github.com/${selectedBuild.repo}/actions/runs/${selectedBuild.runId}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title="Open this exact GitHub Actions run, logs and available artifacts"
+                    className="px-3.5 py-2 text-xs font-semibold rounded border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-200 transition flex items-center gap-1.5"
+                  >
+                    <Github className="w-4 h-4" /> GitHub logs & artifacts
+                  </a>
+                )}
                 {isRunning ? (
                   <button
                     onClick={() => cancelBuild(selectedBuild.id)}
@@ -322,7 +344,7 @@ export const BuildsView: React.FC = () => {
 
             {/* Generated Artifacts Section */}
             {selectedBuild.artifacts.length > 0 && (
-              <div className="p-5 rounded-lg bg-slate-950 border border-slate-800 space-y-3">
+              <div data-build-notify-target="artifacts" className="p-5 rounded-lg bg-slate-950 border border-slate-800 space-y-3 scroll-mt-4">
                 <div className="flex items-center justify-between">
                   <h3 className="text-xs font-mono uppercase tracking-wider text-slate-400">
                     Compiled Binary Artifacts
@@ -378,18 +400,20 @@ export const BuildsView: React.FC = () => {
             )}
 
             {selectedBuild.status === 'success' && selectedBuild.artifacts.length === 0 && (
-              <div className="rounded-lg border border-slate-800 bg-slate-950 p-4 text-xs text-slate-400">
+              <div data-build-notify-target="artifacts" className="rounded-lg border border-slate-800 bg-slate-950 p-4 text-xs text-slate-400 scroll-mt-4">
                 <div className="flex items-center gap-2 text-slate-200 font-semibold"><FileCode className="h-4 w-4 text-emerald-400" /> Generated artifacts</div>
                 <p className="mt-2">No downloadable artifact has been returned by GitHub for this run yet. WyBuild is retrying the run details in the background.</p>
               </div>
             )}
 
             {/* Live Terminal Console Viewer */}
+            <div data-build-notify-target="logs" className="scroll-mt-4">
             <TerminalViewer
               logs={allLogs}
               isRunning={isRunning}
               buildId={selectedBuild.id}
             />
+            </div>
 
             {selectedBuild.status === 'failed' && (
               <div className="flex justify-center -mt-2">

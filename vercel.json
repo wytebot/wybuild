@@ -3,9 +3,16 @@
     "api/index.js": {
       "includeFiles": "{workflow,lib}/**",
       "maxDuration": 60
+    },
+    "api/build-notify-webhook.js": {
+      "maxDuration": 30
     }
   },
   "rewrites": [
+    {
+      "source": "/api/build-notify-webhook",
+      "destination": "/api/build-notify-webhook.js"
+    },
     {
       "source": "/.well-known/assetlinks.json",
       "destination": "/api/self-assetlinks"

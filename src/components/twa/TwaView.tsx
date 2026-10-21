@@ -92,6 +92,7 @@ export const TwaView: React.FC = () => {
   const [needKey, setNeedKey] = useState(false);
   const inspectedUrl = useRef('');
   const cfgRef = useRef(cfg);
+  const chargedIdentityValues = useRef<Record<string, string>>({});
   cfgRef.current = cfg;
   // replace the whole form and make the new values visible to discover() in the same tick
   const replaceCfg = (next: TwaConfig) => { cfgRef.current = next; setCfg(next); };
@@ -109,6 +110,25 @@ export const TwaView: React.FC = () => {
   const workflow = repoInspection?.workflows?.twa ?? { installed: repoInspection?.workflowInstalled ?? false, upToDate: repoInspection?.workflowUpToDate ?? false };
 
   const set = <K extends keyof TwaConfig>(key: K, value: TwaConfig[K]) => setCfg(c => ({ ...c, [key]: value }));
+  const paidAction = async (action: string) => {
+    const operationId = (typeof crypto !== 'undefined' && 'randomUUID' in crypto) ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}-wybuild`;
+    try {
+      const result = await api.chargeAction(action, operationId);
+      window.dispatchEvent(new CustomEvent('wybuild:credits-updated', { detail: { balance: result.balance } }));
+      return true;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Could not charge credits for this action.';
+      window.alert(message);
+      return false;
+    }
+  };
+  const chargeIdentityEdit = async (field: 'package_id_edit' | 'version_edit', key: 'packageId' | 'versionName', value: string) => {
+    const oldValue = String(savedProject?.twa?.[key] ?? (key === 'versionName' ? '1.0.0' : ''));
+    if (!editingId || !savedProject?.twa || value === oldValue || chargedIdentityValues.current[field] === value) return;
+    const ok = await paidAction(field);
+    if (!ok) set(key, oldValue as TwaConfig[typeof key]);
+    else chargedIdentityValues.current[field] = value;
+  };
 
   const applyInspection = (r: TwaInspection, url: string) => {
     setInspection(r);
@@ -186,8 +206,17 @@ export const TwaView: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [repo]);
 
-  const toggleFeature = (id: string) => {
+  const toggleFeature = async (id: string) => {
     const on = !featureState(cfg, id);
+    if (on && (cfg.shell || 'standalone') === 'twa' && ['push', 'googleauth', 'pulltorefresh', 'swipeback'].includes(id)) {
+      window.alert('This native feature is not available in pure Trusted Web Activity mode. Switch to Capacitor / standalone before enabling it.');
+      return;
+    }
+    if (on) {
+      const price: Record<string, string> = { notifications: 'reminders', location: 'native_location', camera: 'native_camera', microphone: 'native_camera', vibration: 'vibration', biometric: 'biometric', push: 'push', googleauth: 'googleauth', pulltorefresh: 'pulltorefresh', swipeback: 'swipeback', sharetarget: 'sharetarget' };
+      const action = price[id];
+      if (action && !(await paidAction(action))) return;
+    }
     if (id === 'notifications') return set('enableNotifications', on);
     if (id === 'location') return set('locationDelegation', on);
     const permission = FEATURES.find(f => f.id === id)?.permission;
@@ -333,8 +362,8 @@ export const TwaView: React.FC = () => {
       <div className="flex items-center justify-between gap-2"><div className="flex items-center gap-2 text-white font-semibold"><Package className="w-4 h-4 text-emerald-300"/>Automatic app identity</div><span className="text-[10px] text-emerald-300">{editingId ? `EDITING ${(savedProject?.name || cfg.name || 'APP').toUpperCase()}` : 'PACKAGE ID IS FREE'}</span></div>
       <div className="grid sm:grid-cols-2 gap-3 mt-3">
         <div><label className="text-slate-500">App name</label><input className={input} value={cfg.name} onChange={e => set('name', e.target.value)} placeholder="Detected automatically"/></div>
-        <div><label className="text-slate-500">Package ID</label><input className={`${input} font-mono text-emerald-200`} value={cfg.packageId} onChange={e => set('packageId', e.target.value.toLowerCase().replace(/[^a-z0-9_.]/g, ''))} placeholder="Generated from your domain" autoCapitalize="none" spellCheck={false}/></div>
-        <div><label className="text-slate-500">Version</label><input className={input} value={cfg.versionName} onChange={e => set('versionName', e.target.value)}/></div>
+        <div><label className="text-slate-500 flex items-center justify-between gap-2"><span>Package ID</span><span className="text-[10px] font-bold text-amber-200">Edit · 2 credits</span></label><input onBlur={e => { void chargeIdentityEdit('package_id_edit', 'packageId', e.currentTarget.value); }} className={`${input} font-mono text-emerald-200`} value={cfg.packageId} onChange={e => set('packageId', e.target.value.toLowerCase().replace(/[^a-z0-9_.]/g, ''))} placeholder="Generated from your domain" autoCapitalize="none" spellCheck={false}/></div>
+        <div><label className="text-slate-500 flex items-center justify-between gap-2"><span>Version</span><span className="text-[10px] font-bold text-amber-200">Edit · 2 credits</span></label><input onBlur={e => { void chargeIdentityEdit('version_edit', 'versionName', e.currentTarget.value); }} className={input} value={cfg.versionName} onChange={e => set('versionName', e.target.value)}/></div>
         <div><label className="text-slate-500">Minimum version code <span className="text-slate-600">(optional)</span></label><input className={`${input} font-mono`} inputMode="numeric" value={cfg.versionCode ?? ''} onChange={e => { const n = Number(e.target.value.replace(/\D/g, '')); set('versionCode', n > 0 ? n : undefined); }} placeholder="Auto: always higher than before"/></div>
         <div><label className="text-slate-500">Launcher name <span className="text-slate-600">(under the icon)</span></label><input className={input} value={cfg.launcherName} onChange={e => set('launcherName', e.target.value)} placeholder="Same as app name"/></div>
         <div><label className="text-slate-500">Icon</label><div className="flex gap-2">{cfg.iconUrl && /^https:\/\//.test(cfg.iconUrl) && <img src={cfg.iconUrl} alt="" className="h-11 w-11 rounded-lg bg-black/40 object-contain shrink-0" onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}/>}<input className={input} value={cfg.iconUrl} onChange={e => set('iconUrl', e.target.value)} placeholder="Detected from manifest"/></div></div>
@@ -345,7 +374,7 @@ export const TwaView: React.FC = () => {
     <section className={card}>
       <div className="flex items-center gap-2 text-white font-semibold"><Wrench className="w-4 h-4 text-emerald-300"/>Native features</div>
       <p className="text-slate-500 mt-1">Tick only what your website needs. WyBuild adds the required Android permissions/configuration.</p>
-      <div className="grid sm:grid-cols-2 gap-2 mt-3">{FEATURES.map(f => { const checked = featureState(cfg, f.id); return <button key={f.id} type="button" onClick={() => toggleFeature(f.id)} className={`text-left rounded-xl border p-3 flex gap-3 ${checked ? 'border-emerald-400/30 bg-emerald-400/[.06]' : 'border-white/[.06] bg-black/20'}`}><span className={`w-5 h-5 rounded border flex items-center justify-center shrink-0 ${checked ? 'bg-emerald-400 border-emerald-400 text-black' : 'border-slate-600'}`}>{checked && <Check className="w-3.5 h-3.5"/>}</span><span><b className="text-slate-200 block">{f.label}</b><span className="text-[11px] text-slate-500">{f.hint}</span></span></button>; })}</div>
+      <div className="grid sm:grid-cols-2 gap-2 mt-3">{FEATURES.map(f => { const checked = featureState(cfg, f.id); return <button key={f.id} type="button" onClick={() => toggleFeature(f.id)} className={`text-left rounded-xl border p-3 flex gap-3 ${checked ? 'border-emerald-400/30 bg-emerald-400/[.06]' : 'border-white/[.06] bg-black/20'}`}><span className={`w-5 h-5 rounded border flex items-center justify-center shrink-0 ${checked ? 'bg-emerald-400 border-emerald-400 text-black' : 'border-slate-600'}`}>{checked && <Check className="w-3.5 h-3.5"/>}</span><span><b className="text-slate-200 block">{f.label}<span className="ml-2 inline-flex rounded border border-amber-300/20 bg-amber-300/[.06] px-1.5 py-0.5 align-middle text-[9px] font-bold text-amber-200">{({notifications:2,location:2,camera:2,microphone:2,vibration:1,biometric:3,push:3,googleauth:3,pulltorefresh:2,swipeback:2,sharetarget:1,reminders:2} as Record<string,number>)[f.id] ?? 1} credits</span></b><span className="text-[11px] text-slate-500">{f.hint}</span></span></button>; })}</div>
       {(() => { const hints = (inspection?.featureHints || []).filter(id => !featureState(cfg, id)); return hints.length > 0 && <div className="mt-3 p-3 rounded-xl border border-emerald-400/20 bg-emerald-400/[.04] text-emerald-200 flex flex-wrap items-center gap-2"><span>Your site's code appears to use:</span>{hints.map(id => <button key={id} type="button" onClick={() => toggleFeature(id)} className="px-2.5 py-1 rounded-full border border-emerald-400/30 hover:bg-emerald-400/10">+ {FEATURES.find(f => f.id === id)?.label}</button>)}</div>; })()}
     </section>
 
@@ -354,7 +383,7 @@ export const TwaView: React.FC = () => {
       <p className="text-slate-500 mt-1">Native capabilities depend on the selected engine. Capacitor source builds bundle <span className="font-mono text-slate-400">window.WyBuildNative</span>; the URL-based native shell uses its own bridge. Google Play reviews the app's behaviour, so request only permissions and features the app genuinely uses.</p>
       {(cfg.shell || 'standalone') === 'twa' ? <p className="text-amber-300/80 mt-3">The Trusted Web Activity shell lets Chrome render your site, so the native bridge is not available. Switch to the standalone app shell to use these.</p> : <>
         <p className="mt-2 text-[11px] text-slate-500">WyBuild auto-selects Capacitor + Gradle only when the repository has a package.json build script and produces index.html. URL-only projects use the separate native WebView shell. If a selected feature is unsupported by the detected engine, the build stops with an explanation instead of silently ignoring it.</p>
-        <div className="grid sm:grid-cols-2 gap-2 mt-3">{NATIVE_OPT_IN.map(f => { const on = (cfg.nativeFeatures || []).includes(f.id); return <button key={f.id} type="button" onClick={() => set('nativeFeatures', on ? (cfg.nativeFeatures || []).filter(x => x !== f.id) : [...(cfg.nativeFeatures || []), f.id])} className={`text-left rounded-xl border p-3 flex gap-3 ${on ? 'border-emerald-400/30 bg-emerald-400/[.06]' : 'border-white/[.06] bg-black/20'}`}><span className={`w-5 h-5 rounded border flex items-center justify-center shrink-0 ${on ? 'bg-emerald-400 border-emerald-400 text-black' : 'border-slate-600'}`}>{on && <Check className="w-3.5 h-3.5"/>}</span><span><b className="text-slate-200 block">{f.label}</b><span className="text-[11px] text-slate-500">{f.hint}</span></span></button>; })}</div>
+        <div className="grid sm:grid-cols-2 gap-2 mt-3">{NATIVE_OPT_IN.map(f => { const on = (cfg.nativeFeatures || []).includes(f.id); return <button key={f.id} type="button" onClick={async () => { if (!on && !(await paidAction(({biometric:'biometric',sharetarget:'sharetarget',reminders:'reminders',googleauth:'googleauth',push:'push',pulltorefresh:'pulltorefresh',swipeback:'swipeback'} as Record<string,string>)[f.id] || 'sharetarget'))) return; set('nativeFeatures', on ? (cfg.nativeFeatures || []).filter(x => x !== f.id) : [...(cfg.nativeFeatures || []), f.id]); }} className={`text-left rounded-xl border p-3 flex gap-3 ${on ? 'border-emerald-400/30 bg-emerald-400/[.06]' : 'border-white/[.06] bg-black/20'}`}><span className={`w-5 h-5 rounded border flex items-center justify-center shrink-0 ${on ? 'bg-emerald-400 border-emerald-400 text-black' : 'border-slate-600'}`}>{on && <Check className="w-3.5 h-3.5"/>}</span><span><b className="text-slate-200 block">{f.label}<span className="ml-2 inline-flex rounded border border-amber-300/20 bg-amber-300/[.06] px-1.5 py-0.5 align-middle text-[9px] font-bold text-amber-200">{({notifications:2,location:2,camera:2,microphone:2,vibration:1,biometric:3,push:3,googleauth:3,pulltorefresh:2,swipeback:2,sharetarget:1,reminders:2} as Record<string,number>)[f.id] ?? 1} credits</span></b><span className="text-[11px] text-slate-500">{f.hint}</span></span></button>; })}</div>
         <p className="text-[11px] text-slate-500 mt-3 mb-1">Capacitor source-build bridge (when the source build succeeds)</p>
         <div className="grid sm:grid-cols-2 gap-2">{CAPACITOR_NATIVE.map(label => <div key={label} className="rounded-xl border border-white/[.06] bg-black/20 p-3 flex gap-3"><span className="w-5 h-5 rounded border border-emerald-400/40 bg-emerald-400/10 text-emerald-300 flex items-center justify-center shrink-0"><Check className="w-3.5 h-3.5"/></span><span className="text-[11px] text-slate-400">{label}</span></div>)}</div>
         <details className="mt-3"><summary className="cursor-pointer text-[11px] text-slate-500">URL-only native shell features</summary><div className="grid sm:grid-cols-2 gap-2 mt-2">{NATIVE_ALWAYS.map(f => <div key={f.id} className="rounded-xl border border-white/[.06] bg-black/20 p-3 flex gap-3"><span className="w-5 h-5 rounded border border-emerald-400/40 bg-emerald-400/10 text-emerald-300 flex items-center justify-center shrink-0"><Check className="w-3.5 h-3.5"/></span><span><b className="text-slate-300 block">{f.label}</b><span className="text-[11px] text-slate-500">{f.hint}</span></span></div>)}</div></details>
@@ -386,10 +415,10 @@ export const TwaView: React.FC = () => {
 
     <section className={card}>
       <div className="flex items-center gap-2 text-white font-semibold"><Smartphone className="w-4 h-4 text-emerald-300"/>Screen &amp; gestures</div>
-      <p className="text-slate-500 mt-1">Built into the APK and AAB at build time.</p>
+      <p className="text-slate-500 mt-1">Built into the APK and AAB at build time. Successful builds cost <b className="text-amber-200">5 credits</b>; failed builds are refunded.</p>
       <div className="grid sm:grid-cols-2 gap-2 mt-3">{SHELLS.map(m => { const on = (cfg.shell || 'standalone') === m.id; return <button key={m.id} type="button" onClick={() => { set('shell', m.id); if (m.id === 'twa') set('nativeFeatures', []); }} className={`text-left rounded-xl border p-3 ${on ? 'border-emerald-400/30 bg-emerald-400/[.06]' : 'border-white/[.06] bg-black/20'}`}><b className="text-slate-200 block">{m.label}</b><span className="text-[11px] text-slate-500">{m.hint}</span></button>; })}</div>
-      <div className="grid sm:grid-cols-3 gap-2 mt-3">{SCREEN_MODES.map(m => { const on = (cfg.display === 'minimal-ui' ? 'standalone' : cfg.display) === m.id; return <button key={m.id} type="button" onClick={() => set('display', m.id)} className={`text-left rounded-xl border p-3 ${on ? 'border-emerald-400/30 bg-emerald-400/[.06]' : 'border-white/[.06] bg-black/20'}`}><b className="text-slate-200 block">{m.label}</b><span className="text-[11px] text-slate-500">{m.hint}</span></button>; })}</div>
-      <button type="button" onClick={() => set('predictiveBack', !cfg.predictiveBack)} className={`mt-2 w-full text-left rounded-xl border p-3 flex gap-3 ${cfg.predictiveBack ? 'border-emerald-400/30 bg-emerald-400/[.06]' : 'border-white/[.06] bg-black/20'}`}><span className={`w-5 h-5 rounded border flex items-center justify-center shrink-0 ${cfg.predictiveBack ? 'bg-emerald-400 border-emerald-400 text-black' : 'border-slate-600'}`}>{cfg.predictiveBack && <Check className="w-3.5 h-3.5"/>}</span><span><b className="text-slate-200 block">Predictive back gesture</b><span className="text-[11px] text-slate-500">Android 13+ shows the back-swipe preview animation. Older phones ignore it.</span></span></button>
+      <div className="grid sm:grid-cols-3 gap-2 mt-3">{SCREEN_MODES.map(m => { const on = (cfg.display === 'minimal-ui' ? 'standalone' : cfg.display) === m.id; return <button key={m.id} type="button" onClick={async () => { if (m.id !== 'standalone' && cfg.display !== m.id && !(await paidAction(m.id === 'fullscreen' ? 'fullscreen' : 'fullscreen-sticky'))) return; set('display', m.id); }} className={`text-left rounded-xl border p-3 ${on ? 'border-emerald-400/30 bg-emerald-400/[.06]' : 'border-white/[.06] bg-black/20'}`}><b className="text-slate-200 block">{m.label}</b><span className="text-[11px] text-slate-500">{m.hint}</span></button>; })}</div>
+      <button type="button" onClick={async () => { if (!cfg.predictiveBack && !(await paidAction('predictive_back'))) return; set('predictiveBack', !cfg.predictiveBack); }} className={`mt-2 w-full text-left rounded-xl border p-3 flex gap-3 ${cfg.predictiveBack ? 'border-emerald-400/30 bg-emerald-400/[.06]' : 'border-white/[.06] bg-black/20'}`}><span className={`w-5 h-5 rounded border flex items-center justify-center shrink-0 ${cfg.predictiveBack ? 'bg-emerald-400 border-emerald-400 text-black' : 'border-slate-600'}`}>{cfg.predictiveBack && <Check className="w-3.5 h-3.5"/>}</span><span><b className="text-slate-200 block">Predictive back gesture</b><span className="text-[11px] text-slate-500">Android 13+ shows the back-swipe preview animation. Older phones ignore it.</span></span></button>
       <div className="mt-3"><label className="text-slate-500">Google Play app-signing SHA-256 <span className="text-slate-600">(optional)</span></label><input className={`${input} font-mono`} value={cfg.playSigningFingerprint || ''} onChange={e => set('playSigningFingerprint', e.target.value.trim())} placeholder="Play Console → Setup → App signing → SHA-256"/></div>
       {(cfg.shell || 'standalone') === 'twa'
         ? <p className="text-slate-600 mt-2">Fullscreen hides the status bar, navigation bar and address bar like a native app, but only while Android can verify your site. WyBuild checks this after every build and reports it in the run summary. Publish the build's assetlinks.json at /.well-known/assetlinks.json; if the app is installed from Google Play, add the Play app-signing fingerprint above, otherwise the browser address bar comes back. Switch to the Standalone app to remove this dependency.</p>

@@ -151,3 +151,9 @@ window.addEventListener('wybuild-native-ready', () => {
 ```
 
 Both return `{ remove() }`, and `WyBuildNative.pullToRefresh.disable()` / `WyBuildNative.swipeBack.disable()` turn them off (for example on a map or canvas screen). Pull to refresh is ignored when the page or an inner scroller is not at the top, and inside inputs. On Android gesture navigation the system back swipe already fires `WyBuildNative.app.onBack(...)`; `swipeBack` covers in-app swipes that start just inside the edge.
+
+## Scroll quality layer (Capacitor + standalone native shell)
+
+WyBuild applies a shared scroll-quality layer to generated builds: smooth programmatic/page scrolling, touch-friendly momentum scrolling, bounded horizontal overscroll, thin scrollbars for intentional scroll rails, and reduced-motion accessibility support. It does not cancel `touchmove`, hijack swipe gestures, or force every element into a scroll container. Apps can mark intentional horizontal/vertical containers with `data-scroll-x` / `data-scroll-y` or `.wy-scroll-x` / `.wy-scroll-y`.
+
+The layer is bundled into Capacitor web assets and injected by WyBuild's URL-based standalone Android WebView shell. A **pure Trusted Web Activity (TWA)** is rendered by Chrome against the website's own origin and does not permit the Android wrapper to inject arbitrary CSS/JavaScript into that remote page. For pure TWA mode, the hosted website must provide its own scroll CSS; choose WyBuild's standalone native shell when wrapper-level injection is required. Both modes still use the same Android build/signing pipeline for the requested APK/AAB outputs.

@@ -21,6 +21,39 @@ import { ActionSheet } from '@capacitor/action-sheet';
 import { Dialog } from '@capacitor/dialog';
 
 const safe = async (fn) => { try { return await fn(); } catch (e) { return { ok: false, error: String(e?.message || e) }; } };
+// Shared scroll-quality layer: smooth page scroll, resilient nested scrollers and horizontal rails.
+// Does not prevent touchmove or override app-specific scroll handlers.
+try {
+  const installScrollQuality = () => {
+    if (document.getElementById('wybuild-scroll-quality')) return;
+    const style = document.createElement('style');
+    style.id = 'wybuild-scroll-quality';
+    style.textContent = `
+      html { scroll-behavior:smooth; -webkit-overflow-scrolling:touch; overscroll-behavior-x:contain; }
+      body { -webkit-overflow-scrolling:touch; overscroll-behavior-x:contain; }
+      [data-scroll-x],.wy-scroll-x { overflow-x:auto; -webkit-overflow-scrolling:touch; overscroll-behavior-x:contain; touch-action:pan-x pan-y; scrollbar-width:thin; }
+      [data-scroll-y],.wy-scroll-y { overflow-y:auto; -webkit-overflow-scrolling:touch; overscroll-behavior-y:contain; touch-action:pan-y; scrollbar-width:thin; }
+      pre,table { max-width:100%; }
+      @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*::before,*::after{scroll-behavior:auto!important}}
+    `;
+    (document.head || document.documentElement).appendChild(style);
+  };
+  installScrollQuality();
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', installScrollQuality, { once: true });
+  new MutationObserver(installScrollQuality).observe(document.documentElement, { childList: true, subtree: true });
+} catch { /* scroll enhancements must never block native bridge startup */ }
+
+// Native edge-to-edge/fullscreen layouts need a viewport that includes display cutouts.
+// Preserve existing viewport settings and only add viewport-fit=cover when missing.
+try {
+  const viewport = document.querySelector('meta[name="viewport"]');
+  if (viewport && !/viewport-fit\\s*=/.test(viewport.content || '')) {
+    viewport.content = `${viewport.content || 'width=device-width, initial-scale=1'}${viewport.content ? ', ' : ''}viewport-fit=cover`;
+  }
+  document.documentElement.style.setProperty('--wybuild-safe-top', 'env(safe-area-inset-top, 0px)');
+  document.documentElement.style.setProperty('--wybuild-safe-bottom', 'env(safe-area-inset-bottom, 0px)');
+} catch { /* viewport tuning must never block app startup */ }
+
 const native = {
   isNative: () => !!window.Capacitor?.isNativePlatform?.(),
   platform: () => window.Capacitor?.getPlatform?.() || 'web',
@@ -44,6 +77,7 @@ const native = {
   },
   push: {
     permissions: () => safe(() => PushNotifications.requestPermissions()),
+    channel: () => safe(() => PushNotifications.createChannel({ id: 'wybuild-builds', name: 'Build updates', description: 'Successful and failed WyBuild jobs', importance: 5, visibility: 1 })),
     register: async () => safe(async () => { const p = await PushNotifications.requestPermissions(); if (p.receive !== 'granted') throw new Error('Notification permission was not granted'); await PushNotifications.register(); return p; }),
     onToken: (callback) => PushNotifications.addListener('registration', callback),
     onNotification: (callback) => PushNotifications.addListener('pushNotificationReceived', callback),
@@ -105,8 +139,8 @@ const native = {
     const enable = (options = {}) => {
       disable();
       ensureStyle();
-      const threshold = Math.max(50, Number(options.threshold || 80));
-      const maxPull = Math.max(threshold + 20, Number(options.maxPull || 140));
+      const threshold = Math.max(64, Number(options.threshold || 92));
+      const maxPull = Math.max(threshold + 24, Number(options.maxPull || 156));
       const onRefresh = typeof options.onRefresh === 'function' ? options.onRefresh : () => location.reload();
       const bubble = document.createElement('div');
       bubble.setAttribute('aria-hidden', 'true');
@@ -126,11 +160,11 @@ const native = {
         const dx = t.clientX - start.x, dy = t.clientY - start.y;
         if (!pulling) {
           if (Math.abs(dx) > Math.abs(dy) || dy < -8) { start = null; return; }
-          if (dy < 8) return;
+          if (dy < 12) return;
           pulling = true; bubble.textContent = arrow; document.body.appendChild(bubble);
         }
         if (window.scrollY > 0) { reset(); hide(); return; }
-        const pull = Math.min(maxPull, Math.max(0, dy) * 0.55);
+        const pull = Math.min(maxPull, Math.max(0, dy) * 0.62);
         if (!armed && pull >= threshold) { armed = true; Haptics.impact({ style: ImpactStyle.Light }).catch(() => {}); }
         if (armed && pull < threshold) armed = false;
         bubble.style.opacity = String(Math.min(1, pull / threshold));

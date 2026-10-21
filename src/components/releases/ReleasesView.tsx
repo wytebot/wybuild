@@ -164,7 +164,9 @@ export const ReleasesView: React.FC = () => {
             <div className="grid sm:grid-cols-2 gap-3">
               <div>
                 <label className="text-xs text-slate-500 flex items-center gap-1"><Tag className="w-3 h-3" /> Tag</label>
-                <input className={input} value={tag} onChange={(e) => setTag(e.target.value)} placeholder="v1.0.0" />
+                <input list="wybuild-existing-tags" className={input} value={tag} onChange={(e) => setTag(e.target.value)} placeholder="v1.0.0" />
+                <datalist id="wybuild-existing-tags">{(prep.tagSuggestions || []).map((suggestion) => <option key={suggestion} value={suggestion} />)}</datalist>
+                {(prep.tagSuggestions || []).length > 0 && <p className="text-[11px] text-slate-500 mt-1">Suggestions from existing repository tags. Choose a new version tag to create a new release.</p>}
                 <p className="text-[11px] text-slate-500 mt-1">Created on commit {(prep.target?.sha || '').slice(0, 7) || 'unknown commit'} ({prep.target?.branch || 'unknown branch'}){prep.previousTag ? ` · previous release ${prep.previousTag}` : ''}</p>
               </div>
               <div>

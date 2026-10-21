@@ -68,3 +68,30 @@ WyBuild ships its own manifest, install icons, service worker and offline page. 
 The endpoint returns HTTP 503 until a real package ID and valid SHA-256 certificate fingerprint are configured; WyBuild never generates a placeholder fingerprint.
 
 The Capacitor workflow installs the Firebase JavaScript SDK required by the Firebase Authentication and Messaging bridge modules (workflow v34).
+
+## Credit pricing (v6)
+
+- Each successful Web-to-Android APK/AAB build costs **5 credits**. Credits are reserved before dispatch and refunded if dispatch fails or the build fails.
+- Package ID edits cost **2 credits**; version-name edits cost **2 credits**. These are charged when an existing saved project field is changed and blurred, not on every keystroke.
+- Paid native capabilities and gestures show a credit side-label in the UI. Costs are enforced by the server-side `POST /api/credits/action` endpoint; the browser cannot choose its own price. Duplicate operation IDs are idempotent.
+- One-time credit packs continue to be paid through server-verified Flutterwave v4. Never trust a client-side balance or a payment redirect alone.
+
+## Build completion notifications
+
+The Capacitor bridge includes native notification permission, token registration, receipt, and tap hooks. A root `google-services.json` is the **Android client configuration** used by the Android build; it is not a server credential and by itself does not enable remote build-completion delivery. To send notifications while WyBuild is closed, the deployment must also register each signed-in user's FCM device token with the backend and send an FCM message when the GitHub Actions run completes. Configure a Firebase service-account credential as a protected server environment variable (for example `FIREBASE_SERVICE_ACCOUNT_JSON`) or through the deployment's secret-file mechanism—never commit a service-account JSON file to the repository. The notification payload should include the repository and run ID; tapping it should deep-link to the build detail screen, where the user can open logs or artifacts. TWA mode cannot use the Capacitor native push plugin and needs a separately configured Web Push subscription/service worker.
+
+**Deployment note:** the project contains native client hooks, but remote build-completion push delivery still requires the server token-registration/send path and a GitHub Actions completion callback to be configured and verified in the target deployment. Do not treat `google-services.json` alone as proof that this works.
+
+## Build-completion push notifications
+
+The Vercel API now supports Firebase Cloud Messaging build notifications for authenticated Capacitor Android installs.
+
+1. Keep `FIREBASE_SERVICE_ACCOUNT_JSON` configured in Vercel (raw JSON or base64 JSON). This is server-only; never put the service-account key in the APK or frontend.
+2. Add `WYBUILD_PUSH_WEBHOOK_SECRET` in Vercel. Use a random secret of at least 32 characters.
+3. In GitHub, configure a repository webhook pointing to `https://wybuild-black.vercel.app/api/build-notify-webhook`, content type `application/json`, the exact same secret, and subscribe to **Workflow runs**. The endpoint verifies `X-Hub-Signature-256`, ignores non-WyBuild workflows, and deduplicates retried completion events.
+4. Build the Capacitor APK/AAB with the correct `google-services.json` at the source repository root and the Firebase Android app registered for the exact package ID. Enable Firebase Cloud Messaging in the Firebase project.
+5. Install the new build, sign into WyBuild, and grant Android notification permission. The app registers its FCM token to the signed-in WyBuild account. Opening Build History associates the repositories with that account for notification delivery.
+
+Successful notifications open the matching build and scroll to artifacts; failed notifications open the matching build and scroll to logs. Users must be signed in to view private build data. GitHub workflow webhooks are configured per repository; use the same webhook secret consistently. Do not use the Firebase service-account key as the GitHub webhook secret.
+
+**TWA limitation:** this FCM token registration path is for Capacitor/native Android. Pure Trusted Web Activity push requires browser Web Push subscriptions and VAPID public/private keys; the Firebase service account alone does not provide those. The webhook currently includes a Web Push link payload, but TWA Web Push subscription delivery is not configured by this code alone.

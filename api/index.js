@@ -1923,6 +1923,17 @@ async function inspectSite(rawUrl) {
   };
 }
 
+/* --------------------------- Firebase push ------------------------------- */
+const pushTokenKey = (login, token) => `wb:push:token:${String(login).toLowerCase()}:${crypto.createHash('sha256').update(String(token)).digest('hex')}`;
+const pushTokenIndex = (login) => `wb:push:token-index:${String(login).toLowerCase()}`;
+const pushRepoUsers = (repo) => `wb:push:repo-users:${String(repo).toLowerCase()}`;
+async function registerPushToken(login, token, platform = 'android') {
+  if (typeof token !== 'string' || token.length < 30 || token.length > 4096) throw new HttpError(400, 'Invalid Firebase registration token.', 'INVALID_PUSH_TOKEN');
+  const key = pushTokenKey(login, token);
+  await kv.set(key, { token, platform: String(platform).slice(0, 30), updatedAt: Date.now() });
+  await kv.sadd(pushTokenIndex(login), key);
+}
+
 /* --------------------------------- routes --------------------------------- */
 
 async function route(req, res, path, query) {
@@ -2254,8 +2265,85 @@ async function route(req, res, path, query) {
   /* everything below needs a session */
   const session = requireSession(req);
 
+  if (path === 'push/register' && post) {
+    const b = bodyOf(req);
+    await registerPushToken(session.login, b.token, b.platform || 'android');
+    // Register only repositories visible to this authenticated GitHub account.
+    const repos = Array.isArray(b.repos) ? b.repos.slice(0, 100) : [];
+    for (const rawRepo of repos) {
+      if (typeof rawRepo !== 'string' || !REPO_RE.test(rawRepo)) continue;
+      await kv.sadd(pushRepoUsers(rawRepo), session.login);
+    }
+    return send(res, 200, { ok: true });
+  }
+
+  if (path === 'push/unregister' && post) {
+    const b = bodyOf(req);
+    const token = String(b.token || '');
+    if (token) {
+      const key = pushTokenKey(session.login, token);
+      await kv.del(key).catch(() => {});
+      await kv.srem(pushTokenIndex(session.login), key).catch(() => {});
+    } else {
+      const keys = await kv.smembers(pushTokenIndex(session.login)).catch(() => []);
+      await Promise.all(keys.map((key) => kv.del(key).catch(() => {})));
+      await kv.del(pushTokenIndex(session.login)).catch(() => {});
+    }
+    return send(res, 200, { ok: true });
+  }
+
   if (path === 'credits/balance' && m === 'GET') {
     return send(res, 200, { wallet: await creditsFor(session.login), packs: CREDIT_PACKS, currency: 'USD', model: AI_MODEL(), freeForever: isLifetimeFree(session.login) });
+  }
+
+  if (path === 'credits/action' && post) {
+    const b = bodyOf(req);
+    const action = String(b.action || '');
+    const operationId = String(b.operationId || '');
+    const prices = {
+      package_id_edit: 2,
+      version_edit: 2,
+      fullscreen: 2,
+      'fullscreen-sticky': 2,
+      pulltorefresh: 2,
+      swipeback: 2,
+      predictive_back: 1,
+      vibration: 1,
+      biometric: 3,
+      reminders: 2,
+      push: 3,
+      googleauth: 3,
+      sharetarget: 1,
+      orientation: 1,
+      statusbar: 1,
+      native_downloads: 2,
+      native_camera: 2,
+      native_location: 2,
+    };
+    if (!Object.prototype.hasOwnProperty.call(prices, action)) throw new HttpError(400, 'Unknown paid action.', 'INVALID_CREDIT_ACTION');
+    if (!/^[a-zA-Z0-9_-]{12,100}$/.test(operationId)) throw new HttpError(400, 'A valid action operation ID is required.', 'INVALID_OPERATION_ID');
+    if (isLifetimeFree(session.login)) return send(res, 200, { ok: true, charged: 0, balance: FREE_FOREVER_BALANCE, freeForever: true });
+    const doneKey = `wb:credit-action:${session.login}:${operationId}`;
+    const previous = await kv.get(doneKey);
+    if (previous) return send(res, 200, { ok: true, charged: 0, balance: (await creditsFor(session.login)).balance, duplicate: true });
+    const claimKey = `${doneKey}:claim`;
+    const claimed = await kv.set(claimKey, '1', { nx: true, ex: 60 });
+    if (!claimed) {
+      const completed = await kv.get(doneKey);
+      if (completed) return send(res, 200, { ok: true, charged: 0, balance: (await creditsFor(session.login)).balance, duplicate: true });
+      throw new HttpError(409, 'This credit action is already being processed. Retry shortly.', 'CREDITS_BUSY');
+    }
+    const cost = prices[action];
+    try {
+      const balance = await creditsFor(session.login);
+      if (balance.balance < cost) throw new HttpError(402, `This action costs ${cost} credits; your balance is ${balance.balance}. Buy a one-time credit pack to continue.`, 'INSUFFICIENT_CREDITS', { details: { balance: balance.balance, required: cost, action } });
+      const updated = await debitCredits(session.login, cost, 'paid_native_action', { action, operationId });
+      await kv.set(doneKey, { action, cost, at: new Date().toISOString() }, { ex: 60 * 60 * 24 * 365 });
+      return send(res, 200, { ok: true, charged: cost, balance: updated });
+    } catch (e) {
+      await kv.del(claimKey).catch(() => {});
+      throw e;
+    }
   }
 
   if (path === 'ai/diagnose' && post) {
@@ -2625,6 +2713,7 @@ async function route(req, res, path, query) {
   if (path === 'twa-build' && post) {
     const b = bodyOf(req);
     const repo = checkRepo(b.repo);
+    await kv.sadd(pushRepoUsers(repo), session.login).catch(() => {});
     const branch = String(b.branch || '').slice(0, 200);
     if (!branch) throw new HttpError(400, 'Branch is required');
     const output = ['apk', 'aab', 'both'].includes(b.output) ? b.output : 'both';
@@ -2642,7 +2731,7 @@ async function route(req, res, path, query) {
     }
     const signMode = await prepareSigning(session, repo); // Sync WyBuild's environment signing secrets before every build
 
-    const BUILD_CREDITS = 3;
+    const BUILD_CREDITS = 5; // successful Web-to-Android builds cost five credits; failed/dispatch-failed builds are refunded
     // Reserve credits before dispatch so concurrent builds cannot spend the same balance.
     await debitCredits(session.login, BUILD_CREDITS, 'build_reserved', { repo, branch, output });
     let reservation;
@@ -2698,6 +2787,7 @@ async function route(req, res, path, query) {
 
   if (path === 'runs' && m === 'GET') {
     const repos = String(query.repos || '').split(',').filter(Boolean).slice(0, 10).map(checkRepo);
+    await Promise.all(repos.map((repo) => kv.sadd(pushRepoUsers(repo), session.login).catch(() => {})));
     const results = await Promise.all(repos.map(async (repo) => {
       try {
         return (await listRuns(session, repo)).map((r) => mapRun(r, repo));
@@ -2742,6 +2832,18 @@ async function route(req, res, path, query) {
     const existing = await releaseExistsForTag(session, repo, tag);
     const tagTaken = !!existing || (await tagExists(session, repo, tag));
     if (tagTaken && parsed.versionCode) tag = `${tag}-${parsed.versionCode}`;
+    // Suggestions come from the repository's real Git refs and releases, so users can
+    // avoid accidentally reusing an existing tag. Keep this bounded and best-effort.
+    let tagSuggestions = [];
+    try {
+      const refs = await gh(session, `/repos/${repo}/git/matching-refs/tags/`);
+      if (refs.ok) {
+        const rows = await refs.json();
+        tagSuggestions = (Array.isArray(rows) ? rows : [])
+          .map((r) => String(r?.ref || '').replace(/^refs\/tags\//, ''))
+          .filter(Boolean).slice(-40).reverse();
+      }
+    } catch { /* suggestions are optional; release preparation must still work */ }
     const info = await ghJson(session, `/repos/${repo}`, undefined, `reading ${repo}`);
     const latest = await gh(session, `/repos/${repo}/releases/latest`);
     const previousTag = latest.ok ? (await latest.json()).tag_name : undefined;
@@ -2756,7 +2858,7 @@ async function route(req, res, path, query) {
     notes = `${notes}\n\n## Downloads\n\n${table}${howTo}\n\n_Built with WyBuild._`;
     return send(res, 200, {
       files, packageId: parsed.packageId || '', versionName, versionCode: parsed.versionCode || '',
-      tag, name: title, notes, notesSource, previousTag,
+      tag, name: title, notes, notesSource, previousTag, tagSuggestions,
       target: { sha, branch: meta.workflow_run?.head_branch || info.default_branch },
       tagExists: tagTaken, releaseExists: !!existing, existingReleaseUrl: existing?.html_url,
       canPush: info.permissions ? !!info.permissions.push : true,
