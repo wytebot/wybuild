@@ -157,3 +157,10 @@ Both return `{ remove() }`, and `WyBuildNative.pullToRefresh.disable()` / `WyBui
 WyBuild applies a shared scroll-quality layer to generated builds: smooth programmatic/page scrolling, touch-friendly momentum scrolling, bounded horizontal overscroll, thin scrollbars for intentional scroll rails, and reduced-motion accessibility support. It does not cancel `touchmove`, hijack swipe gestures, or force every element into a scroll container. Apps can mark intentional horizontal/vertical containers with `data-scroll-x` / `data-scroll-y` or `.wy-scroll-x` / `.wy-scroll-y`.
 
 The layer is bundled into Capacitor web assets and injected by WyBuild's URL-based standalone Android WebView shell. A **pure Trusted Web Activity (TWA)** is rendered by Chrome against the website's own origin and does not permit the Android wrapper to inject arbitrary CSS/JavaScript into that remote page. For pure TWA mode, the hosted website must provide its own scroll CSS; choose WyBuild's standalone native shell when wrapper-level injection is required. Both modes still use the same Android build/signing pipeline for the requested APK/AAB outputs.
+
+
+## v8 — Fullscreen viewport and scrollable drawer correction
+- The navigation drawer now has a constrained height and an independently scrollable navigation list, so lower menu items remain reachable on small/tall or landscape screens.
+- The app shell uses a viewport height measured from `visualViewport` when available, updating on resize, orientation change, and resume. This avoids stale `100vh`/`100dvh` sizing in some Android WebViews.
+- The app shell and drawer respect CSS safe-area insets on devices that expose them, reducing clipping near display cutouts and system gesture areas.
+- Android device verification is still required because immersive mode and inset reporting vary by Android/WebView version.

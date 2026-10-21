@@ -43,6 +43,21 @@ try {
   new MutationObserver(installScrollQuality).observe(document.documentElement, { childList: true, subtree: true });
 } catch { /* scroll enhancements must never block native bridge startup */ }
 
+// Track the real visible WebView height. Android immersive/fullscreen can report a stale 100vh
+// on some WebView versions; visualViewport follows the usable viewport during system-bar changes.
+try {
+  const updateWyBuildViewport = () => {
+    const vv = window.visualViewport;
+    const height = Math.round((vv && vv.height) || window.innerHeight || document.documentElement.clientHeight || 0);
+    if (height > 0) document.documentElement.style.setProperty('--wybuild-viewport-height', `${height}px`);
+  };
+  updateWyBuildViewport();
+  window.addEventListener('resize', updateWyBuildViewport, { passive: true });
+  window.addEventListener('orientationchange', () => setTimeout(updateWyBuildViewport, 120), { passive: true });
+  window.visualViewport?.addEventListener('resize', updateWyBuildViewport, { passive: true });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) updateWyBuildViewport(); }, { passive: true });
+} catch { /* viewport tracking must never block native startup */ }
+
 // Native edge-to-edge/fullscreen layouts need a viewport that includes display cutouts.
 // Preserve existing viewport settings and only add viewport-fit=cover when missing.
 try {

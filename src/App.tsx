@@ -134,7 +134,7 @@ const MainLayout: React.FC = () => {
   }, []);
 
   return (
-    <div className="flex h-dvh bg-[#030505] text-slate-100 overflow-hidden font-sans selection:bg-emerald-400/20 selection:text-emerald-200">
+    <div className="wybuild-app-shell flex bg-[#030505] text-slate-100 overflow-hidden font-sans selection:bg-emerald-400/20 selection:text-emerald-200">
       {/* Sidebar */}
       <Sidebar open={navOpen} onClose={() => setNavOpen(false)} />
 
@@ -147,7 +147,7 @@ const MainLayout: React.FC = () => {
           menuOpen={navOpen}
         />
 
-        <main className="flex-1 overflow-y-auto overflow-x-hidden min-w-0">
+        <main className="wybuild-main flex-1 overflow-y-auto overflow-x-hidden min-w-0">
           {currentTab === 'projects' && <ProjectsView onOpenNewProject={() => setShowNewProjectModal(true)} />}
           {currentTab === 'twa' && <TwaView />}
           {currentTab === 'builds' && <BuildsView />}
