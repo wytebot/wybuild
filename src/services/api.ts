@@ -37,7 +37,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     if (data === null) {
       // the response was not our JSON error: a platform page (Vercel 404/500/timeout) rather than the app
       const platform = res.status === 404 ? 'The API route does not exist on this deployment (the serverless function was not deployed or vercel.json rewrites are missing).'
-        : res.status === 504 || res.status === 408 ? 'The server function timed out.'
+        : (res.status === 504 || res.status === 408) && path.split('?')[0] === 'twa-build'
+          ? 'WyBuild took too long to confirm the build request. Open Builds and refresh before retrying: GitHub may already have accepted the run. If no run appears after a minute, retry. If credits were reserved, refresh your balance; dispatch/setup failures are refunded automatically when the server can complete cleanup.'
+        : res.status === 504 || res.status === 408 ? 'The server function timed out. Retry shortly; if this action may have completed, check its status before submitting it again.'
         : res.status >= 500 ? 'The server function crashed before it could respond; check the Vercel function logs.' : '';
       throw new ApiError(`${where} returned HTTP ${res.status} ${res.statusText} with a non-JSON body.`, res.status, 'NON_JSON_RESPONSE', platform || undefined);
     }

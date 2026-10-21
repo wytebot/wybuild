@@ -13,10 +13,14 @@ export const TerminalViewer: React.FC<TerminalViewerProps> = ({ logs, isRunning,
   const [copied, setCopied] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
   const terminalEndRef = useRef<HTMLDivElement>(null);
+  const terminalScrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (autoScroll && terminalEndRef.current) {
-      terminalEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    // Scroll only this terminal viewport. scrollIntoView() may scroll ancestors too,
+    // which can interfere with the app-level scroll in Android WebView.
+    const viewport = terminalScrollRef.current;
+    if (autoScroll && viewport) {
+      viewport.scrollTo({ top: viewport.scrollHeight, behavior: 'auto' });
     }
   }, [logs, autoScroll]);
 
@@ -77,7 +81,7 @@ export const TerminalViewer: React.FC<TerminalViewerProps> = ({ logs, isRunning,
           )}
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 min-w-0">
           {/* Search */}
           <div className="relative">
             <Search className="w-3 h-3 text-slate-500 absolute left-2 top-1/2 -translate-y-1/2" />
@@ -91,7 +95,7 @@ export const TerminalViewer: React.FC<TerminalViewerProps> = ({ logs, isRunning,
           </div>
 
           {/* Level Filter */}
-          <div className="flex items-center gap-1 text-[11px] bg-slate-950 border border-slate-800 rounded p-0.5">
+          <div className="flex items-center gap-1 text-[11px] bg-slate-950 border border-slate-800 rounded p-0.5 shrink-0 whitespace-nowrap">
             <button
               onClick={() => setFilter('all')}
               className={`px-2 py-0.5 rounded cursor-pointer ${filter === 'all' ? 'bg-slate-800 text-white' : 'text-slate-400'}`}
@@ -142,7 +146,7 @@ export const TerminalViewer: React.FC<TerminalViewerProps> = ({ logs, isRunning,
       </div>
 
       {/* Terminal Output */}
-      <div className="flex-1 p-4 overflow-y-auto space-y-1 font-mono text-[11px] leading-relaxed text-slate-300 select-text">
+      <div ref={terminalScrollRef} className="min-h-0 flex-1 p-4 overflow-y-auto overflow-x-hidden overscroll-contain space-y-1 font-mono text-[11px] leading-relaxed text-slate-300 select-text" style={{ WebkitOverflowScrolling: "touch", touchAction: "pan-y" }}>
         {filteredLogs.length === 0 ? (
           <div className="text-slate-600 italic py-8 text-center">No log output for current filter</div>
         ) : (

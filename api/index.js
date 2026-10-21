@@ -96,18 +96,17 @@ async function tagExists(session, repo, tag) {
 // and the Builds page and Web to Android page must agree on what "up to date" means.
 async function twaStaleFiles(session, repo, branch, req) {
   const norm = (t) => String(t).replace(/\r\n/g, '\n').trim();
-  const stale = [];
-  await Promise.all(WORKFLOW_KINDS.twa.files.map(async ([repoPath, localPath]) => {
+  const results = await Promise.all(WORKFLOW_KINDS.twa.files.map(async ([repoPath, localPath]) => {
     let want = fs.readFileSync(new URL(`../workflow/${localPath}`, import.meta.url), 'utf8');
     if (repoPath === TWA_WORKFLOW_PATH) want = want.replaceAll('__WYBUILD_APP_URL__', appUrl(req));
     const r = await gh(session, `/repos/${repo}/contents/${repoPath}?ref=${encodeURIComponent(branch)}`);
-    if (r.status === 404) { stale.push(repoPath); return; }
-    if (!r.ok) { await ghJson(session, `/repos/${repo}/contents/${repoPath}?ref=${encodeURIComponent(branch)}`, undefined, `checking ${repoPath}`); return; }
+    if (r.status === 404) return repoPath;
+    if (!r.ok) await ghJson(session, `/repos/${repo}/contents/${repoPath}?ref=${encodeURIComponent(branch)}`, undefined, `checking ${repoPath}`);
     const f = await r.json();
     const have = Buffer.from(f.content || '', 'base64').toString('utf8');
-    if (norm(have) !== norm(want)) stale.push(repoPath);
+    return norm(have) !== norm(want) ? repoPath : null;
   }));
-  return stale;
+  return results.filter(Boolean);
 }
 
 const SESSION_COOKIE = 'wb_session';
@@ -1465,15 +1464,13 @@ async function installDefaultKeystore(session, repo, st) {
 // (re-copied when the Vercel key is rotated, but only for repos where WyBuild installed the default).
 async function ensureSigning(session, repo) {
   const st = defaultKeystoreState();
-  const names = await repoSecretNames(session, repo);
-  const marker = await defaultMarker(repo);
+  const [names, marker] = await Promise.all([repoSecretNames(session, repo), defaultMarker(repo)]);
 
-  // WyBuild's configured default key is authoritative when present. Refresh all four
-  // repository Actions secrets before EVERY build so new repos and existing repos receive
-  // key rotations automatically. GitHub encrypts secrets in transit; values never go to the
-  // browser or get committed to repository files. This intentionally replaces repo-level
-  // WB_KEYSTORE_* values while the WyBuild default key is configured.
+  // The marker is an HMAC of the configured default key. If it still matches and all
+  // required secrets exist, avoid five redundant GitHub API calls on every build. A key
+  // rotation changes the fingerprint and triggers a full refresh automatically.
   if (st.state === 'ok') {
+    if (marker === st.fingerprint && names && SECRET_NAMES.every((name) => names.has(name))) return 'default';
     await installDefaultKeystore(session, repo, st);
     return 'default';
   }
@@ -1719,9 +1716,8 @@ async function validateNativeFeatureWorkflow(session, repo, branch, twa) {
   if (!sourceInfo.sourceBuildCandidate) throw new HttpError(400, `These features require a confidently detectable static web source build (${capOnly.join(', ')}). WyBuild cannot confirm one for this repository (${sourceInfo.reason}). Add wybuild:build / build:capacitor-web / build:static that outputs index.html, or use a supported static builder and deselect the incompatible features.`, 'FEATURE_WORKFLOW_INCOMPATIBLE', { details: { incompatibleFeatures: capOnly, reason: sourceInfo.reason } });
   if (capOnly.some((f) => ['googleauth', 'push'].includes(f))) {
     const candidates = ['google-services.json', 'config/android/google-services.json', 'android/app/google-services.json'];
-    let hasFirebaseConfig = false;
-    for (const file of candidates) { const check = await gh(session, `/repos/${repo}/contents/${file}?ref=${encodeURIComponent(branch)}`); if (check.ok) { hasFirebaseConfig = true; break; } }
-    if (!hasFirebaseConfig) throw new HttpError(400, `Native ${capOnly.filter((f) => ['googleauth','push'].includes(f)).join(' / ')} requires google-services.json for the exact Android package ID. Add the Firebase Android configuration to the repository at a supported path before building.`, 'FEATURE_CONFIGURATION_MISSING', { details: { incompatibleFeatures: capOnly.filter((f) => ['googleauth','push'].includes(f)), reason: 'missing_firebase_config' } });
+    const checks = await Promise.all(candidates.map((file) => gh(session, `/repos/${repo}/contents/${file}?ref=${encodeURIComponent(branch)}`)));
+    if (!checks.some((check) => check.ok)) throw new HttpError(400, `Native ${capOnly.filter((f) => ['googleauth','push'].includes(f)).join(' / ')} requires google-services.json for the exact Android package ID. Add the Firebase Android configuration to the repository at a supported path before building.`, 'FEATURE_CONFIGURATION_MISSING', { details: { incompatibleFeatures: capOnly.filter((f) => ['googleauth','push'].includes(f)), reason: 'missing_firebase_config' } });
   }
 }
 const PERM_RE = /^[A-Za-z][A-Za-z0-9_.]*$/;
@@ -2892,19 +2888,19 @@ async function route(req, res, path, query) {
     if (!branch) throw new HttpError(400, 'Branch is required');
     const output = ['apk', 'aab', 'both'].includes(b.output) ? b.output : 'both';
     const twa = cleanTwaConfig(b.twa);
-    await validateNativeFeatureWorkflow(session, repo, branch, twa);
     const useKeystore = b.useKeystore !== false;
     const storeReady = b.storeReady !== false;
     if (storeReady && !useKeystore) throw new HttpError(400, 'Store-ready builds must be signed with your own release keystore');
 
-    const wf = await gh(session, `/repos/${repo}/contents/${TWA_WORKFLOW_PATH}?ref=${encodeURIComponent(branch)}`);
-    if (wf.status === 404) throw new HttpError(409, `The WyBuild TWA workflow (${TWA_WORKFLOW_PATH}) is not on branch "${branch}" of ${repo}.`, 'NO_WORKFLOW', { hint: 'Open Web to Android, pick this repo and use Update workflow to install it.' });
-    {
-      // Same freshness test the Web to Android page uses: every WyBuild file must match this deployment
-      const stale = await twaStaleFiles(session, repo, branch, req);
-      if (stale.length) throw new HttpError(409, `The WyBuild TWA workflow in ${repo} is outdated (${stale.map((x) => x.split('/').pop()).join(', ')} differ from v${TWA_WORKFLOW_VERSION}).`, 'WORKFLOW_OUTDATED', { hint: 'WyBuild reinstalls it automatically; if you see this, press Build again.', details: { stale } });
-    }
-    const signMode = await prepareSigning(session, repo); // Sync WyBuild's environment signing secrets before every build
+    // Validate independent GitHub reads concurrently to keep this serverless request short.
+    // twaStaleFiles also verifies the workflow file, so do not fetch that file a second time.
+    const [, stale] = await Promise.all([
+      validateNativeFeatureWorkflow(session, repo, branch, twa),
+      twaStaleFiles(session, repo, branch, req),
+    ]);
+    if (stale.includes(TWA_WORKFLOW_PATH)) throw new HttpError(409, `The WyBuild TWA workflow (${TWA_WORKFLOW_PATH}) is missing or outdated on branch "${branch}" of ${repo}.`, 'NO_WORKFLOW', { hint: 'Open Web to Android, pick this repo and use Update workflow to install the current workflow.' });
+    if (stale.length) throw new HttpError(409, `The WyBuild TWA workflow in ${repo} is outdated (${stale.map((x) => x.split('/').pop()).join(', ')} differ from v${TWA_WORKFLOW_VERSION}).`, 'WORKFLOW_OUTDATED', { hint: 'Update workflow for this branch, then retry the build.', details: { stale } });
+    const signMode = await prepareSigning(session, repo); // Ensure the signing secrets are ready before dispatch
 
     const BUILD_CREDITS = 5; // successful Web-to-Android builds cost five credits; failed/dispatch-failed builds are refunded
     // Reserve credits before dispatch so concurrent builds cannot spend the same balance.
