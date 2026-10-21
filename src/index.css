@@ -1,0 +1,191 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+
+  code, pre, kbd, samp, .font-mono {
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-feature-settings: "tnum" 1;
+  }
+}
+
+/* Custom scrollbars for high-density build terminal logs */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.6);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.4);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.6);
+}
+
+/* ---- Mobile-first safeguards ---- */
+@layer base {
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; }
+  body { overflow-wrap: anywhere; overscroll-behavior-y: none; }
+  /* 16px inputs on phones stop iOS/Android from zooming the page on focus */
+  @media (max-width: 639px) {
+    input, select, textarea { font-size: 16px !important; }
+  }
+  /* long code/log lines wrap instead of forcing sideways scroll of the whole page */
+  pre { white-space: pre-wrap; word-break: break-word; }
+  button, a, [role="button"] { touch-action: manipulation; }
+}
+
+:root { color-scheme: dark; }
+body { background:#030505; }
+/* calm neon-black palette: low luminance, restrained green accents */
+
+
+/* Branded saved-account picker (intentionally not a native browser select). */
+.wy-account-chooser{position:relative;text-align:left;padding:14px;border:1px solid rgba(148,163,184,.19);border-radius:15px;background:linear-gradient(145deg,rgba(52,211,153,.055),transparent 55%),rgba(15,23,42,.72);box-shadow:0 10px 28px rgba(0,0,0,.18)}
+.wy-account-eyebrow{margin:0 0 9px;color:#94a3b8;font-size:10px;font-weight:800;letter-spacing:.12em}
+.wy-account-trigger{display:flex;align-items:center;gap:11px;width:100%;min-height:62px;padding:10px 12px;border:1px solid rgba(148,163,184,.26);border-radius:11px;background:#080d14;color:#f8fafc;text-align:left;cursor:pointer;transition:border-color .16s,background .16s}
+.wy-account-trigger:hover,.wy-account-trigger:focus-visible{border-color:#34d399;background:#0c1718;outline:none}
+.wy-account-avatar{display:grid;place-items:center;flex:0 0 38px;width:38px;height:38px;overflow:hidden;border:1px solid rgba(148,163,184,.25);border-radius:50%;background:linear-gradient(135deg,#164e43,#172b34);color:#a7f3d0}
+.wy-account-avatar img{display:block;width:100%;height:100%;object-fit:cover}
+.wy-account-copy{display:flex;flex:1;min-width:0;flex-direction:column;gap:3px}
+.wy-account-copy strong{overflow:hidden;color:#f1f5f9;font-size:13px;font-weight:700;text-overflow:ellipsis;white-space:nowrap}
+.wy-account-copy small{overflow:hidden;color:#94a3b8;font-size:12px;text-overflow:ellipsis;white-space:nowrap}
+.wy-account-chevron{flex:0 0 auto;color:#94a3b8;transition:transform .16s}.wy-account-chevron.is-open{transform:rotate(180deg)}
+.wy-account-menu{display:grid;gap:4px;max-height:260px;overflow:auto;margin-top:7px;padding:5px;border:1px solid rgba(148,163,184,.24);border-radius:12px;background:#070b11;box-shadow:0 16px 36px rgba(0,0,0,.48);animation:wyAccountIn .13s ease-out}
+.wy-account-option{display:flex;align-items:center;gap:10px;width:100%;padding:9px;border:1px solid transparent;border-radius:9px;background:transparent;color:#f8fafc;text-align:left;cursor:pointer}
+.wy-account-option:hover,.wy-account-option:focus-visible{border-color:rgba(52,211,153,.22);background:rgba(52,211,153,.08);outline:none}
+.wy-account-option.is-selected{border-color:rgba(52,211,153,.3);background:rgba(52,211,153,.1)}
+.wy-account-option .wy-account-avatar{width:34px;height:34px;flex-basis:34px}.wy-account-check{flex:0 0 auto;color:#34d399}
+.wy-account-continue{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;min-height:42px;margin-top:10px;padding:10px 14px;border:1px solid transparent;border-radius:9px;background:#059669;color:white;font-size:13px;font-weight:750;text-decoration:none;transition:background .15s,opacity .15s}
+.wy-account-continue:hover{background:#10b981}.wy-account-continue.is-disabled{opacity:.48;cursor:not-allowed}
+@keyframes wyAccountIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
+@media(prefers-reduced-motion:reduce){.wy-account-menu{animation:none}.wy-account-chevron{transition:none}}
+
+
+/* WyBuild scroll quality layer: native-feeling vertical and horizontal scrolling. */
+html {
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  scrollbar-gutter: stable;
+}
+body {
+  min-height: 100%;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
+/* Make intentional scroll containers smooth on touch devices without stealing gestures. */
+:where(*, *::before, *::after) { -webkit-tap-highlight-color: transparent; }
+:where([class*="overflow-x-auto"], [class*="overflow-x-scroll"], [data-scroll-x], .wy-scroll-x) {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  touch-action: pan-x pan-y;
+}
+:where([class*="overflow-y-auto"], [class*="overflow-y-scroll"], [data-scroll-y], .wy-scroll-y) {
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  touch-action: pan-y;
+}
+/* Keep code and data tables horizontally reachable on narrow screens. */
+pre, .wy-scroll-x, [data-scroll-x] { max-width: 100%; }
+table { max-width: 100%; }
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { scroll-behavior: auto !important; }
+}
+
+
+/* Android immersive/fullscreen viewport and drawer clipping fixes.
+   Keep the app inside the actually visible WebView area and let the menu itself scroll. */
+html, body, #root { width: 100%; min-width: 0; min-height: 100%; }
+html { height: 100%; }
+body { height: 100%; margin: 0; overflow: hidden; }
+#root { height: 100%; }
+.wybuild-app-shell {
+  height: var(--wybuild-viewport-height, 100dvh);
+  min-height: 0;
+  box-sizing: border-box;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+.wybuild-app-shell > *, .wybuild-main { min-height: 0; }
+.wybuild-main { overscroll-behavior-y: contain; -webkit-overflow-scrolling: touch; }
+.wybuild-sidebar {
+  height: var(--wybuild-viewport-height, 100dvh);
+  max-height: var(--wybuild-viewport-height, 100dvh);
+  box-sizing: border-box;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+}
+.wybuild-sidebar-nav {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+  scrollbar-width: thin;
+  padding-bottom: max(12px, env(safe-area-inset-bottom, 0px));
+}
+.wybuild-sidebar-footer { padding-bottom: max(4px, env(safe-area-inset-bottom, 0px)); }
+@media (max-height: 560px) {
+  .wybuild-sidebar-header { height: 52px; min-height: 52px; }
+  .wybuild-sidebar-nav { padding-top: 8px; padding-bottom: 8px; }
+  .wybuild-sidebar-nav button { min-height: 40px; }
+}
+
+
+/* Reliable app-level scrolling in Android System WebView, Capacitor and mobile browsers.
+   Keep the app shell fixed, but give the main content an explicit flex scroll viewport. */
+.wybuild-app-shell {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.wybuild-app-shell > .flex-1,
+.wybuild-app-shell > div.flex-1 {
+  min-width: 0;
+  min-height: 0;
+}
+.wybuild-main {
+  display: block;
+  flex: 1 1 0%;
+  height: 0;
+  min-height: 0;
+  max-height: 100%;
+  overflow-y: auto !important;
+  overflow-x: hidden;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+  scrollbar-width: thin;
+}
+.wybuild-main > div {
+  min-width: 0;
+  min-height: min-content;
+}
+.wybuild-main :where(pre, code, table, img, video, canvas) {
+  max-width: 100%;
+}
+@media (max-width: 1023px) {
+  .wybuild-main {
+    padding-bottom: max(12px, env(safe-area-inset-bottom, 0px));
+  }
+}
