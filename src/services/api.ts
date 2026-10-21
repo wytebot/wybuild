@@ -86,6 +86,7 @@ export interface RepoInspection {
   canPush?: boolean;
   private?: boolean;
   latestCommitSha?: string;
+  nativeBuild?: { hasPackageJson: boolean; hasBuildScript: boolean; buildScript: string; capacitorDeclared: boolean; capacitorMajor: number; firebaseConfigFound: boolean; sourceBuildCandidate: boolean; sourceBuildReason?: string };
 }
 
 export interface UsageInfo {
@@ -116,11 +117,11 @@ export interface ReleaseResult { ok: true; url: string; draft: boolean; tag: str
 
 export const api = {
   me: () => request<{ user: AuthUser; subscription: SubscriptionInfo | null; usage: UsageInfo; lifetimeFree?: boolean; pricing?: Record<BillingCycle, number>; pricingNgn?: Record<BillingCycle, number>; defaultKeystore?: boolean; defaultKeystoreProblem?: string }>('me'),
-  creditsBalance: () => request<{ wallet: { balance: number; updatedAt?: string | null }; packs: Record<string, { credits: number; amount: number; currency: string; ngn: number }>; currency: string; model: string; freeForever?: boolean }>('credits/balance'),
+  creditsBalance: () => request<{ wallet: { balance: number; updatedAt?: string | null }; packs: Record<string, { credits: number; amount: number; currency: string; ngn: number }>; currency: string; engine: string; freeForever?: boolean }>('credits/balance'),
   chargeAction: (action: string, operationId: string) => post<{ ok: true; charged: number; balance: number; freeForever?: boolean }>('credits/action', { action, operationId }),
-  aiDiagnose: (body: { repo: string; runId: string | number }) => post<{ diagnosis: { title: string; category: string; summary: string; rootCause: string; suggestions: string[]; canAutoFix: boolean; filesToInspect?: string[]; manualSteps?: string[] }; model: string; creditsCharged: number; creditsRemaining: number; usage?: { inputTokens: number; outputTokens: number } }>('ai/diagnose', body),
-  aiFix: (body: { repo: string; runId: string | number; branch: string }) => post<{ applied: boolean; summary: string; fixes: { path: string; reason: string; commit: string }[]; settingsChanges: { key: string; value: string; where: string }[]; manualSteps: string[]; creditsCharged: number; creditsRemaining: number; model: string }>('ai/fix', body),
-  aiIntegrateApi: (body: { repo: string; branch: string; integrationId: string; goal?: string }) => post<{ applied: boolean; integration: string; summary: string; fixes: { path: string; reason: string; commit: string }[]; manualSteps: string[]; requiresSecrets: boolean; detectedCapabilities?: string[]; verificationChecks?: string[]; status?: string; actualCostUsd?: number; model: string; creditsCharged: number; creditsRemaining: number; usage?: { inputTokens: number; outputTokens: number }; buildVerified?: boolean; verificationMessage?: string }>('ai/integrate-api', body),
+  automationDiagnose: (body: { repo: string; runId: string | number }) => post<{ diagnosis: { title: string; category: string; summary: string; rootCause: string; suggestions: string[]; canAutoFix: boolean; filesToInspect?: string[]; manualSteps?: string[] }; engine: string; creditsCharged: number; creditsRemaining: number; usage?: { inputTokens: number; outputTokens: number } }>('automation/diagnose', body),
+  automationFix: (body: { repo: string; runId: string | number; branch: string }) => post<{ applied: boolean; summary: string; fixes: { path: string; reason: string; commit: string }[]; settingsChanges: { key: string; value: string; where: string }[]; manualSteps: string[]; creditsCharged: number; creditsRemaining: number; engine: string }>('automation/fix', body),
+  automationIntegrateApi: (body: { repo: string; branch: string; integrationId: string; goal?: string; shell?: 'twa' | 'standalone' }) => post<{ applied: boolean; integration: string; summary: string; fixes: { path: string; reason: string; commit: string }[]; manualSteps: string[]; requiresSecrets: boolean; detectedCapabilities?: string[]; verificationChecks?: string[]; status?: string; actualCostUsd?: number; engine: string; creditsCharged: number; creditsRemaining: number; usage?: { inputTokens: number; outputTokens: number }; buildVerified?: boolean; verificationMessage?: string }>('automation/integrate-api', body),
   logout: () => post<{ ok: true }>('auth/logout', {}),
   loginWithToken: (token: string) => post<{ ok: true; login: string; tokenType: 'classic' | 'fine-grained' }>('auth/token', { token }),
   repos: () => request<{ repos: RepoInfo[] }>('repos').then((r) => r.repos),

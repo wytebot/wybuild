@@ -186,12 +186,24 @@ The feature picker also includes opt-in selections for the existing bridge APIs:
 
 ## WyBuild AI API & Feature Integrator
 
-The Web → Android page includes an AI API & feature integrator for REST API clients, Firebase Authentication, analytics, safe payment-client wiring, push notifications, camera/photo picking, native sharing, file uploads, geolocation, offline caching, and local notifications. It reads a limited set of existing app source files from the authenticated GitHub repository and asks the configured Gemini model to prepare targeted changes.
+The Web → Android page includes a deterministic WyBuild integration engine for REST API clients, Firebase Authentication, analytics, safe payment-client wiring, push notifications, camera/photo picking, native sharing, file uploads, geolocation, offline caching, and local notifications. It inspects the authenticated GitHub repository and installs predefined, version-aware integration helper modules and compatible Capacitor dependencies without calling an AI provider.
 
-- Endpoint: `POST /api/ai/integrate-api` (authenticated WyBuild session required).
+- Endpoint: `POST /api/automation/integrate-api` (authenticated WyBuild session required).
 - Inputs: `repo`, `branch`, `integrationId`, and optional `goal`. `integrationId` must be in the server-side allowlist.
-- Pricing: minimum 8 credits, then additional credits when estimated Gemini token usage requires it. WyBuild Free Forever accounts are exempt. Failed automation is refunded.
+- Pricing: 8 credits per integration operation. WyBuild Free Forever accounts are exempt. Failed uncommitted operations are refunded where the outcome is certain.
 - Scope: modifies up to three existing source files only; it does not create credentials, expose secret keys, change dependency manifests/lockfiles, or edit Android signing/workflow files. Changes are committed to the selected branch and should be reviewed before rebuilding.
 - Provider keys, Firebase configuration, payment verification, remote push delivery, and backend services may still require manual setup. The assistant must return manual steps instead of fabricating configuration.
 
-This is AI-assisted source integration, not a guarantee that every generated change compiles or that an external API is configured. Run a build and test the resulting APK before release.
+This is deterministic helper installation, not a guarantee that the helper is wired into the app UI, that every change compiles, or that an external API is configured. Run a build and test the resulting APK before release.
+
+## Workflow compatibility preflight (v14)
+
+WyBuild now evaluates native feature compatibility against the selected shell and repository inspection before enabling an option:
+
+- **Trusted Web Activity (TWA):** native bridge features are incompatible and shown in red. The backend rejects any selected native bridge feature before reserving build credits.
+- **Standard / standalone URL shell:** supports the URL-shell bridge plus the `biometric`, `sharetarget`, and `reminders` opt-ins.
+- **Capacitor source build:** Capacitor-only selections require a repository `package.json` and a supported static build script (`wybuild:build`, `build:capacitor-web`, `build:static`, or `build`). The workflow verifies that the script actually emits a usable `index.html`; if it falls back to the URL shell, it stops rather than silently omitting selected features.
+- **Native Google sign-in and remote push:** require Firebase Android configuration for the exact package ID. Missing configuration is marked incompatible before dispatch when WyBuild can inspect the repository.
+- **Integrations:** native Capacitor integrations are marked red for TWA or repositories without a source-build candidate. The backend repeats the compatibility checks; UI state is not treated as a security or build guarantee.
+
+Green **source-build candidate** means the repository has a supported build script; it is not a claim that the build output has already been tested. A real build is still required to verify that the script emits static web assets and that the native feature runs on a device.

@@ -204,7 +204,7 @@ export const CreditsCheckoutModal: React.FC<Props> = ({ isOpen, initialPack, onC
       <div className="w-full max-w-lg rounded-t-2xl sm:rounded-2xl bg-slate-950 border border-slate-800 shadow-2xl max-h-[92dvh] overflow-y-auto overscroll-contain">
         <div className="flex items-center justify-between px-6 py-5 border-b border-slate-800">
           <div>
-            <h2 className="text-lg font-bold text-white">Buy WyBuild AI Credits</h2>
+            <h2 className="text-lg font-bold text-white">Buy WyBuild Automation Credits</h2>
             <p className="text-xs text-slate-400 mt-1">One-time payment · no subscription or automatic renewal</p>
           </div>
           <button onClick={onClose} className="p-2 rounded-lg hover:bg-slate-900 text-slate-400" aria-label="Close">

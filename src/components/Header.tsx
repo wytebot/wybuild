@@ -14,7 +14,7 @@ const PAGES = [
   ['tools', 'Free tools', 'free developer tools'],
   ['team', 'Team', 'team members access'],
   ['settings', 'Keystore', 'release signing keystore'],
-  ['billing', 'AI Credits', 'one-time credit wallet Gemini build repair'],
+  ['billing', 'Automation Credits', 'one-time credit wallet for WyBuild automation'],
   ['howitworks', 'How it works', 'help guide steps errors troubleshooting fix'],
 ] as const;
 

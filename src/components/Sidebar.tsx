@@ -21,7 +21,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, onClose }) => {
     ['errors', 'Errors', Bug],
     ['tools', 'Free tools', Wrench],
     ['settings', 'Keystore', KeyRound],
-    ['billing', 'AI Credits', CreditCard],
+    ['billing', 'Automation Credits', CreditCard],
     ['howitworks', 'How it works', HelpCircle],
   ] as const;
   return <>

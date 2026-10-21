@@ -101,13 +101,13 @@ const STEPS: Step[] = [
     title: 'Start the build',
     summary: 'Press Build. WyBuild reserves credits, dispatches the workflow and follows the run.',
     points: [
-      'Each build reserves 3 credits, refunded automatically if the build fails or cannot be started. New accounts start with a small credit balance, and AI diagnosis and repair use credits too.',
+      'Each build reserves 3 credits, refunded automatically if the build fails or cannot be started. New accounts start with a small credit balance. WyBuild diagnosis and repair planning use separate automation credits.',
       'The build uses your GitHub Actions minutes. Public repositories are free; private repositories use your plan quota.',
       'WyBuild limits how many builds run at once per account.',
     ],
-    tab: { id: 'billing', label: 'Open AI Credits' },
+    tab: { id: 'billing', label: 'Open Automation Credits' },
     notes: [
-      { problem: 'Not enough credits (INSUFFICIENT_CREDITS).', fix: 'Buy a one-time credit pack under AI Credits. Credits do not expire.' },
+      { problem: 'Not enough credits (INSUFFICIENT_CREDITS).', fix: 'Buy a one-time credit pack under Automation Credits. Credits do not expire.' },
       { problem: 'Concurrent build limit reached (CONCURRENCY).', fix: 'Wait for a running build to finish, then start again.' },
       { problem: 'GitHub API rate limit reached (GITHUB_RATE_LIMIT).', fix: 'Wait until the time shown in the message and retry.' },
       { problem: 'Another credit activity is updating your balance (CREDITS_BUSY).', fix: 'Retry in a few seconds.' },
@@ -118,12 +118,12 @@ const STEPS: Step[] = [
     summary: 'The Logs tab shows each stage of the run live. A failed run is explained in the Errors tab.',
     points: [
       'Typical stages: authorize, check out your repository, build the web app, create the Android project, sign, verify and upload the artifact.',
-      'Open a failed run in Errors to see the cause. AI diagnosis reads the log and explains the root cause. AI fix can commit a safe repair to the build branch.',
+      'Open a failed run in Errors to see the cause. WyBuild matches log signatures to detailed repair guidance and commits only supported deterministic integrations; unknown code failures are not guessed.',
     ],
     tab: { id: 'builds', label: 'Open Logs' },
     notes: [
       { problem: 'WyBuild did not authorize this build.', fix: 'Start builds from the WyBuild app, not from the GitHub Actions tab. If it persists, use Update workflow.' },
-      { problem: 'The AI is not configured (AI_NOT_CONFIGURED) or returns an empty answer.', fix: 'The server needs a GEMINI_API_KEY. Retry once for an empty answer; credits are only charged for a completed diagnosis.' },
+      { problem: 'Build diagnosis cannot identify the error.', fix: 'WyBuild uses a deterministic repair catalog. Open the failed step, share the first fatal error, and follow the suggested checks. Unknown failures are clearly marked rather than guessed.' },
       { problem: 'The build is stuck in progress for a long time.', fix: 'Open the run on GitHub and check its status. Runs older than a few hours are treated as stale; start a new build.' },
     ],
   },
@@ -188,7 +188,7 @@ export const HowItWorksView: React.FC = () => {
         <LifeBuoy className="w-5 h-5 text-emerald-300 shrink-0 mt-0.5" />
         <div className="text-sm text-slate-400">
           <p className="text-slate-200 font-medium">Still stuck?</p>
-          <p className="mt-1">Open the failed run in the Errors tab and run AI diagnosis, or copy the error code in capital letters (for example NO_KEYSTORE) and match it to the notes above. Builds stay free of charge when they fail, since the reserved credits are refunded.</p>
+          <p className="mt-1">Open the failed run in the Errors tab and run WyBuild diagnosis, or copy the error code in capital letters (for example NO_KEYSTORE) and match it to the notes above. Builds stay free of charge when they fail, since the reserved credits are refunded.</p>
           <button type="button" onClick={() => setCurrentTab('errors')} className="mt-3 min-h-10 px-3 rounded-lg border border-emerald-400/30 text-emerald-200 text-xs font-medium inline-flex items-center gap-2 hover:bg-emerald-400/10">Open Errors<ArrowRight className="w-3.5 h-3.5" /></button>
         </div>
       </section>
