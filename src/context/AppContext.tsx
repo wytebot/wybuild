@@ -45,6 +45,8 @@ interface AppContextType {
   repos: RepoInfo[];
   reposLoading: boolean;
   refreshRepos: () => Promise<void>;
+  /** pull-to-refresh: reloads account, builds, keystores, repos and the selected repo's inspection */
+  refreshAll: () => Promise<void>;
   /** the one repo the whole app is working on; shared by every screen */
   selectedRepo: string;
   selectRepo: (repo: string) => void;
@@ -865,6 +867,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true };
   };
 
+  const refreshAll = useCallback(async () => {
+    await Promise.allSettled([
+      refreshMe(),
+      refreshRuns(),
+      refreshKeystores(),
+      refreshRepos(),
+      selectedRepo ? discoverRepo(selectedRepo, true) : Promise.resolve(),
+    ]);
+    // screens that keep their own local data (credits, releases) listen for this and reload
+    window.dispatchEvent(new CustomEvent('wybuild:refresh'));
+  }, [refreshMe, refreshRuns, refreshKeystores, refreshRepos, discoverRepo, selectedRepo]);
+
   return (
     <AppContext.Provider
       value={{
@@ -888,6 +902,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         repos,
         reposLoading,
         refreshRepos,
+        refreshAll,
         selectedRepo,
         selectRepo,
         inspections,

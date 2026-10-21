@@ -16,6 +16,7 @@ export const BillingView: React.FC = () => {
   const [error, setError] = useState('');
   const refresh = async () => { setLoading(true); setError(''); try { const r = await api.creditsBalance(); setWallet(r.wallet); setModel(r.engine); } catch (e) { setError(e instanceof Error ? e.message : 'Could not load credits.'); } finally { setLoading(false); } };
   useEffect(() => { void refresh(); }, []);
+  useEffect(() => { const h = () => { void refresh(); }; window.addEventListener('wybuild:refresh', h); return () => window.removeEventListener('wybuild:refresh', h); }, []);
   const buy = (pack: string) => window.dispatchEvent(new CustomEvent('wybuild:credits-open', { detail: { pack } }));
   return <div className="p-4 sm:p-6 lg:p-8 max-w-6xl mx-auto space-y-6">
     <header><div className="flex items-center gap-2 text-emerald-300 text-xs font-bold uppercase tracking-widest"><Coins className="w-4 h-4"/> WyBuild Wallet</div><h1 className="mt-2 text-2xl sm:text-3xl font-bold text-white">{lifetimeFree ? 'Free Forever. No credits needed.' : 'Pay once. Use credits for WyBuild automation.'}</h1><p className="mt-2 max-w-2xl text-sm text-slate-400">WyBuild automation uses one-time credits instead of a recurring subscription. Buy a credit pack once; credits stay in your wallet and are used by repository inspection, build diagnosis, integration installation, and repair workflows.</p></header>

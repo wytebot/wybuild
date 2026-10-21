@@ -615,21 +615,30 @@ async function createAtomicIntegrationCommit(session, repo, branch, changes, int
   const baseTree = parent?.tree?.sha;
   if (!baseTree) throw new HttpError(502, 'GitHub did not return the branch tree. No files were changed.', 'INTEGRATION_TREE_MISSING');
   const treeEntries = [];
+  const diagnoseIfDenied = async (e) => { if (e instanceof HttpError && (e.status === 403 || e.status === 404) && e.code !== 'GITHUB_RATE_LIMIT') throw await diagnoseWriteFailure(session, repo, branch, e); throw e; };
   for (const change of changes) {
-    const blob = await ghJson(session, `/repos/${repo}/git/blobs`, { method: 'POST', body: JSON.stringify({ content: change.content, encoding: 'utf-8' }) }, `staging ${change.path} for atomic integration`);
+    const blob = await ghJson(session, `/repos/${repo}/git/blobs`, { method: 'POST', body: JSON.stringify({ content: change.content, encoding: 'utf-8' }) }, `staging ${change.path} for atomic integration`).catch(diagnoseIfDenied);
     if (!blob?.sha) throw new HttpError(502, `GitHub did not stage ${change.path}. No branch changes were made.`, 'INTEGRATION_BLOB_FAILED');
     treeEntries.push({ path: change.path, mode: '100644', type: 'blob', sha: blob.sha });
   }
-  const tree = await ghJson(session, `/repos/${repo}/git/trees`, { method: 'POST', body: JSON.stringify({ base_tree: baseTree, tree: treeEntries }) }, 'creating atomic integration tree');
+  const tree = await ghJson(session, `/repos/${repo}/git/trees`, { method: 'POST', body: JSON.stringify({ base_tree: baseTree, tree: treeEntries }) }, 'creating atomic integration tree').catch(diagnoseIfDenied);
   if (!tree?.sha) throw new HttpError(502, 'GitHub could not create the integration tree. No branch changes were made.', 'INTEGRATION_TREE_FAILED');
-  const commit = await ghJson(session, `/repos/${repo}/git/commits`, { method: 'POST', body: JSON.stringify({ message: `feat: integrate ${integrationLabel.toLowerCase()} via WyBuild`, tree: tree.sha, parents: [parentSha] }) }, 'creating atomic integration commit');
+  const commit = await ghJson(session, `/repos/${repo}/git/commits`, { method: 'POST', body: JSON.stringify({ message: `feat: integrate ${integrationLabel.toLowerCase()} via WyBuild`, tree: tree.sha, parents: [parentSha] }) }, 'creating atomic integration commit').catch(diagnoseIfDenied);
   if (!commit?.sha) throw new HttpError(502, 'GitHub could not create the integration commit. The branch was not updated.', 'INTEGRATION_COMMIT_FAILED');
   // Optimistic concurrency check before updating the branch ref.
   const latest = await ghJson(session, refPath, undefined, 'rechecking integration branch before commit');
   if (latest?.object?.sha !== parentSha) throw new HttpError(409, 'The repository branch changed during integration. No integration commit was applied; retry against the latest branch.', 'INTEGRATION_STALE');
   let update = null;
   let updateError = null;
-  try { update = await gh(session, updateRefPath, { method: 'PATCH', body: JSON.stringify({ sha: commit.sha, force: false }) }); }
+  const patchRef = () => gh(session, updateRefPath, { method: 'PATCH', body: JSON.stringify({ sha: commit.sha, force: false }) });
+  try {
+    update = await patchRef();
+    // A just-created commit can briefly be invisible to the ref endpoint; retry once before blaming permissions.
+    if (!update.ok && (update.status === 404 || update.status === 422)) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      update = await patchRef();
+    }
+  }
   catch (error) { updateError = error; }
   if (updateError || !update?.ok) {
     const data = update ? await update.json().catch(() => ({})) : {};
@@ -639,7 +648,10 @@ async function createAtomicIntegrationCommit(session, repo, branch, changes, int
       if (!observed && updateError) throw new HttpError(503, 'GitHub’s response was lost while applying the integration. WyBuild could not verify whether the branch moved; credits were retained to avoid a double-commit/refund race. Check the branch commit history before retrying.', 'INTEGRATION_COMMIT_UNCERTAIN');
       if (update) {
         const d = describeGithubFailure(update, data, 'updating branch with atomic integration commit', `PATCH ${updateRefPath}`);
-        throw new HttpError(d.http, d.message, d.code, { hint: d.hint, details: d.details });
+        const original = new HttpError(d.http, d.message, d.code, { hint: d.hint, details: d.details });
+        // The repo and branch were readable a moment ago, so a 404/403 here is a write-permission problem: name the real cause.
+        if (update.status === 403 || update.status === 404) throw await diagnoseWriteFailure(session, repo, branch, original);
+        throw original;
       }
       throw new HttpError(503, 'GitHub did not confirm the integration commit. No branch update was verified.', 'INTEGRATION_COMMIT_FAILED');
     }
