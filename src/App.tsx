@@ -141,14 +141,13 @@ const MainLayout: React.FC = () => {
 
       {/* Main View Area */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        <Header
-          onOpenNewProject={() => setShowNewProjectModal(true)}
-          onOpenQuickBuild={() => setShowQuickBuildModal(true)}
-          onToggleMenu={() => setNavOpen((v) => !v)}
-          menuOpen={navOpen}
-        />
-
         <PullToRefresh onRefresh={refreshAll} className="wybuild-main flex-1 overflow-y-auto overflow-x-hidden min-w-0">
+          <Header
+            onOpenNewProject={() => setShowNewProjectModal(true)}
+            onOpenQuickBuild={() => setShowQuickBuildModal(true)}
+            onToggleMenu={() => setNavOpen((v) => !v)}
+            menuOpen={navOpen}
+          />
           {currentTab === 'projects' && <ProjectsView onOpenNewProject={() => setShowNewProjectModal(true)} />}
           {currentTab === 'twa' && <TwaView />}
           {currentTab === 'builds' && <BuildsView />}

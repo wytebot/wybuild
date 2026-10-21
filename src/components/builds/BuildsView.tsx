@@ -70,9 +70,9 @@ export const BuildsView: React.FC = () => {
   };
 
   return (
-    <div className="h-full flex flex-col md:flex-row overflow-y-auto md:overflow-hidden">
+    <div className="w-full min-w-0 flex flex-col md:flex-row overflow-visible">
       {/* Left List Pane: Builds Queue & History */}
-      <div className="w-full md:w-80 lg:w-96 border-b md:border-b-0 md:border-r border-slate-800 bg-slate-950 flex flex-col shrink-0 max-h-[40dvh] md:max-h-none overflow-y-auto">
+      <div className="w-full md:w-80 lg:w-96 border-b md:border-b-0 md:border-r border-slate-800 bg-slate-950 flex flex-col shrink-0 overflow-visible">
         <div className="p-4 border-b border-slate-800 bg-slate-900/50 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <h2 className="text-sm font-bold text-white">Build Pipeline History</h2>
@@ -140,7 +140,7 @@ export const BuildsView: React.FC = () => {
       </div>
 
       {/* Right Detail Pane: Pipeline Execution Details */}
-      <div className="flex-1 min-w-0 bg-slate-900 md:overflow-y-auto p-3 sm:p-6 space-y-4 sm:space-y-6">
+      <div className="flex-1 min-w-0 bg-slate-900 p-3 sm:p-6 space-y-4 sm:space-y-6 overflow-visible">
         {selectedBuild ? (
           <>
             {/* Header info */}
