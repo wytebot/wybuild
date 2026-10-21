@@ -264,9 +264,15 @@ const utcDay = (d = new Date()) => d.toISOString().slice(0, 10);
 
 async function gh(session, path, init = {}) {
   const url = path.startsWith('http') ? path : `https://api.github.com${path}`;
+  // Small, idempotent calls get a hard timeout so one hung GitHub request cannot eat the whole
+  // serverless budget (Vercel then returns a non-JSON 504). Dispatches, commits and artifact
+  // downloads are excluded: they may succeed after the client gave up, and downloads are large.
+  const verb = String(init.method || 'GET').toUpperCase();
+  const bounded = !init.signal && (((verb === 'GET' || verb === 'HEAD') && /\/(contents\/|actions\/secrets|actions\/workflows\/[^/?]+(\?|$))/.test(path)) || (verb === 'PUT' && /\/actions\/secrets\//.test(path)));
   try {
     return await fetch(url, {
       ...init,
+      ...(bounded ? { signal: AbortSignal.timeout(Number(process.env.WB_GH_TIMEOUT_MS) || 12000) } : {}),
       headers: {
         Authorization: `Bearer ${session.token}`,
         Accept: 'application/vnd.github+json',
@@ -277,6 +283,7 @@ async function gh(session, path, init = {}) {
       },
     });
   } catch (e) {
+    if (e?.name === 'TimeoutError') throw new HttpError(504, 'GitHub took too long to answer (over 12 seconds), so WyBuild stopped waiting.', 'GITHUB_TIMEOUT', { hint: 'Nothing was started. Retry in a minute; check githubstatus.com if it keeps happening.', details: { request: `${init.method || 'GET'} ${new URL(url).pathname}` } });
     throw new HttpError(502, `Could not reach GitHub (${e?.cause?.code || e?.message || 'network error'}).`, 'GITHUB_UNREACHABLE', {
       hint: 'GitHub or the network between Vercel and GitHub is unavailable. Retry in a minute; check githubstatus.com if it keeps happening.',
       details: { request: `${init.method || 'GET'} ${new URL(url).pathname}` },
@@ -481,8 +488,10 @@ async function debitCredits(login, amount, reason, metadata = {}) {
     const debit = Math.max(0, Math.ceil(Number(amount) || 0));
     if (balance < debit) throw new HttpError(402, `This automation activity needs ${debit} credits; your balance is ${balance}. Buy a one-time credit pack to continue.`, 'INSUFFICIENT_CREDITS', { details: { balance, required: debit } });
     const next = { ...wallet, balance: balance - debit, updatedAt: new Date().toISOString() };
-    await kv.set(key, next);
-    await kv.set(`wb:credit-ledger:${login}:${Date.now()}-${crypto.randomBytes(3).toString('hex')}`, { delta: -debit, reason, metadata, at: new Date().toISOString() }, { ex: 60 * 60 * 24 * 365 });
+    await Promise.all([
+      kv.set(key, next),
+      kv.set(`wb:credit-ledger:${login}:${Date.now()}-${crypto.randomBytes(3).toString('hex')}`, { delta: -debit, reason, metadata, at: new Date().toISOString() }, { ex: 60 * 60 * 24 * 365 }),
+    ]);
     return next.balance;
   } finally { await kv.del(lockKey).catch(() => {}); }
 }
@@ -780,8 +789,9 @@ async function usageFor(login) {
   const sub = await getSubscription(login);
   const lifetimeFree = isLifetimeFree(login);
   const plan = lifetimeFree ? PLANS.lifetimeFree : sub ? PLANS.pro : PLANS.free;
-  const used = Number((await kv.get(`wb:month:${login}:${utcMonth()}`)) || 0);
-  const pending = Number((await kv.get(`wb:pending:${login}:${utcMonth()}`)) || 0);
+  const [usedRaw, pendingRaw] = await Promise.all([kv.get(`wb:month:${login}:${utcMonth()}`), kv.get(`wb:pending:${login}:${utcMonth()}`)]);
+  const used = Number(usedRaw || 0);
+  const pending = Number(pendingRaw || 0);
   const now = new Date();
   const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
   return { sub, plan, lifetimeFree, usage: { monthlyBuildsUsed: used, pendingBuilds: pending, monthlyLimit: plan.monthlyLimit, concurrentLimit: plan.concurrentLimit, resetsAt: next.toISOString() } };
@@ -1656,18 +1666,19 @@ async function reserveBuildSlot(session, repo) {
   const pendingKey = `wb:pending:${session.login}:${month}`;
   // No monthly build cap: the 3-credit build reserve is the usage gate. Keep the
   // pending counter for dashboard accounting and the concurrency guard below.
-  await kv.incr(pendingKey);
-  await kv.expire(pendingKey, 60 * 60 * 24 * 370);
   const inflightKey = `wb:inflight:${session.login}`;
-  const inflight = await kv.incr(inflightKey);
-  await kv.expire(inflightKey, 60 * 60 * 24 * 3);
+  const reposCacheClear = kv.del(`wb:repos:${session.login}`).catch(() => {});
+  const [, inflight] = await Promise.all([
+    kv.incr(pendingKey).then(() => kv.expire(pendingKey, 60 * 60 * 24 * 370)),
+    kv.incr(inflightKey).then(async (n) => { await kv.expire(inflightKey, 60 * 60 * 24 * 3); return n; }),
+  ]);
   if (inflight > plan.concurrentLimit) {
     await kv.decr(inflightKey);
     await kv.decr(pendingKey);
     throw new HttpError(429, `Concurrent build limit reached (${plan.concurrentLimit}). Wait for a running build to finish.`, 'CONCURRENCY');
   }
-  await kv.del(`wb:repos:${session.login}`).catch(() => {});
-  return { inflightKey, pendingKey };
+  await reposCacheClear;
+  return { inflightKey, pendingKey, plan };
 }
 
 const HEX = /^#[0-9a-fA-F]{6}$/;
@@ -2881,9 +2892,13 @@ async function route(req, res, path, query) {
   }
 
   if (path === 'twa-build' && post) {
+    const t0 = Date.now();
+    const marks = {};
+    const mark = (k) => { marks[k] = Date.now() - t0; };
+    const tooSlow = (msg, code = 'BUILD_SETUP_SLOW') => { console.warn('[twa-build] slow', JSON.stringify({ ...marks, total: Date.now() - t0 })); return new HttpError(504, msg, code, { hint: 'Retry in a minute. If it keeps happening, the timings below show which step is slow.', details: { timingsMs: { ...marks, total: Date.now() - t0 } } }); };
     const b = bodyOf(req);
     const repo = checkRepo(b.repo);
-    await kv.sadd(pushRepoUsers(repo), session.login).catch(() => {});
+    const saddDone = kv.sadd(pushRepoUsers(repo), session.login).catch(() => {});
     const branch = String(b.branch || '').slice(0, 200);
     if (!branch) throw new HttpError(400, 'Branch is required');
     const output = ['apk', 'aab', 'both'].includes(b.output) ? b.output : 'both';
@@ -2894,13 +2909,24 @@ async function route(req, res, path, query) {
 
     // Validate independent GitHub reads concurrently to keep this serverless request short.
     // twaStaleFiles also verifies the workflow file, so do not fetch that file a second time.
-    const [, stale] = await Promise.all([
+    // Signing preparation is independent GitHub/Firestore I/O, so it runs in the same wave; errors are
+    // re-thrown below in the original order (feature check, workflow check, then signing).
+    const [featureRes, staleRes, signingRes] = await Promise.allSettled([
       validateNativeFeatureWorkflow(session, repo, branch, twa),
       twaStaleFiles(session, repo, branch, req),
+      prepareSigning(session, repo),
     ]);
+    if (featureRes.status === 'rejected') throw featureRes.reason;
+    if (staleRes.status === 'rejected') throw staleRes.reason;
+    const stale = staleRes.value;
     if (stale.includes(TWA_WORKFLOW_PATH)) throw new HttpError(409, `The WyBuild TWA workflow (${TWA_WORKFLOW_PATH}) is missing or outdated on branch "${branch}" of ${repo}.`, 'NO_WORKFLOW', { hint: 'Open Web to Android, pick this repo and use Update workflow to install the current workflow.' });
     if (stale.length) throw new HttpError(409, `The WyBuild TWA workflow in ${repo} is outdated (${stale.map((x) => x.split('/').pop()).join(', ')} differ from v${TWA_WORKFLOW_VERSION}).`, 'WORKFLOW_OUTDATED', { hint: 'Update workflow for this branch, then retry the build.', details: { stale } });
-    const signMode = await prepareSigning(session, repo); // Ensure the signing secrets are ready before dispatch
+    if (signingRes.status === 'rejected') throw signingRes.reason; // signing secrets must be ready before dispatch
+    const signMode = signingRes.value;
+    await saddDone;
+    mark('repo_checks');
+    // Nothing has been charged yet, so stop cleanly instead of running into the platform timeout.
+    if (Date.now() - t0 > 35000) throw tooSlow('WyBuild stopped before starting because GitHub or storage was responding slowly. Nothing was charged and no build was started.');
 
     const BUILD_CREDITS = 5; // successful Web-to-Android builds cost five credits; failed/dispatch-failed builds are refunded
     // Reserve credits before dispatch so concurrent builds cannot spend the same balance.
@@ -2910,6 +2936,9 @@ async function route(req, res, path, query) {
     try {
       reservation = await reserveBuildSlot(session, repo);
       wbTicket = await issueBuildTicket(session, repo, branch, signMode, BUILD_CREDITS);
+      mark('reserved');
+      // Dispatch needs a few seconds; past this point the platform would kill the request mid-flight.
+      if (Date.now() - t0 > 48000) throw tooSlow('WyBuild stopped before starting the build because storage was responding slowly. Your credits were refunded and no build was started.');
     } catch (e) {
       await refundCredits(session.login, BUILD_CREDITS, 'build_dispatch_setup_refund', { repo, branch }).catch(() => {});
       if (reservation) {
@@ -2932,7 +2961,7 @@ async function route(req, res, path, query) {
           use_keystore: String(useKeystore),
           sign_mode: signMode,
           store_ready: String(storeReady),
-          timeout_minutes: String((await usageFor(session.login)).plan.monthlyLimit >= 9999 ? 60 : 15),
+          timeout_minutes: String(reservation.plan.monthlyLimit >= 9999 ? 60 : 15),
           bubblewrap_version: /^(\d+\.\d+\.\d+)$/.test(String(b.bubblewrapVersion || '')) ? b.bubblewrapVersion : '1.25.0',
         },
       }),
@@ -2953,6 +2982,8 @@ async function route(req, res, path, query) {
       const d = describeGithubFailure(r, e, `starting the build on branch ${branch}`, `POST /repos/${repo}/actions/workflows/<workflow>/dispatches`);
       throw new HttpError(d.http === 404 ? 409 : d.http, d.code === 'GITHUB_NOT_FOUND' ? `GitHub cannot find the workflow on branch "${branch}" of ${repo} (404).` : d.message, d.code === 'GITHUB_NOT_FOUND' ? 'WORKFLOW_NOT_DISPATCHABLE' : d.code, { hint: d.code === 'GITHUB_NOT_FOUND' ? 'The workflow file must exist on that exact branch and contain "on: workflow_dispatch". Reinstall the workflow for that branch, make sure Actions is enabled in the repo settings, then retry.' : d.hint, details: d.details });
     }
+    mark('dispatched');
+    console.log('[twa-build] timings ms', JSON.stringify({ ...marks, total: Date.now() - t0 }));
     return send(res, 200, { ok: true });
   }
 
