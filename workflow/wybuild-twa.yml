@@ -1,4 +1,5 @@
-# wybuild-twa-workflow-version: 35
+# wybuild-twa-workflow-version: 37
+# v37: Fix literal \n written into MainActivity.java by capacitor-finalize.py (share-target patch).
 name: WyBuild Capacitor + Gradle (TWA fallback)
 # v34: Capacitor builds apply the project icon (launcher + splash) instead of Capacitor's default.
 # v33: enables the Firebase Google provider (fixes GoogleAuthProviderHandler null crash).

@@ -181,9 +181,9 @@ public class WyBuildShareTargetPlugin extends Plugin {
     for main_activity in java_root.rglob('MainActivity.java'):
         source = main_activity.read_text(encoding='utf-8')
         if 'WyBuildShareTargetPlugin' not in source:
-            source = source.replace('import com.getcapacitor.BridgeActivity;', 'import com.getcapacitor.BridgeActivity;\\nimport com.wybuild.sharetarget.WyBuildShareTargetPlugin;')
+            source = source.replace('import com.getcapacitor.BridgeActivity;', 'import com.getcapacitor.BridgeActivity;\nimport com.wybuild.sharetarget.WyBuildShareTargetPlugin;')
             if 'import com.wybuild.sharetarget.WyBuildShareTargetPlugin;' in source and 'registerPlugin(WyBuildShareTargetPlugin.class)' not in source:
-                source = re.sub(r'(public class MainActivity extends BridgeActivity\\s*\\{)', r'\\1\\n    @Override\\n    public void onCreate(android.os.Bundle savedInstanceState) {\\n        registerPlugin(WyBuildShareTargetPlugin.class);\\n        super.onCreate(savedInstanceState);\\n    }\\n    @Override\\n    protected void onNewIntent(android.content.Intent intent) {\\n        super.onNewIntent(intent);\\n        setIntent(intent);\\n    }', source, count=1)
+                source = re.sub(r'(public class MainActivity extends BridgeActivity\s*\{)', r'\1\n    @Override\n    public void onCreate(android.os.Bundle savedInstanceState) {\n        registerPlugin(WyBuildShareTargetPlugin.class);\n        super.onCreate(savedInstanceState);\n    }\n    @Override\n    protected void onNewIntent(android.content.Intent intent) {\n        super.onNewIntent(intent);\n        setIntent(intent);\n    }', source, count=1)
             main_activity.write_text(source, encoding='utf-8')
 
 if any(f in (config.get('nativeFeatures') or []) for f in ('googleauth', 'push')) and not source_google.exists():
