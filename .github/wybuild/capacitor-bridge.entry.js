@@ -258,6 +258,18 @@ const native = {
     return { enable, disable };
   })(),
   share: (title, text, url) => safe(() => Share.share({ title, text, url })),
+  shareTarget: {
+    // Android SEND/SEND_MULTIPLE intents are registered by the build finalizer when selected.
+    // Call on startup and on app resume to consume content shared into the app.
+    getSharedContent: async () => {
+      try {
+        const plugin = window.Capacitor?.Plugins?.WyBuildShareTarget;
+        if (!plugin?.getSharedContent) return { ok: false, error: 'Incoming share target is not enabled in this build.' };
+        const result = await plugin.getSharedContent();
+        return { ok: true, ...result };
+      } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+    },
+  },
   openBrowser: (url) => safe(() => Browser.open({ url: String(url) })),
   statusBar: { show: () => safe(() => StatusBar.show()), hide: () => safe(() => StatusBar.hide()), dark: () => safe(() => StatusBar.setStyle({ style: Style.Dark })), light: () => safe(() => StatusBar.setStyle({ style: Style.Light })) },
   orientation: { lock: (orientation = 'portrait') => safe(() => ScreenOrientation.lock({ orientation })), unlock: () => safe(() => ScreenOrientation.unlock()) },

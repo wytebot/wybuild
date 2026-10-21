@@ -4,7 +4,7 @@ import { api, ApiError, repoFromUrl, RepoInspection, TwaInspection } from '../..
 import { KeystoreForm } from '../KeystoreForm';
 import { LinkMode, LinkRule, Project, TwaConfig } from '../../types';
 import { checkLinkRule, LINK_MODES, LINK_PRESETS } from '../../services/links';
-import { AlertTriangle, Check, CheckCircle2, Github, Globe2, KeyRound, Link2, Loader2, Package, Play, RefreshCw, Search, Smartphone, Wrench, XCircle } from 'lucide-react';
+import { AlertTriangle, Check, CheckCircle2, Github, Globe2, KeyRound, Link2, Loader2, Package, Play, RefreshCw, Search, Smartphone, Wrench, XCircle, Sparkles } from 'lucide-react';
 
 const EMPTY: TwaConfig = {
   webUrl: '', packageId: '', name: '', launcherName: '', versionName: '1.0.0', versionCode: undefined,
@@ -48,12 +48,19 @@ const CAPACITOR_NATIVE = [
 
 const NATIVE_OPT_IN = [
   { id: 'biometric', label: 'Biometric unlock', hint: 'Fingerprint / face / device PIN gate for private areas (adds USE_BIOMETRIC). Local unlock only.' },
-  { id: 'sharetarget', label: 'Share target (URL shell only)', hint: 'URL-based native shell receives shared text; not supported by Capacitor source builds' },
+  { id: 'sharetarget', label: 'Incoming Share Target', hint: 'Receive shared text, links and supported files from Android apps (standalone/Capacitor)' },
   { id: 'reminders', label: 'Local reminders', hint: 'Schedule notifications from your site, even when the app is closed (adds POST_NOTIFICATIONS)' },
   { id: 'googleauth', label: 'Native Firebase sign-in', hint: 'Capacitor source builds only. Google needs Firebase Android configuration; Apple provider support depends on provider/plugin setup.' },
   { id: 'push', label: 'Remote push notifications', hint: 'Capacitor source builds only. Requires matching google-services.json, Firebase Messaging, and server-side token delivery.' },
   { id: 'pulltorefresh', label: 'Pull to refresh', hint: 'Capacitor source builds only. Adds WyBuildNative.pullToRefresh. You must implement it in your site: call enable({ onRefresh }) and decide what refreshing does.' },
   { id: 'swipeback', label: 'Edge swipe to go back', hint: 'Capacitor source builds only. Adds WyBuildNative.swipeBack. You must implement it in your site: call enable({ onBack }) or use the default history back.' },
+  { id: 'shareout', label: 'Native Share Sheet', hint: 'Share text, URLs and supported files through Android’s system share chooser.' },
+  { id: 'fileaccess', label: 'Native File Access', hint: 'Use the Capacitor filesystem bridge to read and write app files.' },
+  { id: 'networkstatus', label: 'Network Status Events', hint: 'Detect online/offline transitions and current connection status.' },
+  { id: 'deviceinfo', label: 'Device Information', hint: 'Read platform, device model, OS version and battery information.' },
+  { id: 'haptics', label: 'Haptic Feedback', hint: 'Trigger selection, impact and notification feedback on supported devices.' },
+  { id: 'deeplinks', label: 'Deep Link Handling', hint: 'Handle supported app URLs through the Capacitor App URL-open event.' },
+  { id: 'localnotifications', label: 'Scheduled Local Notifications', hint: 'Schedule and cancel local notifications; Android notification permission may be required.' },
 ] as const;
 
 const SCREEN_MODES = [
@@ -84,6 +91,11 @@ export const TwaView: React.FC = () => {
   const [cfg, setCfg] = useState<TwaConfig>(EMPTY);
   const repo = selectedRepo;
   const repoInspection: RepoInspection | null = repo ? inspections[repo] ?? null : null;
+  const [apiIntegrationId, setApiIntegrationId] = useState('rest_api');
+  const [apiIntegrationGoal, setApiIntegrationGoal] = useState('');
+  const [apiIntegrationBusy, setApiIntegrationBusy] = useState(false);
+  const [apiIntegrationError, setApiIntegrationError] = useState('');
+  const [apiIntegrationResult, setApiIntegrationResult] = useState<any>(null);
   const [inspection, setInspection] = useState<TwaInspection | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -297,6 +309,19 @@ export const TwaView: React.FC = () => {
     } finally { setBusy(false); setStage(''); }
   };
 
+  const runApiIntegration = async () => {
+    if (!repo) { setApiIntegrationError('Select a GitHub repository first.'); return; }
+    const branch = repoInspection?.defaultBranch;
+    if (!branch) { setApiIntegrationError('WyBuild could not determine the default branch. Refresh repository inspection and try again.'); return; }
+    setApiIntegrationBusy(true); setApiIntegrationError(''); setApiIntegrationResult(null);
+    try {
+      const result = await api.aiIntegrateApi({ repo, branch, integrationId: apiIntegrationId, goal: apiIntegrationGoal.trim() });
+      setApiIntegrationResult(result);
+      window.dispatchEvent(new CustomEvent('wybuild:credits-updated', { detail: { balance: result.creditsRemaining } }));
+    } catch (e) { setApiIntegrationError(e instanceof Error ? e.message : 'API integration automation failed.'); }
+    finally { setApiIntegrationBusy(false); }
+  };
+
   const reset = () => { replaceCfg(EMPTY); setInspection(null); setEditingId(null); setError(''); setNeedKey(false); inspectedUrl.current = ''; };
 
   const chip = (ok: boolean, good: string, todo: string) => <span className={`px-2.5 py-1 rounded-full border ${ok ? 'border-emerald-400/20 text-emerald-300' : 'border-amber-400/20 text-amber-300'}`}>{ok ? good : todo}</span>;
@@ -382,13 +407,22 @@ export const TwaView: React.FC = () => {
       <div className="flex items-center justify-between gap-2"><div className="flex items-center gap-2 text-white font-semibold"><Smartphone className="w-4 h-4 text-emerald-300"/>Native app features</div><span className="text-[10px] text-slate-500">{(cfg.shell || 'standalone') === 'twa' ? 'TWA MODE' : 'ENGINE-DEPENDENT'}</span></div>
       <p className="text-slate-500 mt-1">Native capabilities depend on the selected engine. Capacitor source builds bundle <span className="font-mono text-slate-400">window.WyBuildNative</span>; the URL-based native shell uses its own bridge. Google Play reviews the app's behaviour, so request only permissions and features the app genuinely uses.</p>
       {(cfg.shell || 'standalone') === 'twa' ? <p className="text-amber-300/80 mt-3">The Trusted Web Activity shell lets Chrome render your site, so the native bridge is not available. Switch to the standalone app shell to use these.</p> : <>
-        <p className="mt-2 text-[11px] text-slate-500">WyBuild auto-selects Capacitor + Gradle only when the repository has a package.json build script and produces index.html. URL-only projects use the separate native WebView shell. If a selected feature is unsupported by the detected engine, the build stops with an explanation instead of silently ignoring it.</p>
+        <p className="mt-2 text-[11px] text-slate-500">WyBuild auto-selects Capacitor + Gradle only when the repository has a package.json build script and produces index.html. URL-only projects use the separate native WebView shell. WyBuild checks engine requirements before packaging and applies Android manifest entries for selected native integrations.</p>
         <div className="grid sm:grid-cols-2 gap-2 mt-3">{NATIVE_OPT_IN.map(f => { const on = (cfg.nativeFeatures || []).includes(f.id); return <button key={f.id} type="button" onClick={async () => { if (!on && !(await paidAction(({biometric:'biometric',sharetarget:'sharetarget',reminders:'reminders',googleauth:'googleauth',push:'push',pulltorefresh:'pulltorefresh',swipeback:'swipeback'} as Record<string,string>)[f.id] || 'sharetarget'))) return; set('nativeFeatures', on ? (cfg.nativeFeatures || []).filter(x => x !== f.id) : [...(cfg.nativeFeatures || []), f.id]); }} className={`text-left rounded-xl border p-3 flex gap-3 ${on ? 'border-emerald-400/30 bg-emerald-400/[.06]' : 'border-white/[.06] bg-black/20'}`}><span className={`w-5 h-5 rounded border flex items-center justify-center shrink-0 ${on ? 'bg-emerald-400 border-emerald-400 text-black' : 'border-slate-600'}`}>{on && <Check className="w-3.5 h-3.5"/>}</span><span><b className="text-slate-200 block">{f.label}<span className="ml-2 inline-flex rounded border border-amber-300/20 bg-amber-300/[.06] px-1.5 py-0.5 align-middle text-[9px] font-bold text-amber-200">{({notifications:2,location:2,camera:2,microphone:2,vibration:1,biometric:3,push:3,googleauth:3,pulltorefresh:2,swipeback:2,sharetarget:1,reminders:2} as Record<string,number>)[f.id] ?? 1} credits</span></b><span className="text-[11px] text-slate-500">{f.hint}</span></span></button>; })}</div>
         <p className="text-[11px] text-slate-500 mt-3 mb-1">Capacitor source-build bridge (when the source build succeeds)</p>
         <div className="grid sm:grid-cols-2 gap-2">{CAPACITOR_NATIVE.map(label => <div key={label} className="rounded-xl border border-white/[.06] bg-black/20 p-3 flex gap-3"><span className="w-5 h-5 rounded border border-emerald-400/40 bg-emerald-400/10 text-emerald-300 flex items-center justify-center shrink-0"><Check className="w-3.5 h-3.5"/></span><span className="text-[11px] text-slate-400">{label}</span></div>)}</div>
         <details className="mt-3"><summary className="cursor-pointer text-[11px] text-slate-500">URL-only native shell features</summary><div className="grid sm:grid-cols-2 gap-2 mt-2">{NATIVE_ALWAYS.map(f => <div key={f.id} className="rounded-xl border border-white/[.06] bg-black/20 p-3 flex gap-3"><span className="w-5 h-5 rounded border border-emerald-400/40 bg-emerald-400/10 text-emerald-300 flex items-center justify-center shrink-0"><Check className="w-3.5 h-3.5"/></span><span><b className="text-slate-300 block">{f.label}</b><span className="text-[11px] text-slate-500">{f.hint}</span></span></div>)}</div></details>
         <p className="text-slate-600 mt-3">Google Play judges whether the app is more than a website and whether each declared permission is used. Add the script to your site and use these features in real screens; do not enable features you will not use.</p>
       </>}
+    </section>
+
+    <section className={card}>
+      <div className="flex items-center justify-between gap-2"><div className="flex items-center gap-2 text-white font-semibold"><Sparkles className="w-4 h-4 text-emerald-300"/>AI API & feature integrator</div><span className="text-[10px] font-bold text-amber-200">8+ CREDITS</span></div>
+      <p className="text-slate-500 mt-1">WyBuild inspects existing source code, adds a targeted integration, and can add only allowlisted compatible packages to package.json when needed. The Capacitor build workflow installs dependencies and syncs native plugins. It cannot invent API keys or create missing backend services. Review the atomic commit, rebuild, and test on a device; a source commit is not proof the APK works.</p>
+      <div className="grid sm:grid-cols-2 gap-3 mt-3"><div><label className="text-slate-400 text-xs block mb-1">Integration to add</label><select className={input} value={apiIntegrationId} onChange={e => setApiIntegrationId(e.target.value)}><option value="rest_api">REST API client</option><option value="firebase_auth">Firebase Authentication</option><option value="analytics">Privacy-conscious analytics</option><option value="payments">Payment provider checkout (safe client layer)</option><option value="push_notifications">Push notifications</option><option value="native_camera">Native camera / photo picker</option><option value="native_share">Native share sheet</option><option value="file_uploads">File picker / uploads</option><option value="geolocation">Geolocation</option><option value="offline_cache">Offline cache</option><option value="notifications_local">Local notifications</option><option value="device_info">Device information</option><option value="network_status">Network status events</option><option value="haptics">Haptic feedback</option><option value="clipboard">Clipboard</option></select></div><div><label className="text-slate-400 text-xs block mb-1">Optional requirements</label><input className={input} value={apiIntegrationGoal} onChange={e => setApiIntegrationGoal(e.target.value)} maxLength={1200} placeholder="e.g. add to profile screen, use existing backend" /></div></div>
+      <div className="mt-3 flex flex-wrap items-center gap-3"><button type="button" disabled={apiIntegrationBusy || !repo} onClick={() => void runApiIntegration()} className="rounded-lg bg-emerald-400 px-4 py-2.5 text-sm font-bold text-slate-950 disabled:opacity-50 flex items-center gap-2">{apiIntegrationBusy ? <Loader2 className="w-4 h-4 animate-spin"/> : <Sparkles className="w-4 h-4"/>}{apiIntegrationBusy ? 'Inspecting & integrating…' : 'Integrate into repository · 8+ credits'}</button><span className="text-[11px] text-slate-500">Target: {repo || 'select a repository'}{repoInspection?.defaultBranch ? ` · ${repoInspection.defaultBranch}` : ''}</span></div>
+      {apiIntegrationError && <div className="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-200">{apiIntegrationError}</div>}
+      {apiIntegrationResult && <div className="mt-3 rounded-lg border border-emerald-400/20 bg-emerald-400/[.04] p-3 space-y-2"><b className="text-sm text-emerald-200">{apiIntegrationResult.applied ? 'Integration committed to GitHub' : 'No code changes committed'}</b><p className="text-xs text-slate-300">{apiIntegrationResult.summary}</p>{apiIntegrationResult.fixes?.map((f: any) => <a key={f.path} className="block text-xs text-emerald-300 underline break-all" href={f.commit || '#'} target="_blank" rel="noreferrer">{f.path} — {f.reason}</a>)}{apiIntegrationResult.requiresSecrets && <p className="text-xs text-amber-200">This integration may require provider credentials or environment configuration. Never put private API keys in frontend source code.</p>}{apiIntegrationResult.manualSteps?.length > 0 && <ul className="list-disc pl-5 text-xs text-slate-300 space-y-1">{apiIntegrationResult.manualSteps.map((step: string, i: number) => <li key={i}>{step}</li>)}</ul>}{apiIntegrationResult.detectedCapabilities?.length > 0 && <div className="text-xs text-slate-300"><b>Detected capabilities</b><ul className="list-disc pl-5 mt-1">{apiIntegrationResult.detectedCapabilities.map((note: string, i: number) => <li key={i}>{note}</li>)}</ul></div>}{apiIntegrationResult.verificationChecks?.length > 0 && <div className="text-xs text-slate-300"><b>Verification checklist</b><ul className="list-disc pl-5 mt-1">{apiIntegrationResult.verificationChecks.map((note: string, i: number) => <li key={i}>{note}</li>)}</ul></div>}<p className="text-[11px] text-amber-200">{apiIntegrationResult.verificationMessage || 'Source changes are not yet build-verified. Run a new build and test the feature on a device.'}</p><div className="text-[10px] text-slate-500">Model: {apiIntegrationResult.model} · Charged {apiIntegrationResult.creditsCharged} credits · Balance {apiIntegrationResult.creditsRemaining}</div></div>}
     </section>
 
     <section className={card}>

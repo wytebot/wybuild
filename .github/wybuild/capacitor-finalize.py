@@ -99,8 +99,92 @@ else:
         source_google = workspace / '.wybuild-out' / 'google-services.json'
         source_google.parent.mkdir(parents=True, exist_ok=True)
         source_google.write_bytes(base64.b64decode(b64))
-if 'sharetarget' in (config.get('nativeFeatures') or []):
-    raise SystemExit('Share-target receiving is supported only by the URL-based WyBuild native shell. Disable sharetarget for Capacitor source builds; outgoing Share.share is still available.')
+# Incoming Android share target: declare Android SEND intents when enabled.
+
+
+if 'sharetarget' in (config.get('nativeFeatures') or []) and manifest.exists():
+    manifest_text = manifest.read_text(encoding='utf-8')
+    activity_match = re.search(r'<activity\\b(?=[^>]*android:name="[^"]*MainActivity")[^>]*>', manifest_text)
+    if activity_match and 'android.intent.action.SEND' not in manifest_text:
+        filters = '''
+        <intent-filter>
+            <action android:name="android.intent.action.SEND" />
+            <category android:name="android.intent.category.DEFAULT" />
+            <data android:mimeType="text/plain" />
+        </intent-filter>
+        <intent-filter>
+            <action android:name="android.intent.action.SEND" />
+            <category android:name="android.intent.category.DEFAULT" />
+            <data android:mimeType="text/*" />
+        </intent-filter>
+        <intent-filter>
+            <action android:name="android.intent.action.SEND" />
+            <category android:name="android.intent.category.DEFAULT" />
+            <data android:mimeType="image/*" />
+        </intent-filter>
+        <intent-filter>
+            <action android:name="android.intent.action.SEND" />
+            <category android:name="android.intent.category.DEFAULT" />
+            <data android:mimeType="application/pdf" />
+        </intent-filter>
+        <intent-filter>
+            <action android:name="android.intent.action.SEND_MULTIPLE" />
+            <category android:name="android.intent.category.DEFAULT" />
+            <data android:mimeType="image/*" />
+        </intent-filter>
+'''
+        manifest_text = manifest_text[:activity_match.end()] + filters + manifest_text[activity_match.end():]
+        manifest.write_text(manifest_text, encoding='utf-8')
+
+    # Capacitor plugin exposes incoming share intent extras to the website.
+    java_root = project / 'app/src/main/java'
+    plugin_dir = java_root / 'com/wybuild/sharetarget'
+    plugin_dir.mkdir(parents=True, exist_ok=True)
+    plugin_java = plugin_dir / 'WyBuildShareTargetPlugin.java'
+    plugin_java.write_text('''package com.wybuild.sharetarget;
+import android.content.Intent;
+import android.net.Uri;
+import com.getcapacitor.JSArray;
+import com.getcapacitor.JSObject;
+import com.getcapacitor.Plugin;
+import com.getcapacitor.PluginCall;
+import com.getcapacitor.PluginMethod;
+import com.getcapacitor.annotation.CapacitorPlugin;
+import org.json.JSONArray;
+
+@CapacitorPlugin(name = "WyBuildShareTarget")
+public class WyBuildShareTargetPlugin extends Plugin {
+  @PluginMethod public void getSharedContent(PluginCall call) {
+    Intent intent = getActivity().getIntent();
+    JSObject result = new JSObject();
+    if (intent == null) { result.put("action", ""); call.resolve(result); return; }
+    result.put("action", intent.getAction() == null ? "" : intent.getAction());
+    result.put("mimeType", intent.getType() == null ? "" : intent.getType());
+    String text = intent.getStringExtra(Intent.EXTRA_TEXT);
+    if (text != null) result.put("text", text);
+    String subject = intent.getStringExtra(Intent.EXTRA_SUBJECT);
+    if (subject != null) result.put("subject", subject);
+    JSONArray uris = new JSONArray();
+    Uri single = intent.getParcelableExtra(Intent.EXTRA_STREAM);
+    if (single != null) uris.put(single.toString());
+    if (intent.getClipData() != null) {
+      for (int i = 0; i < intent.getClipData().getItemCount(); i++) {
+        Uri uri = intent.getClipData().getItemAt(i).getUri();
+        if (uri != null && !uris.toString().contains(uri.toString())) uris.put(uri.toString());
+      }
+    }
+    result.put("uris", uris);
+    call.resolve(result);
+  }
+}
+''', encoding='utf-8')
+    for main_activity in java_root.rglob('MainActivity.java'):
+        source = main_activity.read_text(encoding='utf-8')
+        if 'WyBuildShareTargetPlugin' not in source:
+            source = source.replace('import com.getcapacitor.BridgeActivity;', 'import com.getcapacitor.BridgeActivity;\\nimport com.wybuild.sharetarget.WyBuildShareTargetPlugin;')
+            if 'import com.wybuild.sharetarget.WyBuildShareTargetPlugin;' in source and 'registerPlugin(WyBuildShareTargetPlugin.class)' not in source:
+                source = re.sub(r'(public class MainActivity extends BridgeActivity\\s*\\{)', r'\\1\\n    @Override\\n    public void onCreate(android.os.Bundle savedInstanceState) {\\n        registerPlugin(WyBuildShareTargetPlugin.class);\\n        super.onCreate(savedInstanceState);\\n    }\\n    @Override\\n    protected void onNewIntent(android.content.Intent intent) {\\n        super.onNewIntent(intent);\\n        setIntent(intent);\\n    }', source, count=1)
+            main_activity.write_text(source, encoding='utf-8')
 
 if any(f in (config.get('nativeFeatures') or []) for f in ('googleauth', 'push')) and not source_google.exists():
     raise SystemExit('Native Google/Apple sign-in or remote push was selected, but google-services.json is missing at the repository root. Add the Firebase Android config for the exact package ID and rebuild.')

@@ -191,7 +191,7 @@ jobs:
             console.error('::error::Remote push requires a buildable Capacitor source project. This repository was detected as URL-only/TWA. Disable remote push or provide a package.json build that outputs index.html.'); process.exit(1);
           }
           if (engine === 'capacitor' && selected.has('sharetarget')) {
-            console.error('::error::Receiving Android shares is currently supported only by the URL-based WyBuild native shell. Disable Share target for a Capacitor source build; outgoing sharing remains available through WyBuildNative.share().'); process.exit(1);
+            console.log('::notice::Capacitor incoming-share support will be added to the Android manifest and WyBuild share bridge.');
           }
           NODEFEATURES
 

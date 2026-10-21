@@ -164,3 +164,34 @@ The layer is bundled into Capacitor web assets and injected by WyBuild's URL-bas
 - The app shell uses a viewport height measured from `visualViewport` when available, updating on resize, orientation change, and resume. This avoids stale `100vh`/`100dvh` sizing in some Android WebViews.
 - The app shell and drawer respect CSS safe-area insets on devices that expose them, reducing clipping near display cutouts and system gesture areas.
 - Android device verification is still required because immersive mode and inset reporting vary by Android/WebView version.
+
+
+## Incoming Android share target (Capacitor source builds)
+
+When `sharetarget` is selected, WyBuild's Android finalizer adds Android `SEND` / `SEND_MULTIPLE` intent filters and registers the `WyBuildShareTarget` Capacitor plugin. The website bridge exposes:
+
+```js
+const shared = await window.WyBuildNative.shareTarget.getSharedContent();
+if (shared.ok && shared.text) {
+  // Route the shared text or URL into your app's import/search flow.
+}
+// shared.uris may contain Android content:// URIs for shared files.
+// Read content URIs through an appropriate Android/native file workflow; do not treat them as filesystem paths.
+```
+
+Call this on app startup and again after resume if your app supports receiving shares while already running. Android content URIs are permission-scoped and are not ordinary file paths.
+
+The feature picker also includes opt-in selections for the existing bridge APIs: outgoing share, filesystem, network status, device information, haptics, deep-link events, and local notifications. These are bridge capabilities; each app still needs to call the documented API in its own screens.
+
+
+## WyBuild AI API & Feature Integrator
+
+The Web → Android page includes an AI API & feature integrator for REST API clients, Firebase Authentication, analytics, safe payment-client wiring, push notifications, camera/photo picking, native sharing, file uploads, geolocation, offline caching, and local notifications. It reads a limited set of existing app source files from the authenticated GitHub repository and asks the configured Gemini model to prepare targeted changes.
+
+- Endpoint: `POST /api/ai/integrate-api` (authenticated WyBuild session required).
+- Inputs: `repo`, `branch`, `integrationId`, and optional `goal`. `integrationId` must be in the server-side allowlist.
+- Pricing: minimum 8 credits, then additional credits when estimated Gemini token usage requires it. WyBuild Free Forever accounts are exempt. Failed automation is refunded.
+- Scope: modifies up to three existing source files only; it does not create credentials, expose secret keys, change dependency manifests/lockfiles, or edit Android signing/workflow files. Changes are committed to the selected branch and should be reviewed before rebuilding.
+- Provider keys, Firebase configuration, payment verification, remote push delivery, and backend services may still require manual setup. The assistant must return manual steps instead of fabricating configuration.
+
+This is AI-assisted source integration, not a guarantee that every generated change compiles or that an external API is configured. Run a build and test the resulting APK before release.
