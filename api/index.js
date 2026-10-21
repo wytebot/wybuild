@@ -604,7 +604,10 @@ function preparePluginDependency(packageText, integrationId) {
 }
 async function createAtomicIntegrationCommit(session, repo, branch, changes, integrationLabel) {
   // Build one Git tree and one commit, so either every accepted file lands or none does.
-  const refPath = `/repos/${repo}/git/ref/heads/${branch.split('/').map(encodeURIComponent).join('/')}`;
+  // GitHub uses singular /git/ref/{ref} for GET, but plural /git/refs/{ref} for PATCH.
+  const encodedBranch = branch.split('/').map(encodeURIComponent).join('/');
+  const refPath = `/repos/${repo}/git/ref/heads/${encodedBranch}`;
+  const updateRefPath = `/repos/${repo}/git/refs/heads/${encodedBranch}`;
   const ref = await ghJson(session, refPath, undefined, 'checking integration branch before atomic commit');
   const parentSha = ref?.object?.sha;
   if (!parentSha) throw new HttpError(409, 'Could not resolve the selected branch head. No files were changed.', 'INTEGRATION_BRANCH_UNRESOLVED');
@@ -626,7 +629,7 @@ async function createAtomicIntegrationCommit(session, repo, branch, changes, int
   if (latest?.object?.sha !== parentSha) throw new HttpError(409, 'The repository branch changed during integration. No integration commit was applied; retry against the latest branch.', 'INTEGRATION_STALE');
   let update = null;
   let updateError = null;
-  try { update = await gh(session, refPath, { method: 'PATCH', body: JSON.stringify({ sha: commit.sha, force: false }) }); }
+  try { update = await gh(session, updateRefPath, { method: 'PATCH', body: JSON.stringify({ sha: commit.sha, force: false }) }); }
   catch (error) { updateError = error; }
   if (updateError || !update?.ok) {
     const data = update ? await update.json().catch(() => ({})) : {};
@@ -635,7 +638,7 @@ async function createAtomicIntegrationCommit(session, repo, branch, changes, int
     if (observed?.object?.sha !== commit.sha) {
       if (!observed && updateError) throw new HttpError(503, 'GitHub’s response was lost while applying the integration. WyBuild could not verify whether the branch moved; credits were retained to avoid a double-commit/refund race. Check the branch commit history before retrying.', 'INTEGRATION_COMMIT_UNCERTAIN');
       if (update) {
-        const d = describeGithubFailure(update, data, 'updating branch with atomic integration commit', `PATCH /repos/${repo}/git/refs/heads/${branch}`);
+        const d = describeGithubFailure(update, data, 'updating branch with atomic integration commit', `PATCH ${updateRefPath}`);
         throw new HttpError(d.http, d.message, d.code, { hint: d.hint, details: d.details });
       }
       throw new HttpError(503, 'GitHub did not confirm the integration commit. No branch update was verified.', 'INTEGRATION_COMMIT_FAILED');
