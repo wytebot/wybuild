@@ -27,7 +27,16 @@ async function driveRequest(token: string, url: string, init: RequestInit = {}) 
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), DRIVE_TIMEOUT_MS);
   let response: Response;
-  try { response = await fetch(url, { ...init, signal: init.signal || controller.signal, headers: { Authorization: `Bearer ${token}`, ...(init.body && typeof init.body === 'string' && !String(init.headers && (init.headers as any)['Content-Type'] || '').includes('multipart/related') ? { 'Content-Type': 'application/json' } : {}), ...init.headers } }); }
+  const headers = { Authorization: `Bearer ${token}`, ...(init.body && typeof init.body === 'string' && !String(init.headers && (init.headers as any)['Content-Type'] || '').includes('multipart/related') ? { 'Content-Type': 'application/json' } : {}), ...init.headers };
+  try {
+    const safeToRetry = !init.method || init.method.toUpperCase() === 'GET';
+    for (let attempt = 0; ; attempt++) {
+      response = await fetch(url, { ...init, signal: init.signal || controller.signal, headers });
+      if (!safeToRetry || ![429, 500, 502, 503, 504].includes(response.status) || attempt >= 2) break;
+      const retryAfter = Number(response.headers.get('Retry-After') || 0);
+      await new Promise(resolve => window.setTimeout(resolve, Math.min(2500, retryAfter > 0 ? retryAfter * 1000 : 300 * (2 ** attempt))));
+    }
+  }
   catch (error) { if ((error as any)?.name === 'AbortError') throw new Error('Google Drive request timed out. Your local data is unchanged; check your connection and retry.'); throw new Error('Could not reach Google Drive. Check your connection and retry.'); }
   finally { window.clearTimeout(timeout); }
   if (!response.ok) {
@@ -95,8 +104,7 @@ export const DevStudioView: React.FC = () => {
       const marker = await driveRequest(token, 'https://www.googleapis.com/drive/v3/files?fields=id', { method: 'POST', body: JSON.stringify({ name: `.wybuild-write-probe-${Date.now()}.tmp`, mimeType: 'text/plain', parents: [id] }) });
       if (!marker?.id) throw new Error('Drive did not confirm write access. The active folder was not changed.');
       await driveRequest(token, `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(marker.id)}`, { method: 'DELETE' });
-      if (folderId && !window.confirm(`Switch WyBuild storage from the current folder to “${folder.name}”? Existing data will remain in the previous folder; it will not be deleted.`)) return;
-      setFolderId(id); setDraftFolderId(id); setStatus(`Storage destination validated for reading and writing: ${folder.name}. Existing data in the previous folder was preserved.`); setFileId(''); setHistoryCount(null); setLastSync('');
+      setFolderId(id); setDraftFolderId(id); setStatus(`Storage destination validated for reading and writing: ${folder.name}. Previous-folder data was preserved; only this folder is active now.`); setFileId(''); setHistoryCount(null); setLastSync('');
       showToast('Drive folder validated and selected');
     } catch (e) { setError(e instanceof Error ? e.message : 'Could not validate folder access.'); }
     finally { setBusy(false); }
