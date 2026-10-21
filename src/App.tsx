@@ -14,7 +14,6 @@ import { BuildsView } from './components/builds/BuildsView';
 import { ReleasesView } from './components/releases/ReleasesView';
 import { ErrorTelemetryView } from './components/errors/ErrorTelemetryView';
 import { DevToolsView } from './components/tools/DevToolsView';
-import { TeamView } from './components/team/TeamView';
 import { BillingView } from './components/billing/BillingView';
 import { SettingsView } from './components/settings/SettingsView';
 import { HowItWorksView } from './components/help/HowItWorksView';
@@ -154,7 +153,6 @@ const MainLayout: React.FC = () => {
           {currentTab === 'releases' && <ReleasesView />}
           {currentTab === 'errors' && <ErrorTelemetryView />}
           {currentTab === 'tools' && <DevToolsView />}
-          {currentTab === 'team' && <TeamView />}
           {currentTab === 'billing' && <BillingView />}
           {currentTab === 'settings' && <SettingsView />}
           {currentTab === 'howitworks' && <HowItWorksView />}
