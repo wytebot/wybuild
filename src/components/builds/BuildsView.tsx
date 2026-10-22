@@ -63,12 +63,40 @@ export const BuildsView: React.FC = () => {
     if (!capacitor?.isNativePlatform?.()) return;
     setDownloadingArtifact(art.id ?? art.name);
     try {
-      const url = new URL(art.downloadUrl, window.location.href).href;
-      const safeName = String(art.name || 'wybuild-artifact.zip').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 150);
+      // Capacitor serves the UI from https://localhost, so resolving a relative API URL
+      // against window.location.href incorrectly targets localhost and produces
+      // "Unsupported url". Resolve WyBuild API paths against the deployed app origin.
+      const appOrigin = /^https?:$/.test(window.location.protocol) && window.location.hostname !== 'localhost'
+        ? window.location.origin
+        : 'https://wybuild-black.vercel.app';
+      const url = new URL(art.downloadUrl, appOrigin).href;
+      if (!/^https:\/\//i.test(url)) throw new Error('Artifact URL must use HTTPS.');
+      const safeName = String(art.name || 'wybuild-artifact.zip').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 150) || 'wybuild-artifact.zip';
       const { Filesystem, Directory } = await import('@capacitor/filesystem');
-      const saved = await Filesystem.downloadFile({ url, path: safeName, directory: Directory.Documents });
-      const uri = (saved as any)?.path || (saved as any)?.uri;
-      if (!uri) throw new Error('The file was downloaded but Android did not return its saved location.');
+      // The artifact API is session-cookie protected. Native HTTP download plugins do not
+      // reliably share the WebView's HttpOnly session cookie, so fetch it in the authenticated
+      // WebView first, then save it to app Documents. This also handles same-origin API paths.
+      const response = await fetch(url, { credentials: 'include', cache: 'no-store' });
+      if (!response.ok) {
+        if (response.status === 401 || response.status === 403) throw new Error('Your WyBuild session expired or lacks access. Sign in again and retry.');
+        throw new Error(`Artifact download failed (HTTP ${response.status}).`);
+      }
+      const blob = await response.blob();
+      if (!blob.size) throw new Error('The server returned an empty artifact. Retry or rebuild.');
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error('Could not prepare the artifact for Android storage.'));
+        reader.onload = () => {
+          const result = String(reader.result || '');
+          const comma = result.indexOf(',');
+          if (comma < 0) reject(new Error('Could not decode the downloaded artifact.'));
+          else resolve(result.slice(comma + 1));
+        };
+        reader.readAsDataURL(blob);
+      });
+      const saved = await Filesystem.writeFile({ path: safeName, data: base64, directory: Directory.Documents, recursive: true });
+      const uri = (saved as any)?.uri || (saved as any)?.path;
+      if (!uri) throw new Error('The artifact was downloaded but Android did not return its saved location.');
       // Android's share/save sheet lets the user copy it to public Downloads or another app.
       const { Share } = await import('@capacitor/share');
       await Share.share({ title: safeName, text: 'WyBuild build artifact', url: uri, dialogTitle: 'Save or share build artifact' });
