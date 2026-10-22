@@ -124,6 +124,12 @@ const native = {
     onBack: (callback) => App.addListener('backButton', callback),
     onStateChange: (callback) => App.addListener('appStateChange', callback),
   },
+  // Opt-in deep links (needs the "Deep links" feature so the Android link filter exists). Returns the https URL
+  // that opened the app, and notifies on links opened while the app is already running.
+  deepLinks: {
+    getLaunchUrl: () => safe(async () => (await App.getLaunchUrl())?.url || null),
+    onOpen: (callback) => App.addListener('appUrlOpen', (event) => { try { callback(event?.url || ''); } catch { /* site callback errors must not break the bridge */ } }),
+  },
   // Opt-in swipe detector for app-specific navigation. It observes gestures but never prevents
   // native scrolling; callbacks run only for clear horizontal swipes that dominate vertical movement.
   gestures: {

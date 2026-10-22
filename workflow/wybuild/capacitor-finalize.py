@@ -31,7 +31,7 @@ def add_permissions(path, names):
         path.write_text(txt, encoding='utf-8')
 
 permissions = set(config.get('androidPermissions') or [])
-if config.get('enableNotifications') or any(f in (config.get('nativeFeatures') or []) for f in ('reminders', 'push')):
+if config.get('enableNotifications') or any(f in (config.get('nativeFeatures') or []) for f in ('reminders', 'push', 'localnotifications')):
     permissions.add('POST_NOTIFICATIONS')
 permission_aliases = {
  'CAMERA':'android.permission.CAMERA','RECORD_AUDIO':'android.permission.RECORD_AUDIO',
@@ -49,6 +49,11 @@ permission_aliases = {
 names = [permission_aliases.get(p, p if p.startswith('android.permission.') else ('android.permission.' + p if re.fullmatch(r'[A-Z][A-Z0-9_]*', p) else '')) for p in permissions]
 if 'biometric' in (config.get('nativeFeatures') or []): names.append('android.permission.USE_BIOMETRIC')
 if 'reminders' in (config.get('nativeFeatures') or []): names += ['android.permission.POST_NOTIFICATIONS','android.permission.VIBRATE']
+_selected_features = set(config.get('nativeFeatures') or [])
+# Selected features must actually be usable on a device: declare the permissions their plugins need.
+if _selected_features & {'localnotifications', 'push'}: names += ['android.permission.POST_NOTIFICATIONS', 'android.permission.VIBRATE']
+if 'haptics' in _selected_features: names.append('android.permission.VIBRATE')
+if 'networkstatus' in _selected_features: names.append('android.permission.ACCESS_NETWORK_STATE')
 if manifest.exists(): add_permissions(manifest, sorted(set(names)))
 
 # Use the existing signing identity so updates remain installable over earlier WyBuild releases.
@@ -99,6 +104,31 @@ else:
         source_google = workspace / '.wybuild-out' / 'google-services.json'
         source_google.parent.mkdir(parents=True, exist_ok=True)
         source_google.write_bytes(base64.b64decode(b64))
+# Deep links: open the site's https links inside the app (Android App Links). Without this intent filter the
+# "deeplinks" feature was selected but links still opened in the browser.
+if 'deeplinks' in (config.get('nativeFeatures') or []) and manifest.exists():
+    from urllib.parse import urlparse
+    _host = (urlparse(str(config.get('webUrl') or '')).hostname or '').lower()
+    _mtxt = manifest.read_text(encoding='utf-8')
+    _act = re.search(r'<activity\b(?=[^>]*android:name="[^"]*MainActivity")[^>]*>', _mtxt)
+    if not _host:
+        print('::warning::Deep links were selected but no website URL was available, so no link filter was added.')
+    elif not _act:
+        raise SystemExit('Deep links were selected but MainActivity was not found in AndroidManifest.xml.')
+    elif f'android:host="{_host}"' not in _mtxt:
+        _hosts = [_host] + ([] if _host.startswith('www.') else ['www.' + _host])
+        _data = '\n'.join(f'            <data android:scheme="https" android:host="{h}" />' for h in _hosts)
+        _filter = f'''
+        <intent-filter android:autoVerify="true">
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.DEFAULT" />
+            <category android:name="android.intent.category.BROWSABLE" />
+{_data}
+        </intent-filter>
+'''
+        manifest.write_text(_mtxt[:_act.end()] + _filter + _mtxt[_act.end():], encoding='utf-8')
+        print(f'Deep links enabled for https://{_host}')
+
 # Incoming Android share target: declare Android SEND intents when enabled.
 
 

@@ -3,26 +3,45 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useState } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
 import { DashboardOverview } from './components/dashboard/DashboardOverview';
-import { TwaView } from './components/twa/TwaView';
-import { ProjectsView } from './components/projects/ProjectsView';
-import { BuildsView } from './components/builds/BuildsView';
-import { ReleasesView } from './components/releases/ReleasesView';
-import { ErrorTelemetryView } from './components/errors/ErrorTelemetryView';
-import { DevToolsView } from './components/tools/DevToolsView';
-import { DevStudioView } from './components/DevStudioView';
-import { BillingView } from './components/billing/BillingView';
-import { SettingsView } from './components/settings/SettingsView';
-import { HowItWorksView } from './components/help/HowItWorksView';
-import { NewProjectModal } from './components/modals/NewProjectModal';
-import { QuickBuildModal } from './components/modals/QuickBuildModal';
 import { LoginScreen } from './components/LoginScreen';
 import { CheckCircle2, AlertCircle } from 'lucide-react';
-import { CreditsCheckoutModal } from './components/billing/CreditsCheckoutModal';
+
+// Screens load on demand (smaller first download), then are preloaded while the browser is idle.
+const loaders = {
+  TwaView: () => import('./components/twa/TwaView'),
+  ProjectsView: () => import('./components/projects/ProjectsView'),
+  BuildsView: () => import('./components/builds/BuildsView'),
+  ReleasesView: () => import('./components/releases/ReleasesView'),
+  ErrorTelemetryView: () => import('./components/errors/ErrorTelemetryView'),
+  DevToolsView: () => import('./components/tools/DevToolsView'),
+  DevStudioView: () => import('./components/DevStudioView'),
+  BillingView: () => import('./components/billing/BillingView'),
+  SettingsView: () => import('./components/settings/SettingsView'),
+  HowItWorksView: () => import('./components/help/HowItWorksView'),
+  NewProjectModal: () => import('./components/modals/NewProjectModal'),
+  QuickBuildModal: () => import('./components/modals/QuickBuildModal'),
+  CreditsCheckoutModal: () => import('./components/billing/CreditsCheckoutModal'),
+};
+const TwaView = lazy(() => loaders.TwaView().then((m) => ({ default: m.TwaView })));
+const ProjectsView = lazy(() => loaders.ProjectsView().then((m) => ({ default: m.ProjectsView })));
+const BuildsView = lazy(() => loaders.BuildsView().then((m) => ({ default: m.BuildsView })));
+const ReleasesView = lazy(() => loaders.ReleasesView().then((m) => ({ default: m.ReleasesView })));
+const ErrorTelemetryView = lazy(() => loaders.ErrorTelemetryView().then((m) => ({ default: m.ErrorTelemetryView })));
+const DevToolsView = lazy(() => loaders.DevToolsView().then((m) => ({ default: m.DevToolsView })));
+const DevStudioView = lazy(() => loaders.DevStudioView().then((m) => ({ default: m.DevStudioView })));
+const BillingView = lazy(() => loaders.BillingView().then((m) => ({ default: m.BillingView })));
+const SettingsView = lazy(() => loaders.SettingsView().then((m) => ({ default: m.SettingsView })));
+const HowItWorksView = lazy(() => loaders.HowItWorksView().then((m) => ({ default: m.HowItWorksView })));
+const NewProjectModal = lazy(() => loaders.NewProjectModal().then((m) => ({ default: m.NewProjectModal })));
+const QuickBuildModal = lazy(() => loaders.QuickBuildModal().then((m) => ({ default: m.QuickBuildModal })));
+const CreditsCheckoutModal = lazy(() => loaders.CreditsCheckoutModal().then((m) => ({ default: m.CreditsCheckoutModal })));
+const ViewFallback: React.FC = () => <div className="p-6 text-sm text-slate-400" role="status" aria-live="polite">Loading…</div>;
+const preloadViews = () => { Object.values(loaders).forEach((load) => { void load().catch(() => {}); }); };
 
 const MainLayout: React.FC = () => {
   const { currentTab, toastMessage, builds, setActiveBuildId, setCurrentTab, authState, user, repos } = useApp();
@@ -33,6 +52,13 @@ const MainLayout: React.FC = () => {
   const [showCreditsSuccess, setShowCreditsSuccess] = useState<boolean>(() => typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('credits') === 'success');
   // Menu starts open on desktop, closed (drawer) on phones/tablets.
   const [navOpen, setNavOpen] = useState<boolean>(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches);
+
+  // Warm every screen once the app is interactive so tab switches are instant.
+  useEffect(() => {
+    const w = window as Window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number; cancelIdleCallback?: (id: number) => void };
+    if (w.requestIdleCallback) { const id = w.requestIdleCallback(preloadViews, { timeout: 4000 }); return () => w.cancelIdleCallback?.(id); }
+    const t = window.setTimeout(preloadViews, 1500); return () => window.clearTimeout(t);
+  }, []);
 
   // Route build-completion notification deep links directly to the matching build history item.
   useEffect(() => {
@@ -147,22 +173,24 @@ const MainLayout: React.FC = () => {
             onToggleMenu={() => setNavOpen((v) => !v)}
             menuOpen={navOpen}
           />
-          {currentTab === 'projects' && <ProjectsView onOpenNewProject={() => setShowNewProjectModal(true)} />}
-          {currentTab === 'twa' && <TwaView />}
-          {currentTab === 'builds' && <BuildsView />}
-          {currentTab === 'releases' && <ReleasesView />}
-          {currentTab === 'errors' && <ErrorTelemetryView />}
-          {currentTab === 'tools' && <DevToolsView />}
-          {currentTab === 'devstudio' && <DevStudioView />}
-          {currentTab === 'billing' && <BillingView />}
-          {currentTab === 'settings' && <SettingsView />}
-          {currentTab === 'howitworks' && <HowItWorksView />}
-          {currentTab === 'dashboard' && (
-            <DashboardOverview
-              onOpenNewProject={() => setShowNewProjectModal(true)}
-              onOpenQuickBuild={() => setShowQuickBuildModal(true)}
-                />
-          )}
+          <Suspense fallback={<ViewFallback />}>
+            {currentTab === 'projects' && <ProjectsView onOpenNewProject={() => setShowNewProjectModal(true)} />}
+            {currentTab === 'twa' && <TwaView />}
+            {currentTab === 'builds' && <BuildsView />}
+            {currentTab === 'releases' && <ReleasesView />}
+            {currentTab === 'errors' && <ErrorTelemetryView />}
+            {currentTab === 'tools' && <DevToolsView />}
+            {currentTab === 'devstudio' && <DevStudioView />}
+            {currentTab === 'billing' && <BillingView />}
+            {currentTab === 'settings' && <SettingsView />}
+            {currentTab === 'howitworks' && <HowItWorksView />}
+            {currentTab === 'dashboard' && (
+              <DashboardOverview
+                onOpenNewProject={() => setShowNewProjectModal(true)}
+                onOpenQuickBuild={() => setShowQuickBuildModal(true)}
+                  />
+            )}
+          </Suspense>
         </div>
       </div>
 
@@ -175,19 +203,11 @@ const MainLayout: React.FC = () => {
       )}
 
       {/* Modals */}
-      <NewProjectModal
-        isOpen={showNewProjectModal}
-        onClose={() => setShowNewProjectModal(false)}
-      />
-      <QuickBuildModal
-        isOpen={showQuickBuildModal}
-        onClose={() => setShowQuickBuildModal(false)}
-      />
-      <CreditsCheckoutModal
-        isOpen={showBillingModal}
-        initialPack={creditPack}
-        onClose={() => setShowBillingModal(false)}
-      />
+      <Suspense fallback={null}>
+        {showNewProjectModal && <NewProjectModal isOpen={showNewProjectModal} onClose={() => setShowNewProjectModal(false)} />}
+        {showQuickBuildModal && <QuickBuildModal isOpen={showQuickBuildModal} onClose={() => setShowQuickBuildModal(false)} />}
+        {showBillingModal && <CreditsCheckoutModal isOpen={showBillingModal} initialPack={creditPack} onClose={() => setShowBillingModal(false)} />}
+      </Suspense>
       {showCreditsSuccess && <div className="fixed inset-0 z-[130] bg-black/75 backdrop-blur-sm flex items-center justify-center p-4"><div className="w-full max-w-sm rounded-2xl border border-emerald-400/25 bg-slate-950 p-6 text-center shadow-2xl"><div className="mx-auto mb-4 h-12 w-12 rounded-full bg-emerald-500/15 border border-emerald-400/30 flex items-center justify-center text-2xl text-emerald-300">✓</div><h2 className="text-xl font-bold text-white">Credits purchased</h2><p className="mt-2 text-sm text-slate-400">Flutterwave confirmed your one-time payment. Your credit wallet has been updated.</p><button onClick={() => { setShowCreditsSuccess(false); window.history.replaceState({}, '', window.location.pathname); }} className="mt-5 w-full rounded-lg bg-emerald-500 py-3 text-sm font-bold text-black">Continue</button></div></div>}
     </div>
   );

@@ -23,6 +23,7 @@ import {
   INITIAL_DELIVERIES,
 } from '../data/mockData';
 import { api, ApiError, repoFromUrl, RepoInspection, UsageInfo } from '../services/api';
+import { idbGet, idbSet, idbDelete, idbFlush, requestPersistentStorage, StorageQuotaError } from '../lib/indexedDbStorage';
 
 interface AppContextType {
   projects: Project[];
@@ -178,8 +179,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [hydratedFor, setHydratedFor] = useState<string | null>(null);
   const loginKey = user?.login ? user.login.toLowerCase() : null;
   const ownKey = (k: string, login: string) => `${k}:${login}`;
-  const readOwn = <T,>(k: string, login: string, fallback: T): T => {
-    try { const v = localStorage.getItem(ownKey(k, login)); return v ? (JSON.parse(v) as T) : fallback; } catch { return fallback; }
+  const readOwn = async <T,>(k: string, login: string, fallback: T): Promise<T> => {
+    const key = ownKey(k, login);
+    try {
+      const saved = await idbGet<T>(key);
+      if (saved !== undefined) return saved;
+    } catch { /* attempt one-time migration from older browser storage */ }
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        const value = JSON.parse(raw) as T;
+        await idbSet(key, value);
+        localStorage.removeItem(key);
+        return value;
+      }
+    } catch { /* storage unavailable or legacy value invalid */ }
+    return fallback;
   };
 
   const resetSessionData = () => {
@@ -197,27 +212,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   useEffect(() => {
-    if (!loginKey) return;
-    if (hydratedFor === loginKey) return;
+    if (!loginKey || hydratedFor === loginKey) return;
+    let cancelled = false;
     resetSessionData();
-    // data saved before accounts were separated cannot be attributed to anyone: remove it
-    try {
-      Object.values(STORAGE_KEYS).forEach((k) => localStorage.removeItem(k));
-      localStorage.removeItem('wybuild_selected_repo');
-    } catch { /* storage unavailable */ }
-    setProjects(readOwn<Project[]>(STORAGE_KEYS.PROJECTS, loginKey, []));
-    setTeamMembers(readOwn<TeamMember[]>(STORAGE_KEYS.MEMBERS, loginKey, INITIAL_MEMBERS));
-    setAuditLogs(readOwn<AuditLog[]>(STORAGE_KEYS.LOGS, loginKey, INITIAL_AUDIT_LOGS));
-    setWebhooks(readOwn<GitHubWebhook[]>(STORAGE_KEYS.WEBHOOKS, loginKey, INITIAL_WEBHOOKS));
-    setWebhookDeliveries(readOwn<WebhookDelivery[]>(STORAGE_KEYS.DELIVERIES, loginKey, INITIAL_DELIVERIES));
-    setSelectedRepoState(readOwn<string>('wybuild_selected_repo', loginKey, ''));
-    setHydratedFor(loginKey);
+    (async () => {
+      const [savedProjects, savedMembers, savedLogs, savedWebhooks, savedDeliveries, savedRepo] = await Promise.all([
+        readOwn<Project[]>(STORAGE_KEYS.PROJECTS, loginKey, []),
+        readOwn<TeamMember[]>(STORAGE_KEYS.MEMBERS, loginKey, INITIAL_MEMBERS),
+        readOwn<AuditLog[]>(STORAGE_KEYS.LOGS, loginKey, INITIAL_AUDIT_LOGS),
+        readOwn<GitHubWebhook[]>(STORAGE_KEYS.WEBHOOKS, loginKey, INITIAL_WEBHOOKS),
+        readOwn<WebhookDelivery[]>(STORAGE_KEYS.DELIVERIES, loginKey, INITIAL_DELIVERIES),
+        readOwn<string>('wybuild_selected_repo', loginKey, ''),
+      ]);
+      if (cancelled) return;
+      setProjects(savedProjects);
+      setTeamMembers(savedMembers);
+      setAuditLogs(savedLogs);
+      setWebhooks(savedWebhooks);
+      setWebhookDeliveries(savedDeliveries);
+      setSelectedRepoState(savedRepo);
+      setHydratedFor(loginKey);
+    })().catch(() => {
+      if (!cancelled) {
+        setHydratedFor(loginKey);
+        showToast('Local storage could not be fully read. Some workspace data may be unavailable.');
+      }
+    });
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loginKey]);
 
+  // Ask the browser to keep WyBuild's local workspace once an account's data is loaded (no prompt on most browsers).
+  useEffect(() => { if (hydratedFor) void requestPersistentStorage(); }, [hydratedFor]);
+  // Make sure queued writes reach disk before the account changes or the user signs out.
+  useEffect(() => () => { void idbFlush(); }, [loginKey]);
+
   const persist = (k: string, v: unknown) => {
     if (!loginKey || hydratedFor !== loginKey) return;
-    try { localStorage.setItem(ownKey(k, loginKey), JSON.stringify(v)); } catch { /* storage full or blocked */ }
+    void idbSet(ownKey(k, loginKey), v).catch((e) => {
+      showToast(e instanceof StorageQuotaError
+        ? 'This device is out of storage space, so WyBuild could not save your workspace. Free some space and try again.'
+        : 'Could not save workspace data on this device. Check available storage and browser permissions.');
+    });
   };
   useEffect(() => { persist(STORAGE_KEYS.PROJECTS, projects); }, [projects, hydratedFor]);
   useEffect(() => { persist(STORAGE_KEYS.MEMBERS, teamMembers); }, [teamMembers, hydratedFor]);
@@ -265,10 +301,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const selectRepo = useCallback((repo: string) => {
     setSelectedRepoState(repo);
     if (!loginKey) return;
-    try {
-      if (repo) localStorage.setItem(`wybuild_selected_repo:${loginKey}`, JSON.stringify(repo));
-      else localStorage.removeItem(`wybuild_selected_repo:${loginKey}`);
-    } catch { /* storage blocked */ }
+    const key = `wybuild_selected_repo:${loginKey}`;
+    void (repo ? idbSet(key, repo) : idbDelete(key)).catch(() => showToast('Could not save the selected repository locally.'));
   }, [loginKey]);
 
   const refreshRepos = useCallback(async () => {
@@ -415,16 +449,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (authState !== 'authed') return;
     let stop = false;
     let timer = 0;
+    let ticking = false;
     const tick = async () => {
-      if (!document.hidden) await refreshRuns();
+      if (ticking) return;
+      ticking = true;
+      try { if (!document.hidden) await refreshRuns(); } finally { ticking = false; }
       if (stop) return;
+      window.clearTimeout(timer);
       const active = awaitingRef.current || buildsRef.current.some((b) => b.status === 'running' || b.status === 'queued');
       timer = window.setTimeout(tick, active ? 3500 : 30000);
     };
     tick();
+    // Coming back to the tab refreshes immediately instead of waiting out the slow background interval.
+    const onVisible = () => { if (!document.hidden && !stop) { window.clearTimeout(timer); void tick(); } };
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
       stop = true;
       window.clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, [authState, refreshRuns]);
 
@@ -441,6 +483,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (authState !== 'authed' || !activeBuildId) return;
     fetchDetail(activeBuildId);
     const t = window.setInterval(() => {
+      if (document.hidden) return; // no log polling for a tab nobody is looking at
       const b = buildsRef.current.find((x) => x.id === activeBuildId);
       if (b && (b.status === 'running' || b.status === 'queued' || b.steps.length === 0)) fetchDetail(activeBuildId);
     }, 3000);

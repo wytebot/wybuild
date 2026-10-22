@@ -17,7 +17,19 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+// Identical GETs that are already in flight share one network call (several components ask for the same data at once).
+const inflightGets = new Map<string, Promise<unknown>>();
+function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const method = (init.method || 'GET').toUpperCase();
+  if (method !== 'GET' || init.body || init.signal) return requestNow<T>(path, init);
+  const existing = inflightGets.get(path);
+  if (existing) return existing as Promise<T>;
+  const p = requestNow<T>(path, init).finally(() => { if (inflightGets.get(path) === p) inflightGets.delete(path); });
+  inflightGets.set(path, p);
+  return p;
+}
+
+async function requestNow<T>(path: string, init: RequestInit = {}): Promise<T> {
   const method = init.method || 'GET';
   const where = `${method} /api/${path.split('?')[0]}`;
   let res: Response;
@@ -123,7 +135,7 @@ export const api = {
   chargeAction: (action: string, operationId: string) => post<{ ok: true; charged: number; balance: number; freeForever?: boolean }>('credits/action', { action, operationId }),
   automationDiagnose: (body: { repo: string; runId: string | number }) => post<{ diagnosis: { title: string; category: string; summary: string; rootCause: string; suggestions: string[]; canAutoFix: boolean; filesToInspect?: string[]; manualSteps?: string[] }; engine: string; creditsCharged: number; creditsRemaining: number; usage?: { inputTokens: number; outputTokens: number } }>('automation/diagnose', body),
   automationFix: (body: { repo: string; runId: string | number; branch: string }) => post<{ applied: boolean; summary: string; fixes: { path: string; reason: string; commit: string }[]; settingsChanges: { key: string; value: string; where: string }[]; manualSteps: string[]; creditsCharged: number; creditsRemaining: number; engine: string }>('automation/fix', body),
-  automationIntegrateApi: (body: { repo: string; branch: string; integrationId: string; goal?: string; shell?: 'twa' | 'standalone' }) => post<{ applied: boolean; integration: string; summary: string; fixes: { path: string; reason: string; commit: string }[]; manualSteps: string[]; requiresSecrets: boolean; detectedCapabilities?: string[]; verificationChecks?: string[]; status?: string; actualCostUsd?: number; engine: string; creditsCharged: number; creditsRemaining: number; usage?: { inputTokens: number; outputTokens: number }; buildVerified?: boolean; verificationMessage?: string }>('automation/integrate-api', body),
+  automationIntegrateApi: (body: { repo: string; branch: string; integrationId: string; goal?: string; shell?: 'twa' | 'standalone' }) => post<{ applied: boolean; upToDate?: boolean; integration: string; summary: string; fixes: { path: string; reason: string; commit: string }[]; manualSteps: string[]; requiresSecrets: boolean; detectedCapabilities?: string[]; verificationChecks?: string[]; status?: string; actualCostUsd?: number; engine: string; creditsCharged: number; creditsRemaining: number; usage?: { inputTokens: number; outputTokens: number }; buildVerified?: boolean; verificationMessage?: string }>('automation/integrate-api', body),
   logout: () => post<{ ok: true }>('auth/logout', {}),
   loginWithToken: (token: string) => post<{ ok: true; login: string; tokenType: 'classic' | 'fine-grained' }>('auth/token', { token }),
   repos: () => request<{ repos: RepoInfo[] }>('repos').then((r) => r.repos),

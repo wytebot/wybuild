@@ -1,4 +1,5 @@
-# wybuild-twa-workflow-version: 37
+# wybuild-twa-workflow-version: 38
+# v38: Synced the installable workflow with the icon-apply step (ships apply-launcher-icon.mjs) so TWA builds keep the selected launcher icon.
 # v37: Fix literal \n written into MainActivity.java by capacitor-finalize.py (share-target patch).
 name: WyBuild Capacitor + Gradle (TWA fallback)
 # v34: Capacitor builds apply the project icon (launcher + splash) instead of Capacitor's default.
@@ -441,6 +442,19 @@ jobs:
           fi
           # 2) Standalone app shell, permissions, notifications, fullscreen, link rules, predictive back, notification icon, push kit
           python3 .github/wybuild/twa-native.py "$P"
+          # Bubblewrap's manifest generation can leave a generic launcher icon on some sites/configurations.
+          # Explicitly apply the same iconUrl/maskableIconUrl that WyBuild detected or the user selected.
+          mkdir -p "$WB_TOOLS/icon"
+          (cd "$WB_TOOLS/icon" && { [ -f package.json ] || echo '{"name":"wybuild-icon","private":true}' > package.json; } && npm install --no-audit --no-fund --package-lock=false sharp@0.33.5)
+          NODE_PATH="$WB_TOOLS/icon/node_modules" node - <<'NODEICONCHECK'
+          const fs = require('fs');
+          const cfg = JSON.parse(process.env.TWA_CONFIG || '{}');
+          const manifest = JSON.parse(fs.readFileSync(process.env.WB_OUT + '/twa-resolved.json', 'utf8'));
+          if (!(cfg.iconUrl || manifest.iconUrl || cfg.maskableIconUrl || manifest.maskableIconUrl)) {
+            console.error('::error::No valid launcher icon URL was resolved. Add a 192px or 512px PNG icon to your web app manifest or set Icon in WyBuild.'); process.exit(1);
+          }
+          NODEICONCHECK
+          NODE_PATH="$WB_TOOLS/icon/node_modules" node .github/wybuild/apply-launcher-icon.mjs
           # 3) Optional hook for anything else: runs inside the generated project
           if [ -f wybuild/twa-patch.sh ]; then
             echo "Running wybuild/twa-patch.sh"; (cd "$P" && bash "$GITHUB_WORKSPACE/wybuild/twa-patch.sh")

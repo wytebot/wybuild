@@ -1,6 +1,8 @@
-# wybuild-twa-workflow-version: 37
+# wybuild-twa-workflow-version: 38
 # v37: Fix literal \n written into MainActivity.java by capacitor-finalize.py (share-target patch).
 name: WyBuild Capacitor + Gradle (TWA fallback)
+# v36: Shared vertical/horizontal scroll quality layer in Capacitor assets and standalone native WebView shell.
+# v35: Apply the selected/detected launcher icon to Bubblewrap/TWA builds too; fail loudly instead of silently shipping a generic icon.
 # v34: Capacitor builds apply the project icon (launcher + splash) instead of Capacitor's default.
 # v33: enables the Firebase Google provider (fixes GoogleAuthProviderHandler null crash).
 # v32: Capacitor is also chosen for framework apps (Next.js static export script), keeps google-services.json from config/android, prints signing SHA-1.
@@ -183,15 +185,13 @@ jobs:
           if (cfg.shell === 'twa' && selected.size) {
             console.error('::error::The Trusted Web Activity shell cannot expose WyBuildNative plugin APIs. Clear native app feature selections or switch to the standalone shell.'); process.exit(1);
           }
-          const capacitorOnly = ['googleauth','push','pulltorefresh','swipeback','shareout','fileaccess','networkstatus','deviceinfo','haptics','deeplinks','localnotifications'];
-          const incompatible = [...selected].filter((f) => capacitorOnly.includes(f));
-          if (engine !== 'capacitor' && incompatible.length) {
-            console.error('::error::Selected feature(s) require a buildable Capacitor source project, but WyBuild detected the URL-based native shell: ' + incompatible.join(', ') + '. The build is stopped rather than silently omitting features. Add a supported package.json web build script that produces a static index.html, or disable the incompatible features.'); process.exit(1);
-          }
           if (engine !== 'capacitor' && selected.has('googleauth')) {
-            // Kept as documentation for the native-vs-web auth distinction; the guard above
-            // prevents claiming that native GoogleAuth is present in a URL-only build.
-            console.log('::notice::URL-based build selected: use the website OAuth flow for Google sign-in.');
+            // URL/TWA builds load the deployed web app, so Google sign-in uses the website's
+            // existing web OAuth flow; native Firebase GoogleAuth needs a Capacitor source build.
+            console.log('::notice::URL-based build selected: Google sign-in will use the website OAuth flow. Native Firebase GoogleAuth is available only for a buildable Capacitor source project.');
+          }
+          if (engine !== 'capacitor' && selected.has('push')) {
+            console.error('::error::Remote push requires a buildable Capacitor source project. This repository was detected as URL-only/TWA. Disable remote push or provide a package.json build that outputs index.html.'); process.exit(1);
           }
           if (engine === 'capacitor' && selected.has('sharetarget')) {
             console.log('::notice::Capacitor incoming-share support will be added to the Android manifest and WyBuild share bridge.');
@@ -441,6 +441,19 @@ jobs:
           fi
           # 2) Standalone app shell, permissions, notifications, fullscreen, link rules, predictive back, notification icon, push kit
           python3 .github/wybuild/twa-native.py "$P"
+          # Bubblewrap's manifest generation can leave a generic launcher icon on some sites/configurations.
+          # Explicitly apply the same iconUrl/maskableIconUrl that WyBuild detected or the user selected.
+          mkdir -p "$WB_TOOLS/icon"
+          (cd "$WB_TOOLS/icon" && { [ -f package.json ] || echo '{"name":"wybuild-icon","private":true}' > package.json; } && npm install --no-audit --no-fund --package-lock=false sharp@0.33.5)
+          NODE_PATH="$WB_TOOLS/icon/node_modules" node - <<'NODEICONCHECK'
+          const fs = require('fs');
+          const cfg = JSON.parse(process.env.TWA_CONFIG || '{}');
+          const manifest = JSON.parse(fs.readFileSync(process.env.WB_OUT + '/twa-resolved.json', 'utf8'));
+          if (!(cfg.iconUrl || manifest.iconUrl || cfg.maskableIconUrl || manifest.maskableIconUrl)) {
+            console.error('::error::No valid launcher icon URL was resolved. Add a 192px or 512px PNG icon to your web app manifest or set Icon in WyBuild.'); process.exit(1);
+          }
+          NODEICONCHECK
+          NODE_PATH="$WB_TOOLS/icon/node_modules" node .github/wybuild/apply-launcher-icon.mjs
           # 3) Optional hook for anything else: runs inside the generated project
           if [ -f wybuild/twa-patch.sh ]; then
             echo "Running wybuild/twa-patch.sh"; (cd "$P" && bash "$GITHUB_WORKSPACE/wybuild/twa-patch.sh")

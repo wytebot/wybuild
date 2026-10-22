@@ -11,7 +11,7 @@ import JSZip from 'jszip';
 
 const TWA_WORKFLOW_FILE = 'wybuild-twa.yml';
 const TWA_WORKFLOW_PATH = `.github/workflows/${TWA_WORKFLOW_FILE}`;
-const TWA_WORKFLOW_VERSION = 37;
+const TWA_WORKFLOW_VERSION = 38;
 const TWA_MIN_SDK = 24; // androidbrowserhelper 2.7.x declares minSdk 24; a lower value fails the manifest merge
 // every file committed to a repo for each workflow kind: [path in repo, path in ./workflow]
 const WORKFLOW_KINDS = {
@@ -25,6 +25,7 @@ const WORKFLOW_KINDS = {
       ['.github/wybuild/twa-generate.mjs', 'wybuild/twa-generate.mjs'],
       ['.github/wybuild/twa-verify.sh', 'wybuild/twa-verify.sh'],
       ['.github/wybuild/twa-native.py', 'wybuild/twa-native.py'],
+      ['.github/wybuild/apply-launcher-icon.mjs', 'wybuild/apply-launcher-icon.mjs'],
       ['.github/wybuild/WyBuildActivity.java', 'wybuild/WyBuildActivity.java'],
       ['.github/wybuild/WyBuildReminderReceiver.java', 'wybuild/WyBuildReminderReceiver.java'],
       ['.github/wybuild/capacitor-bridge.entry.js', 'wybuild/capacitor-bridge.entry.js'],
@@ -683,6 +684,11 @@ function preparePluginDependency(packageText, integrationId) {
   pkg.dependencies = { ...(pkg.dependencies || {}), [plugin]: `^${major}.0.0` };
   return { content: JSON.stringify(pkg, null, 2) + '\n', plugin, major };
 }
+// Git blob SHA-1 of a UTF-8 string, so an unchanged managed file can be detected without another API call.
+function gitBlobSha(content) {
+  const body = Buffer.from(String(content), 'utf8');
+  return crypto.createHash('sha1').update(Buffer.concat([Buffer.from(`blob ${body.length}\0`), body])).digest('hex');
+}
 async function createAtomicIntegrationCommit(session, repo, branch, changes, integrationLabel) {
   // Build one Git tree and one commit, so either every accepted file lands or none does.
   // GitHub uses singular /git/ref/{ref} for GET, but plural /git/refs/{ref} for PATCH.
@@ -768,6 +774,7 @@ async function wybuildIntegrateApi(session, repo, branchHint, integrationId, use
   if (!isLifetimeFree(session.login) && wallet.balance < baseCharge) throw new HttpError(402, `WyBuild integration automation costs ${baseCharge} credits. Your balance is ${wallet.balance}.`, 'INSUFFICIENT_CREDITS', { details: { balance: wallet.balance, required: baseCharge } });
   const tree = await ghJson(session, `/repos/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`, undefined, 'inspecting repository for deterministic integration');
   const paths = (tree.tree || []).filter((x) => x.type === 'blob').map((x) => x.path);
+  const treeEntryByPath = new Map((tree.tree || []).filter((x) => x.type === 'blob').map((x) => [x.path, x]));
   const pkgEntry = (tree.tree || []).find((x) => x.type === 'blob' && x.path === 'package.json' && Number(x.size || 0) < 100000);
   const capRequired = new Set(['native_downloads','native_camera','native_share','notifications_local','push_notifications','device_info','network_status','haptics','clipboard']);
   if (shell === 'twa' && capRequired.has(integrationId)) throw new HttpError(400, `${integration.label} uses native Capacitor APIs and is incompatible with the Trusted Web Activity workflow. Switch to Standard / standalone or choose a web-compatible integration.`, 'INTEGRATION_WORKFLOW_INCOMPATIBLE', { details: { integrationId, shell } });
@@ -846,12 +853,26 @@ async function wybuildIntegrateApi(session, repo, branchHint, integrationId, use
     if (!parentSha) throw new HttpError(409, 'Could not resolve the branch commit before integration.', 'INTEGRATION_BRANCH_UNKNOWN');
     if (String(userGoal || '').trim()) manualSteps.push(`Additional request recorded but not auto-applied: ${String(userGoal).trim().slice(0, 300)}. WyBuild only applies the selected verified template; custom UI placement is not inferred automatically.`);
     const commitChanges = [];
+    const unchangedPaths = [];
     for (const change of changes) {
       if (change.path === 'package.json') {
         const current = await ghJson(session, `/repos/${repo}/contents/package.json?ref=${encodeURIComponent(branch)}`, undefined, 'checking package manifest before integration');
         if (current.sha !== packageSha) throw new HttpError(409, 'package.json changed during integration. Retry on the latest branch.', 'INTEGRATION_STALE');
-      } else if (paths.includes(change.path)) throw new HttpError(409, `Target file ${change.path} already exists.`, 'INTEGRATION_TARGET_EXISTS');
+      }
+      // A path that already exists is simply overwritten by the Git tree commit (update in place).
+      // Only skip files whose committed content is already byte-identical to the template.
+      if (change.path !== 'package.json' && paths.includes(change.path)) {
+        const entry = treeEntryByPath.get(change.path);
+        const sameBlob = entry?.sha && entry.sha === gitBlobSha(change.content);
+        if (sameBlob) { unchangedPaths.push(change.path); continue; }
+      }
       commitChanges.push(change);
+    }
+    if (!commitChanges.length) {
+      let balanceAfter = charged;
+      if (!isLifetimeFree(session.login) && baseCharge > 0) balanceAfter = await refundCredits(session.login, baseCharge, 'wybuild_integration_unchanged_refund', { repo, branch, integrationId }).catch(() => charged);
+      committed = true; // nothing to roll back in the catch handler
+      return { applied: true, upToDate: true, integration: integration.label, summary: `${integration.label} helper is already up to date on ${branch}. No commit was needed and no credits were charged.`, fixes: [], manualSteps, requiresSecrets, engine: 'WyBuild Deterministic Integration Engine v1', creditsCharged: 0, creditsRemaining: isLifetimeFree(session.login) ? FREE_FOREVER_BALANCE : balanceAfter, detectedCapabilities: [`${integration.label} helper already matches the current template`], verificationChecks: ['Run the project typecheck/build command'], status: 'up_to_date', buildVerified: false, verificationMessage: 'Nothing changed.' };
     }
     const commits = await createAtomicIntegrationCommit(session, repo, branch, commitChanges, integration.label);
     committed = true;
@@ -1208,6 +1229,20 @@ async function workflowRuns(session, repo, file, perPage) {
   }
 }
 
+// Process-local memo helpers (speed): avoid repeating identical cheap-to-skip work on hot polling endpoints.
+const pushUserSeen = new Map();
+function shouldRegisterPushUser(repo, login) {
+  const key = `${repo}|${login}`; const now = Date.now();
+  if ((pushUserSeen.get(key) || 0) > now - 15 * 60_000) return false;
+  if (pushUserSeen.size > 2000) pushUserSeen.clear();
+  pushUserSeen.set(key, now);
+  return true;
+}
+// Tiny TTL cache keyed by string. Values are only ever safe-to-be-slightly-stale read results.
+const ttlCache = new Map();
+function ttlGet(key) { const e = ttlCache.get(key); if (!e) return undefined; if (e.exp < Date.now()) { ttlCache.delete(key); return undefined; } return e.value; }
+function ttlSet(key, value, ms) { if (ttlCache.size > 500) { for (const [k, v] of ttlCache) if (v.exp < Date.now()) ttlCache.delete(k); if (ttlCache.size > 500) ttlCache.clear(); } ttlCache.set(key, { value, exp: Date.now() + ms }); return value; }
+
 async function listRuns(session, repo) {
   // GitHub accepts up to 100 runs per page; 15 was silently hiding older pipelines.
   const runs = await workflowRuns(session, repo, TWA_WORKFLOW_FILE, 100);
@@ -1259,15 +1294,31 @@ function splitLogsIntoSteps(text, steps) {
   return bucket.map((b) => b.filter(Boolean).slice(-300));
 }
 
+const detailCache = new Map();
 async function runDetail(session, repo, id) {
+  // A finished run's steps/logs do not change, so re-downloading every job log on each click is wasted time.
+  const ck = `${session.login}|${repo}|${id}`;
+  const hit = detailCache.get(ck);
+  if (hit && hit.exp > Date.now()) return hit.build;
+  const build = await runDetailUncached(session, repo, id);
+  const settled = build && !(build.detailWarnings && build.detailWarnings.length) &&
+    (['failed', 'cancelled'].includes(build.status) || (build.status === 'success' && ['signed', 'failed'].includes(build.signing?.state)));
+  if (settled) {
+    if (detailCache.size > 60) detailCache.delete(detailCache.keys().next().value);
+    detailCache.set(ck, { build, exp: Date.now() + 90_000 });
+  }
+  return build;
+}
+async function runDetailUncached(session, repo, id) {
   // Fetch the run itself as the required resource. Jobs and artifacts are independent GitHub
   // endpoints: one can be temporarily unavailable (or forbidden by a narrower token) without
   // throwing away the other data and leaving the whole Build page empty.
-  const run = await ghJson(session, `/repos/${repo}/actions/runs/${id}`);
-  const [jobsResult, artsResult] = await Promise.allSettled([
-    ghJson(session, `/repos/${repo}/actions/runs/${id}/jobs?per_page=100`),
-    ghJson(session, `/repos/${repo}/actions/runs/${id}/artifacts?per_page=100`),
-  ]);
+  // Run, jobs and artifacts are independent GitHub calls: start them together instead of one after another.
+  const runPromise = ghJson(session, `/repos/${repo}/actions/runs/${id}`);
+  const jobsPromise = ghJson(session, `/repos/${repo}/actions/runs/${id}/jobs?per_page=100`);
+  const artsPromise = ghJson(session, `/repos/${repo}/actions/runs/${id}/artifacts?per_page=100`);
+  const run = await runPromise.catch((e) => { jobsPromise.catch(() => {}); artsPromise.catch(() => {}); throw e; });
+  const [jobsResult, artsResult] = await Promise.allSettled([jobsPromise, artsPromise]);
   const warnings = [];
   const jobs = jobsResult.status === 'fulfilled' && Array.isArray(jobsResult.value?.jobs)
     ? jobsResult.value : { jobs: [] };
@@ -2750,13 +2801,16 @@ async function route(req, res, path, query) {
 
   if (path === 'repos' && m === 'GET') {
     // every repo the signed-in user can see, newest push first (up to 300)
+    const cacheKey = `repos|${session.login}`;
+    const cached = query.fresh ? undefined : ttlGet(cacheKey);
+    if (cached) return send(res, 200, cached);
+    // fetch the three pages together instead of one after another (about 3x faster for accounts with many repos)
+    const pages = await Promise.all([1, 2, 3].map((page) => ghJson(session, `/user/repos?per_page=100&page=${page}&sort=pushed&affiliation=owner,collaborator,organization_member`)));
     const list = [];
-    for (let page = 1; page <= 3; page++) {
-      const part = await ghJson(session, `/user/repos?per_page=100&page=${page}&sort=pushed&affiliation=owner,collaborator,organization_member`);
-      list.push(...part);
-      if (part.length < 100) break;
-    }
-    return send(res, 200, { repos: list.map((r) => ({ fullName: r.full_name, private: r.private, defaultBranch: r.default_branch, canPush: !!r.permissions?.push })) });
+    for (const part of pages) { list.push(...part); if (part.length < 100) break; }
+    const payload = { repos: list.map((r) => ({ fullName: r.full_name, private: r.private, defaultBranch: r.default_branch, canPush: !!r.permissions?.push })) };
+    ttlSet(cacheKey, payload, 20_000);
+    return send(res, 200, payload);
   }
 
   if (path === 'inspect-repo' && m === 'GET') {
@@ -3124,7 +3178,8 @@ async function route(req, res, path, query) {
 
   if (path === 'runs' && m === 'GET') {
     const repos = String(query.repos || '').split(',').filter(Boolean).slice(0, 10).map(checkRepo);
-    await Promise.all(repos.map((repo) => kv.sadd(pushRepoUsers(repo), session.login).catch(() => {})));
+    // Registering the user for push fan-out only needs to happen once in a while, not on every 3.5s poll.
+    await Promise.all(repos.filter((repo) => shouldRegisterPushUser(repo, session.login)).map((repo) => kv.sadd(pushRepoUsers(repo), session.login).catch(() => { pushUserSeen.delete(`${repo}|${session.login}`); })));
     const results = await Promise.all(repos.map(async (repo) => {
       try {
         return (await listRuns(session, repo)).map((r) => mapRun(r, repo));
