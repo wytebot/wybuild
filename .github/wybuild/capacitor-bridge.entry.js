@@ -115,7 +115,16 @@ const native = {
     read: (path, options = {}) => safe(() => Filesystem.readFile({ path, directory: Directory.Documents, ...options })),
     delete: (path) => safe(() => Filesystem.deleteFile({ path, directory: Directory.Documents })),
     list: (path = '') => safe(() => Filesystem.readdir({ path, directory: Directory.Documents })),
-    download: async (url, filename) => safe(async () => { const r = await fetch(url); if (!r.ok) throw new Error(`Download failed (${r.status})`); const blob = await r.blob(); const data = await new Promise((resolve, reject) => { const fr = new FileReader(); fr.onload = () => resolve(String(fr.result).split(',')[1]); fr.onerror = reject; fr.readAsDataURL(blob); }); return Filesystem.writeFile({ path: filename || new URL(url).pathname.split('/').pop() || 'download.bin', data, directory: Directory.Documents, recursive: true }); }),
+    download: async (url, filename, options = {}) => safe(async () => {
+      const parsed = new URL(url, location.href);
+      if (!['https:', 'http:'].includes(parsed.protocol) || parsed.username || parsed.password) throw new Error('Downloads must use a safe HTTP(S) URL.');
+      const safeName = String(filename || parsed.pathname.split('/').pop() || 'download.bin').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 150) || 'download.bin';
+      // Use native streaming instead of fetch->Blob->base64, which can exhaust Android WebView memory on APK/AAB ZIPs.
+      const saved = await Filesystem.downloadFile({ url: parsed.href, path: safeName, directory: Directory.Documents });
+      const uri = saved?.path || saved?.uri;
+      if (options.shareAfterSave && uri) await Share.share({ title: safeName, text: 'Downloaded file', url: uri, dialogTitle: 'Save or share downloaded file' });
+      return { ...saved, saved: true, filename: safeName, directory: 'Documents', uri };
+    }),
   },
   haptics: { impact: (style = 'medium') => safe(() => Haptics.impact({ style: ({ light: ImpactStyle.Light, heavy: ImpactStyle.Heavy, medium: ImpactStyle.Medium })[style] || ImpactStyle.Medium })), success: () => safe(() => Haptics.notification({ type: NotificationType.Success })), vibrate: (duration = 300) => safe(() => Haptics.vibrate({ duration })) },
   network: { status: () => safe(() => Network.getStatus()), watch: (callback) => Network.addListener('networkStatusChange', callback) },
