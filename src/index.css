@@ -33,7 +33,7 @@
 /* ---- Mobile-first safeguards ---- */
 @layer base {
   html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; }
-  body { overflow-wrap: anywhere; overscroll-behavior-y: none; }
+  body { overflow-wrap: anywhere; }
   /* 16px inputs on phones stop iOS/Android from zooming the page on focus */
   @media (max-width: 639px) {
     input, select, textarea { font-size: 16px !important; }
@@ -122,7 +122,7 @@ body { height: 100%; margin: 0; overflow: hidden; }
   padding-right: env(safe-area-inset-right, 0px);
 }
 .wybuild-app-shell > *, .wybuild-main { min-height: 0; }
-.wybuild-main { overscroll-behavior-y: contain; -webkit-overflow-scrolling: touch; }
+.wybuild-main { overscroll-behavior-y: auto; -webkit-overflow-scrolling: touch; }
 .wybuild-sidebar {
   height: var(--wybuild-viewport-height, 100dvh);
   max-height: var(--wybuild-viewport-height, 100dvh);
@@ -189,3 +189,15 @@ body { height: 100%; margin: 0; overflow: hidden; }
     padding-bottom: max(12px, env(safe-area-inset-bottom, 0px));
   }
 }
+
+
+/* Page-level content must participate in the single app scroll viewport. Avoid nested page scroll regions. */
+.wybuild-main > :where(.h-full.overflow-y-auto, .h-screen.overflow-y-auto, .min-h-screen.overflow-y-auto) {
+  height: auto !important;
+  min-height: 100%;
+  max-height: none !important;
+  overflow-y: visible !important;
+  overflow-x: clip;
+}
+.wybuild-main { scroll-padding-block: 12px; }
+.wybuild-main > * { overscroll-behavior-y: auto; }

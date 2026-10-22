@@ -22,11 +22,10 @@ import { NewProjectModal } from './components/modals/NewProjectModal';
 import { QuickBuildModal } from './components/modals/QuickBuildModal';
 import { LoginScreen } from './components/LoginScreen';
 import { CheckCircle2, AlertCircle } from 'lucide-react';
-import { PullToRefresh } from './components/PullToRefresh';
 import { CreditsCheckoutModal } from './components/billing/CreditsCheckoutModal';
 
 const MainLayout: React.FC = () => {
-  const { currentTab, toastMessage, builds, setActiveBuildId, setCurrentTab, authState, user, repos, refreshAll } = useApp();
+  const { currentTab, toastMessage, builds, setActiveBuildId, setCurrentTab, authState, user, repos } = useApp();
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);
   const [showQuickBuildModal, setShowQuickBuildModal] = useState(false);
   const [showBillingModal, setShowBillingModal] = useState(false);
@@ -141,7 +140,7 @@ const MainLayout: React.FC = () => {
 
       {/* Main View Area */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        <PullToRefresh onRefresh={refreshAll} className="wybuild-main flex-1 overflow-y-auto overflow-x-hidden min-w-0">
+        <div className="wybuild-main flex-1 overflow-y-auto overflow-x-hidden min-w-0">
           <Header
             onOpenNewProject={() => setShowNewProjectModal(true)}
             onOpenQuickBuild={() => setShowQuickBuildModal(true)}
@@ -164,7 +163,7 @@ const MainLayout: React.FC = () => {
               onOpenQuickBuild={() => setShowQuickBuildModal(true)}
                 />
           )}
-        </PullToRefresh>
+        </div>
       </div>
 
       {/* Toast Notification Banner */}

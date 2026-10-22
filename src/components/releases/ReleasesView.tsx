@@ -118,7 +118,7 @@ export const ReleasesView: React.FC = () => {
   const blocked = !prep || prep.releaseExists || !prep.canPush || !tag.trim() || !picked.size || publishing;
 
   return (
-    <div className="h-full overflow-y-auto p-4 md:p-8">
+    <div className="min-h-full p-4 md:p-8 pb-10">
       <div className="max-w-3xl mx-auto space-y-5">
         <div>
           <h1 className="text-xl font-bold text-white flex items-center gap-2"><Rocket className="w-5 h-5 text-emerald-300" /> Release to GitHub</h1>
