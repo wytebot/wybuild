@@ -167,7 +167,9 @@ function redirect(res, location, cookies = []) {
 async function streamArtifactDownload(res, signedUrl, filename) {
   // Proxy GitHub's short-lived signed artifact URL instead of redirecting the browser/WebView.
   // This avoids Android WebView download-manager and cross-origin redirect inconsistencies.
-  const upstream = await fetch(signedUrl, { redirect: 'follow' });
+  const ac = new AbortController();
+  res.on('close', () => { if (!res.writableEnded) ac.abort(); }); // client left: stop pulling bytes from GitHub
+  const upstream = await fetch(signedUrl, { redirect: 'follow', signal: ac.signal });
   if (!upstream.ok || !upstream.body) {
     throw new HttpError(502, `GitHub artifact storage returned HTTP ${upstream.status}. Retry once; if it persists, rebuild because the artifact may have expired.`, 'ARTIFACT_DOWNLOAD');
   }
@@ -3313,6 +3315,10 @@ async function route(req, res, path, query) {
   if (path === 'artifact' && m === 'GET') {
     const repo = checkRepo(query.repo);
     if (!/^\d+$/.test(query.id || '')) throw new HttpError(400, 'Invalid artifact id');
+    // mode=link: return GitHub's short-lived pre-signed storage URL instead of proxying the bytes. The app then
+    // downloads straight from GitHub's CDN (no Vercel hop, no 60 s function limit, no session cookie needed).
+    const wantLink = query.mode === 'link';
+    let loc, filename;
     const sref = await signedArtifactRef(query.id);
     if (sref) { // a signed build lives on the signer repo; the caller must be able to see the build run in their own repo
       const sg = signerState();
@@ -3320,14 +3326,22 @@ async function route(req, res, path, query) {
       const seen = await gh(session, `/repos/${repo}/actions/runs/${sref.runId}`);
       if (!seen.ok) throw new HttpError(404, 'Signed build not found.', 'ARTIFACT_GONE');
       const sz = await signerGh(`/repos/${sg.repo}/actions/artifacts/${query.id}/zip`, { redirect: 'manual' });
-      const sloc = sz.headers.get('location');
-      if (!sloc) throw new HttpError(404, 'The signed build has expired (kept 14 days). Build again to get a fresh signed copy.', 'ARTIFACT_GONE');
-      return await streamArtifactDownload(res, sloc, `wybuild-artifact-${query.id}.zip`);
+      loc = sz.headers.get('location');
+      if (!loc) throw new HttpError(404, 'The signed build has expired (kept 14 days). Build again to get a fresh signed copy.', 'ARTIFACT_GONE');
+      filename = `wybuild-artifact-${query.id}.zip`;
+    } else {
+      const r = await gh(session, `/repos/${repo}/actions/artifacts/${query.id}/zip`, { redirect: 'manual' });
+      loc = r.headers.get('location');
+      if (!loc) throw new HttpError(404, `GitHub has no downloadable artifact ${query.id} in ${repo} (HTTP ${r.status}).`, 'ARTIFACT_GONE', { hint: 'Artifacts expire after the repository retention period (default 90 days) or when the run is deleted. Rebuild to get a fresh one.' });
+      filename = `wybuild-${repo.replace('/', '-')}-artifact-${query.id}.zip`;
     }
-    const r = await gh(session, `/repos/${repo}/actions/artifacts/${query.id}/zip`, { redirect: 'manual' });
-    const loc = r.headers.get('location');
-    if (!loc) throw new HttpError(404, `GitHub has no downloadable artifact ${query.id} in ${repo} (HTTP ${r.status}).`, 'ARTIFACT_GONE', { hint: 'Artifacts expire after the repository retention period (default 90 days) or when the run is deleted. Rebuild to get a fresh one.' });
-    return await streamArtifactDownload(res, loc, `wybuild-${repo.replace('/', '-')}-artifact-${query.id}.zip`);
+    if (wantLink) {
+      let u; try { u = new URL(loc); } catch { u = null; }
+      if (!u || u.protocol !== 'https:') throw new HttpError(502, 'GitHub returned an unusable download address. Retry once.', 'ARTIFACT_DOWNLOAD');
+      res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+      return send(res, 200, { ok: true, url: u.href, filename });
+    }
+    return await streamArtifactDownload(res, loc, filename);
   }
 
   if (path === 'signing/reset' && post) {

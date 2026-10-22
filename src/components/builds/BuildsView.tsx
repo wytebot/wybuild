@@ -33,6 +33,7 @@ export const BuildsView: React.FC = () => {
   const [aiDone, setAiDone] = useState(false);
   const [downloadingArtifact, setDownloadingArtifact] = useState<number | string | null>(null);
   const [downloadError, setDownloadError] = useState('');
+  const [downloadPct, setDownloadPct] = useState<number | null>(null);
 
   // while a new run is being created the old build (and its logs) must not stay on screen
   const selectedBuild = awaitingNewBuild ? undefined : builds.find((b) => b.id === activeBuildId) || builds[0];
@@ -57,52 +58,74 @@ export const BuildsView: React.FC = () => {
   const downloadArtifact = async (art: BuildArtifact) => {
     if (!selectedBuild) return;
     setDownloadError('');
-    const capacitor = (window as any).Capacitor;
-    // Trusted Web Activity / normal browser: leave the URL on the anchor so Android's
-    // DownloadListener / Chrome download manager handles the streamed ZIP natively.
-    if (!capacitor?.isNativePlatform?.()) return;
+    setDownloadPct(null);
     setDownloadingArtifact(art.id ?? art.name);
+    const capacitor = (window as any).Capacitor;
+    const isNative = !!capacitor?.isNativePlatform?.();
+    // The Capacitor APK loads the live site, so location.origin is normally right; fall back for a bundled copy.
+    const appOrigin = /^https?:$/.test(window.location.protocol) && window.location.hostname !== 'localhost'
+      ? window.location.origin
+      : 'https://wybuild-black.vercel.app';
+    const proxyUrl = new URL(art.downloadUrl, appOrigin).href;
+    const safeName = String(art.name || 'wybuild-artifact').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 140) || 'wybuild-artifact';
+    const fileName = /\.zip$/i.test(safeName) ? safeName : `${safeName}.zip`;
+    let progressHandle: { remove: () => Promise<void> } | null = null;
     try {
-      // Capacitor serves the UI from https://localhost, so resolving a relative API URL
-      // against window.location.href incorrectly targets localhost and produces
-      // "Unsupported url". Resolve WyBuild API paths against the deployed app origin.
-      const appOrigin = /^https?:$/.test(window.location.protocol) && window.location.hostname !== 'localhost'
-        ? window.location.origin
-        : 'https://wybuild-black.vercel.app';
-      const url = new URL(art.downloadUrl, appOrigin).href;
-      if (!/^https:\/\//i.test(url)) throw new Error('Artifact URL must use HTTPS.');
-      const safeName = String(art.name || 'wybuild-artifact.zip').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 150) || 'wybuild-artifact.zip';
-      const { Filesystem, Directory } = await import('@capacitor/filesystem');
-      // The artifact API is session-cookie protected. Native HTTP download plugins do not
-      // reliably share the WebView's HttpOnly session cookie, so fetch it in the authenticated
-      // WebView first, then save it to app Documents. This also handles same-origin API paths.
-      const response = await fetch(url, { credentials: 'include', cache: 'no-store' });
-      if (!response.ok) {
-        if (response.status === 401 || response.status === 403) throw new Error('Your WyBuild session expired or lacks access. Sign in again and retry.');
-        throw new Error(`Artifact download failed (HTTP ${response.status}).`);
+      // 1) Ask WyBuild (authenticated, small JSON, ~1 call) for GitHub's short-lived signed storage URL.
+      //    The big file then comes straight from GitHub: no Vercel hop, no 60 s function limit, and no
+      //    session cookie needed by the native downloader.
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 20000);
+      let direct = '';
+      try {
+        const linkUrl = proxyUrl + (proxyUrl.includes('?') ? '&' : '?') + 'mode=link';
+        const r = await fetch(linkUrl, { credentials: 'include', cache: 'no-store', signal: ctrl.signal });
+        if (r.status === 401 || r.status === 403) throw new Error('Your WyBuild session expired or lacks access. Sign in again and retry.');
+        const data = await r.json().catch(() => ({} as any));
+        if (!r.ok) throw new Error(data?.error || `Artifact download failed (HTTP ${r.status}).`);
+        direct = String(data?.url || '');
+        if (!/^https:\/\//i.test(direct)) throw new Error('The server did not return a download address. Retry or rebuild.');
+      } finally { clearTimeout(timer); }
+
+      if (!isNative) {
+        // Browser / TWA: navigating to the signed URL triggers the normal download (Content-Disposition: attachment).
+        window.location.assign(direct);
+        return;
       }
-      const blob = await response.blob();
-      if (!blob.size) throw new Error('The server returned an empty artifact. Retry or rebuild.');
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onerror = () => reject(new Error('Could not prepare the artifact for Android storage.'));
-        reader.onload = () => {
-          const result = String(reader.result || '');
-          const comma = result.indexOf(',');
-          if (comma < 0) reject(new Error('Could not decode the downloaded artifact.'));
-          else resolve(result.slice(comma + 1));
-        };
-        reader.readAsDataURL(blob);
-      });
-      const saved = await Filesystem.writeFile({ path: safeName, data: base64, directory: Directory.Documents, recursive: true });
-      const uri = (saved as any)?.uri || (saved as any)?.path;
-      if (!uri) throw new Error('The artifact was downloaded but Android did not return its saved location.');
-      // Android's share/save sheet lets the user copy it to public Downloads or another app.
+
+      // 2) Capacitor APK: native streaming download straight to app storage (no fetch -> Blob -> base64 through
+      //    the JS bridge, which runs out of memory / times out on large ZIPs).
+      const { Filesystem, Directory } = await import('@capacitor/filesystem');
       const { Share } = await import('@capacitor/share');
-      await Share.share({ title: safeName, text: 'WyBuild build artifact', url: uri, dialogTitle: 'Save or share build artifact' });
+      try {
+        progressHandle = await (Filesystem as any).addListener('progress', (p: { bytes?: number; contentLength?: number }) => {
+          if (p?.contentLength && p.contentLength > 0) setDownloadPct(Math.min(99, Math.round(((p.bytes || 0) / p.contentLength) * 100)));
+        });
+        await Filesystem.downloadFile({ url: direct, path: fileName, directory: Directory.Cache, recursive: true, progress: true } as any);
+        const { uri } = await Filesystem.getUri({ path: fileName, directory: Directory.Cache });
+        if (!uri) throw new Error('The artifact was downloaded but Android did not return its saved location.');
+        // Android's share/save sheet lets the user save it to Files/Downloads or send it to another app.
+        await Share.share({ title: fileName, text: 'WyBuild build artifact', url: uri, dialogTitle: 'Save or share build artifact' });
+      } catch (nativeErr) {
+        const msg = String((nativeErr as any)?.message || nativeErr || '');
+        if (/cancel|dismiss/i.test(msg)) return; // user closed the share sheet
+        // Last resort: hand the signed URL to the system browser, whose download manager needs no app permissions.
+        const { Browser } = await import('@capacitor/browser');
+        await Browser.open({ url: direct });
+      }
     } catch (e) {
-      setDownloadError(e instanceof Error ? e.message : 'Could not download this artifact. Check your connection and try again.');
-    } finally { setDownloadingArtifact(null); }
+      const aborted = (e as any)?.name === 'AbortError';
+      if (!isNative && !aborted && !/session expired/i.test(String((e as any)?.message || ''))) {
+        // Fast path unavailable: fall back to the streaming proxy, which still downloads in a browser/TWA.
+        window.location.assign(proxyUrl);
+      } else {
+        setDownloadError(aborted ? 'The server took too long to prepare the download. Check your connection and try again.' : e instanceof Error ? e.message : 'Could not download this artifact. Check your connection and try again.');
+      }
+    } finally {
+      try { await progressHandle?.remove(); } catch { /* listener already gone */ }
+      setDownloadPct(null);
+      setDownloadingArtifact(null);
+    }
   };
 
   const runAiDiagnosis = async () => {
@@ -434,17 +457,15 @@ export const BuildsView: React.FC = () => {
                           target="_self"
                           rel="noopener"
                           aria-label={`Download build artifact ${art.name}`}
-                          title="Download the artifact ZIP. In Capacitor APKs it is saved locally and the Android save/share sheet opens; in TWA Android handles the download natively."
+                          title="Download the artifact ZIP. It comes straight from GitHub; in the Android app the save/share sheet opens when it finishes."
                           onClick={(event) => {
-                            if ((window as any).Capacitor?.isNativePlatform?.()) {
-                              event.preventDefault();
-                              void downloadArtifact(art);
-                            }
+                            event.preventDefault();
+                            if (downloadingArtifact === null) void downloadArtifact(art);
                           }}
                           className={`px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-semibold flex items-center gap-1 transition cursor-pointer text-xs ${downloadingArtifact === (art.id ?? art.name) ? 'opacity-60 pointer-events-none' : ''}`}
                         >
                           <Download className="w-3.5 h-3.5" />
-                          <span>{downloadingArtifact === (art.id ?? art.name) ? 'Downloading…' : 'Download artifact'}</span>
+                          <span>{downloadingArtifact === (art.id ?? art.name) ? (downloadPct !== null ? `Downloading ${downloadPct}%` : 'Preparing…') : 'Download artifact'}</span>
                         </a>
                         {selectedBuild.repo && selectedBuild.kind === 'twa' && art.id && (
                           <button
