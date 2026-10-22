@@ -4,6 +4,7 @@ import { useApp } from '../../context/AppContext';
 import { TerminalViewer } from './TerminalViewer';
 import { TwaBuildPanel } from '../twa/TwaBuildPanel';
 import { setReleaseHandoff } from '../../services/releaseHandoff';
+import type { BuildArtifact } from '../../types';
 import {
   CheckCircle2,
   XCircle,
@@ -30,6 +31,8 @@ export const BuildsView: React.FC = () => {
   const [aiResult, setAiResult] = useState<any>(null);
   const [aiError, setAiError] = useState('');
   const [aiDone, setAiDone] = useState(false);
+  const [downloadingArtifact, setDownloadingArtifact] = useState<number | string | null>(null);
+  const [downloadError, setDownloadError] = useState('');
 
   // while a new run is being created the old build (and its logs) must not stay on screen
   const selectedBuild = awaitingNewBuild ? undefined : builds.find((b) => b.id === activeBuildId) || builds[0];
@@ -50,6 +53,29 @@ export const BuildsView: React.FC = () => {
     }, 350);
     return () => window.clearTimeout(timer);
   }, [selectedBuild?.id, selectedBuild?.artifacts?.length, allLogs.length]);
+
+  const downloadArtifact = async (art: BuildArtifact) => {
+    if (!selectedBuild) return;
+    setDownloadError('');
+    const capacitor = (window as any).Capacitor;
+    // Trusted Web Activity / normal browser: leave the URL on the anchor so Android's
+    // DownloadListener / Chrome download manager handles the streamed ZIP natively.
+    if (!capacitor?.isNativePlatform?.()) return;
+    setDownloadingArtifact(art.id ?? art.name);
+    try {
+      const url = new URL(art.downloadUrl, window.location.href).href;
+      const safeName = String(art.name || 'wybuild-artifact.zip').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 150);
+      const { Filesystem, Directory } = await import('@capacitor/filesystem');
+      const saved = await Filesystem.downloadFile({ url, path: safeName, directory: Directory.Documents });
+      const uri = (saved as any)?.path || (saved as any)?.uri;
+      if (!uri) throw new Error('The file was downloaded but Android did not return its saved location.');
+      // Android's share/save sheet lets the user copy it to public Downloads or another app.
+      const { Share } = await import('@capacitor/share');
+      await Share.share({ title: safeName, text: 'WyBuild build artifact', url: uri, dialogTitle: 'Save or share build artifact' });
+    } catch (e) {
+      setDownloadError(e instanceof Error ? e.message : 'Could not download this artifact. Check your connection and try again.');
+    } finally { setDownloadingArtifact(null); }
+  };
 
   const runAiDiagnosis = async () => {
     if (!selectedBuild?.repo || !selectedBuild.runId) { setAiError('This build is missing its GitHub repository/run reference. Refresh build history and try again.'); return; }
@@ -380,11 +406,17 @@ export const BuildsView: React.FC = () => {
                           target="_self"
                           rel="noopener"
                           aria-label={`Download build artifact ${art.name}`}
-                          title="Download the artifact ZIP directly through WyBuild. Extract it to access the APK/AAB inside."
-                          className="px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-semibold flex items-center gap-1 transition cursor-pointer text-xs"
+                          title="Download the artifact ZIP. In Capacitor APKs it is saved locally and the Android save/share sheet opens; in TWA Android handles the download natively."
+                          onClick={(event) => {
+                            if ((window as any).Capacitor?.isNativePlatform?.()) {
+                              event.preventDefault();
+                              void downloadArtifact(art);
+                            }
+                          }}
+                          className={`px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-semibold flex items-center gap-1 transition cursor-pointer text-xs ${downloadingArtifact === (art.id ?? art.name) ? 'opacity-60 pointer-events-none' : ''}`}
                         >
                           <Download className="w-3.5 h-3.5" />
-                          <span>Download artifact</span>
+                          <span>{downloadingArtifact === (art.id ?? art.name) ? 'Downloading…' : 'Download artifact'}</span>
                         </a>
                         {selectedBuild.repo && selectedBuild.kind === 'twa' && art.id && (
                           <button
@@ -399,6 +431,7 @@ export const BuildsView: React.FC = () => {
                     </div>
                   ))}
                 </div>
+                {downloadError && <div role="alert" className="text-xs text-rose-300 rounded border border-rose-500/30 bg-rose-500/10 p-3">Download failed: {downloadError}</div>}
               </div>
             )}
 
