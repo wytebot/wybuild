@@ -377,14 +377,14 @@ export const BuildsView: React.FC = () => {
                       <div className="flex flex-col sm:flex-row gap-1.5 shrink-0">
                         <a
                           href={art.downloadUrl}
-                          download={art.name || `wybuild-artifact-${art.id}.zip`}
+                          target="_self"
                           rel="noopener"
                           aria-label={`Download build artifact ${art.name}`}
-                          title="Download the GitHub Actions artifact ZIP. Extract it to access the APK/AAB inside."
+                          title="Download the artifact ZIP directly through WyBuild. Extract it to access the APK/AAB inside."
                           className="px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-semibold flex items-center gap-1 transition cursor-pointer text-xs"
                         >
                           <Download className="w-3.5 h-3.5" />
-                          <span>Download ZIP</span>
+                          <span>Download artifact</span>
                         </a>
                         {selectedBuild.repo && selectedBuild.kind === 'twa' && art.id && (
                           <button

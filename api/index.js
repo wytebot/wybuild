@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { Readable } from 'node:stream';
 import fs from 'node:fs';
 import { kv } from '../lib/kv.js';
 import dns from 'node:dns/promises';
@@ -162,6 +163,23 @@ function redirect(res, location, cookies = []) {
   res.end();
 }
 
+async function streamArtifactDownload(res, signedUrl, filename) {
+  // Proxy GitHub's short-lived signed artifact URL instead of redirecting the browser/WebView.
+  // This avoids Android WebView download-manager and cross-origin redirect inconsistencies.
+  const upstream = await fetch(signedUrl, { redirect: 'follow' });
+  if (!upstream.ok || !upstream.body) {
+    throw new HttpError(502, `GitHub artifact storage returned HTTP ${upstream.status}. Retry once; if it persists, rebuild because the artifact may have expired.`, 'ARTIFACT_DOWNLOAD');
+  }
+  res.statusCode = 200;
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', `attachment; filename="${String(filename).replace(/[^A-Za-z0-9._-]/g, '-') }"`);
+  res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  const length = upstream.headers.get('content-length');
+  if (length && /^\d+$/.test(length)) res.setHeader('Content-Length', length);
+  Readable.fromWeb(upstream.body).on('error', () => { if (!res.writableEnded) res.destroy(); }).pipe(res);
+}
+
 function parseCookies(req) {
   const out = {};
   for (const part of (req.headers.cookie || '').split(';')) {
@@ -256,6 +274,60 @@ function bodyOf(req) {
 function checkRepo(repo) {
   if (typeof repo !== 'string' || !REPO_RE.test(repo)) throw new HttpError(400, 'Invalid repository');
   return repo;
+}
+
+
+const driveStorageKey = (login) => `wb:drive-folder:${String(login || '').toLowerCase()}`;
+function driveServiceAccount() {
+  const raw = env('DRIVE_SERVICE_ACCOUNT_JSON') || env('GOOGLE_SERVICE_ACCOUNT_JSON') || env('FIREBASE_SERVICE_ACCOUNT_JSON');
+  if (!raw) throw new HttpError(503, 'Google Drive service account is not configured on the server.', 'DRIVE_NOT_CONFIGURED', { hint: 'Set DRIVE_SERVICE_ACCOUNT_JSON to the existing service-account JSON in Vercel and redeploy.' });
+  let account;
+  try { account = JSON.parse(raw.trim().startsWith('{') ? raw : Buffer.from(raw.trim(), 'base64').toString('utf8')); } catch { throw new HttpError(503, 'The configured Drive service-account JSON is invalid; use raw JSON or base64-encoded JSON.', 'DRIVE_CONFIG_INVALID'); }
+  if (!account.client_email || !account.private_key) throw new HttpError(503, 'The configured service account is missing client_email or private_key.', 'DRIVE_CONFIG_INVALID');
+  return account;
+}
+function b64url(value) { return Buffer.from(value).toString('base64url'); }
+async function driveAccessToken() {
+  const account = driveServiceAccount();
+  const now = Math.floor(Date.now() / 1000);
+  const header = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const claims = b64url(JSON.stringify({ iss: account.client_email, scope: 'https://www.googleapis.com/auth/drive', aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 3500 }));
+  const unsigned = `${header}.${claims}`;
+  const sign = crypto.createSign('RSA-SHA256'); sign.update(unsigned); sign.end();
+  const assertion = `${unsigned}.${sign.sign(String(account.private_key).replace(/\\n/g, '\n')).toString('base64url')}`;
+  const response = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion }), signal: AbortSignal.timeout(12000) });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.access_token) throw new HttpError(502, `Google Drive service-account authorization failed (${response.status}).`, 'DRIVE_AUTH_FAILED', { hint: 'Confirm Drive API is enabled for this service account project and the private key is valid.' });
+  return data.access_token;
+}
+async function driveApi(token, path, init = {}) {
+  const response = await fetch(`https://www.googleapis.com/drive/v3/${path}`, { ...init, headers: { Authorization: `Bearer ${token}`, ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...(init.headers || {}) }, signal: AbortSignal.timeout(18000) });
+  const text = await response.text(); let data = null; try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  if (!response.ok) throw new HttpError(response.status === 404 ? 404 : response.status === 403 ? 403 : 502, data?.error?.message || `Google Drive request failed (${response.status}).`, 'DRIVE_REQUEST_FAILED', { hint: response.status === 404 || response.status === 403 ? 'Share the selected folder with the service-account email shown in the Drive storage settings, with Editor access.' : 'Retry after checking Google Drive API status.' });
+  return data;
+}
+async function driveGetContent(token, fileId) {
+  const response = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(18000) });
+  const text = await response.text();
+  if (!response.ok) throw new HttpError(response.status === 404 ? 404 : 502, `Could not read Drive history (${response.status}).`, 'DRIVE_READ_FAILED');
+  try { return JSON.parse(text); } catch { throw new HttpError(422, 'Drive history file contains invalid JSON. It was left untouched.', 'DRIVE_HISTORY_INVALID'); }
+}
+async function driveWriteHistory(token, folderId, payload) {
+  const q = encodeURIComponent(`'${folderId.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}' in parents and name = 'wybuild-history.json' and trashed = false`);
+  const found = await driveApi(token, `files?q=${q}&fields=files(id,name,mimeType)&pageSize=100`);
+  const files = Array.isArray(found.files) ? found.files : [];
+  if (files.length > 1) throw new HttpError(409, 'Multiple wybuild-history.json files exist in this folder. Rename duplicates before syncing.', 'DRIVE_HISTORY_DUPLICATE');
+  const body = JSON.stringify(payload);
+  if (files[0]) {
+    const response = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(files[0].id)}?uploadType=media`, { method: 'PATCH', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body, signal: AbortSignal.timeout(18000) });
+    const data = await response.json().catch(() => ({})); if (!response.ok) throw new HttpError(502, data?.error?.message || `Could not update Drive history (${response.status}).`, 'DRIVE_WRITE_FAILED');
+    return files[0].id;
+  }
+  const boundary = `wybuild_${crypto.randomBytes(8).toString('hex')}`;
+  const multipart = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({ name: 'wybuild-history.json', mimeType: 'application/json', parents: [folderId] })}\r\n--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${body}\r\n--${boundary}--`;
+  const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name', { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': `multipart/related; boundary=${boundary}` }, body: multipart, signal: AbortSignal.timeout(18000) });
+  const data = await response.json().catch(() => ({})); if (!response.ok || !data.id) throw new HttpError(502, data?.error?.message || `Could not create Drive history (${response.status}).`, 'DRIVE_WRITE_FAILED');
+  return data.id;
 }
 
 const utcDay = (d = new Date()) => d.toISOString().slice(0, 10);
@@ -2432,6 +2504,64 @@ async function route(req, res, path, query) {
   /* everything below needs a session */
   const session = requireSession(req);
 
+  if (path === 'drive-storage' && m === 'GET') {
+    const config = await kv.get(driveStorageKey(session.login));
+    let serviceEmail = '';
+    try { serviceEmail = driveServiceAccount().client_email; } catch {}
+    return send(res, 200, { configured: !!config?.folderId, folderId: config?.folderId || '', updatedAt: config?.updatedAt || '', serviceEmail, serviceAccountConfigured: !!serviceEmail });
+  }
+
+  if (path === 'drive-storage/validate' && post) {
+    const b = bodyOf(req); const folderId = String(b.folderId || '').trim();
+    if (!/^[A-Za-z0-9_-]{10,200}$/.test(folderId)) throw new HttpError(400, 'Enter a valid Google Drive folder ID.', 'INVALID_FOLDER_ID');
+    const current = await kv.get(driveStorageKey(session.login));
+    if (current?.folderId && current.folderId !== folderId && b.confirmRotation !== true) throw new HttpError(409, 'Changing the saved Drive folder requires explicit confirmation.', 'ROTATION_CONFIRMATION_REQUIRED');
+    if (current?.folderId === folderId) return send(res, 200, { ok: true, folderId, unchanged: true, name: current.name || '' });
+    const account = driveServiceAccount(); const token = await driveAccessToken();
+    const folder = await driveApi(token, `files/${encodeURIComponent(folderId)}?fields=id,name,mimeType,capabilities(canAddChildren,canEdit)`);
+    if (folder.mimeType !== 'application/vnd.google-apps.folder') throw new HttpError(400, 'That ID is not a Google Drive folder.', 'NOT_A_FOLDER');
+    if (folder.capabilities?.canAddChildren === false || folder.capabilities?.canEdit === false) throw new HttpError(403, `Share this folder with ${account.client_email} as an Editor.`, 'FOLDER_NOT_WRITABLE');
+    const marker = await driveApi(token, 'files?fields=id', { method: 'POST', body: JSON.stringify({ name: `.wybuild-write-probe-${crypto.randomBytes(5).toString('hex')}.tmp`, mimeType: 'text/plain', parents: [folderId] }) });
+    if (!marker?.id) throw new HttpError(502, 'Could not verify write access. Folder was not saved.', 'DRIVE_WRITE_PROBE_FAILED');
+    await driveApi(token, `files/${encodeURIComponent(marker.id)}`, { method: 'DELETE' });
+    const config = { folderId, name: String(folder.name || '').slice(0, 200), updatedAt: new Date().toISOString(), updatedBy: session.login };
+    await kv.set(driveStorageKey(session.login), config);
+    return send(res, 200, { ok: true, folderId, name: config.name, updatedAt: config.updatedAt, rotated: !!current?.folderId });
+  }
+
+  if (path === 'drive-storage/history' && m === 'GET') {
+    const config = await kv.get(driveStorageKey(session.login));
+    if (!config?.folderId) throw new HttpError(409, 'Save and validate a Drive folder ID first.', 'DRIVE_FOLDER_REQUIRED');
+    const token = await driveAccessToken();
+    const q = encodeURIComponent(`'${config.folderId.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}' in parents and name = 'wybuild-history.json' and trashed = false`);
+    const found = await driveApi(token, `files?q=${q}&fields=files(id,name,mimeType,modifiedTime)&pageSize=100`);
+    const files = Array.isArray(found.files) ? found.files : [];
+    if (files.length > 1) throw new HttpError(409, 'Multiple history files exist. Rename duplicates before reading.', 'DRIVE_HISTORY_DUPLICATE');
+    if (!files[0]) return send(res, 200, { found: false, builds: [], projects: [], updatedAt: '' });
+    const history = await driveGetContent(token, files[0].id);
+    if (Number(history.schema) !== 1 || !Array.isArray(history.builds) || !Array.isArray(history.projects)) throw new HttpError(422, 'Drive history has an unsupported format and was left untouched.', 'DRIVE_HISTORY_INVALID');
+    return send(res, 200, { found: true, fileId: files[0].id, builds: history.builds, projects: history.projects, updatedAt: history.updatedAt || '' });
+  }
+
+  if (path === 'drive-storage/history' && post) {
+    const config = await kv.get(driveStorageKey(session.login));
+    if (!config?.folderId) throw new HttpError(409, 'Save and validate a Drive folder ID first.', 'DRIVE_FOLDER_REQUIRED');
+    const b = bodyOf(req); const builds = Array.isArray(b.builds) ? b.builds.slice(0, 10000) : []; const projects = Array.isArray(b.projects) ? b.projects.slice(0, 5000) : [];
+    const safeBuild = (x) => ({ id:x.id, projectId:x.projectId, projectName:x.projectName, repo:x.repo, runId:x.runId, name:x.name, branch:x.branch, commitHash:x.commitHash, commitMessage:x.commitMessage, author:x.author, status:x.status, conclusion:x.conclusion, startedAt:x.startedAt, finishedAt:x.finishedAt, createdAt:x.createdAt, updatedAt:x.updatedAt, durationSeconds:x.durationSeconds, target:x.target, mode:x.mode, htmlUrl:x.htmlUrl, kind:x.kind, twa:x.twa ? { packageId:x.twa.packageId, output:x.twa.output, versionName:x.twa.versionName } : undefined });
+    const safeProject = (x) => ({ id:x.id, name:x.name, repoUrl:x.repoUrl, branch:x.branch, createdAt:x.createdAt, updatedAt:x.updatedAt, buildCount:x.buildCount });
+    const token = await driveAccessToken();
+    const q = encodeURIComponent(`'${config.folderId.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}' in parents and name = 'wybuild-history.json' and trashed = false`);
+    const found = await driveApi(token, `files?q=${q}&fields=files(id)&pageSize=100`); const files = Array.isArray(found.files) ? found.files : [];
+    if (files.length > 1) throw new HttpError(409, 'Multiple history files exist. Rename duplicates before syncing.', 'DRIVE_HISTORY_DUPLICATE');
+    let old = { builds: [], projects: [], owner: session.login };
+    if (files[0]) { old = await driveGetContent(token, files[0].id); if (Number(old.schema) !== 1 || !Array.isArray(old.builds) || !Array.isArray(old.projects)) throw new HttpError(422, 'Existing Drive history is invalid. Nothing was overwritten.', 'DRIVE_HISTORY_INVALID'); }
+    const merge = (prior, incoming, clean) => { const map = new Map(); for (const x of prior) if (x?.id) map.set(String(x.id), clean(x)); for (const x of incoming) if (x?.id) { const prev = map.get(String(x.id)) || {}; const next = clean(x); map.set(String(x.id), { ...prev, ...Object.fromEntries(Object.entries(next).filter(([,v]) => v !== undefined && v !== null && v !== '')) }); } return [...map.values()]; };
+    const payload = { schema: 1, updatedAt: new Date().toISOString(), owner: session.login, builds: merge(old.builds, builds, safeBuild), projects: merge(old.projects, projects, safeProject) };
+    if (payload.builds.length > 10000 || payload.projects.length > 5000) throw new HttpError(413, 'History exceeds the safe sync limit.', 'DRIVE_HISTORY_TOO_LARGE');
+    const fileId = await driveWriteHistory(token, config.folderId, payload);
+    return send(res, 200, { ok: true, fileId, buildCount: payload.builds.length, projectCount: payload.projects.length, updatedAt: payload.updatedAt });
+  }
+
   if (path === 'push/register' && post) {
     const b = bodyOf(req);
     await registerPushToken(session.login, b.token, b.platform || 'android');
@@ -3137,12 +3267,12 @@ async function route(req, res, path, query) {
       const sz = await signerGh(`/repos/${sg.repo}/actions/artifacts/${query.id}/zip`, { redirect: 'manual' });
       const sloc = sz.headers.get('location');
       if (!sloc) throw new HttpError(404, 'The signed build has expired (kept 14 days). Build again to get a fresh signed copy.', 'ARTIFACT_GONE');
-      return redirect(res, sloc);
+      return await streamArtifactDownload(res, sloc, `wybuild-artifact-${query.id}.zip`);
     }
     const r = await gh(session, `/repos/${repo}/actions/artifacts/${query.id}/zip`, { redirect: 'manual' });
     const loc = r.headers.get('location');
     if (!loc) throw new HttpError(404, `GitHub has no downloadable artifact ${query.id} in ${repo} (HTTP ${r.status}).`, 'ARTIFACT_GONE', { hint: 'Artifacts expire after the repository retention period (default 90 days) or when the run is deleted. Rebuild to get a fresh one.' });
-    return redirect(res, loc);
+    return await streamArtifactDownload(res, loc, `wybuild-${repo.replace('/', '-')}-artifact-${query.id}.zip`);
   }
 
   if (path === 'signing/reset' && post) {
