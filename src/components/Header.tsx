@@ -25,7 +25,7 @@ export const Header: React.FC<Props> = ({onOpenNewProject,onOpenQuickBuild,onTog
  const matches = useMemo(() => { const q=search.trim().toLowerCase(); return q ? PAGES.filter(([,label,words]) => `${label} ${words}`.includes(q)) : []; }, [search]);
  const go = (tab:string) => { setCurrentTab(tab); setSearch(''); setOpen(false); };
  return <>
-  <header className="h-16 shrink-0 px-3 sm:px-5 border-b border-emerald-950/70 bg-[#050707]/95 backdrop-blur flex items-center gap-3 relative z-30">
+  <header className="wybuild-sticky-header h-16 shrink-0 px-3 sm:px-5 border-b border-emerald-950/70 bg-[#050707]/95 backdrop-blur flex items-center gap-3 relative z-50">
    <button onClick={onToggleMenu} aria-label="Menu" className="w-10 h-10 rounded-lg border border-white/[.06] flex items-center justify-center text-slate-300"><Menu className="w-5 h-5"/></button>
    <div className="hidden md:block min-w-0"><div className="text-sm font-semibold text-white truncate">WyBuild</div><div className="text-[11px] text-slate-500 truncate">Repo in. Android out.</div></div>
    <div className="flex-1 max-w-xl mx-auto relative">

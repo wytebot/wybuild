@@ -201,3 +201,30 @@ body { height: 100%; margin: 0; overflow: hidden; }
 }
 .wybuild-main { scroll-padding-block: 12px; }
 .wybuild-main > * { overscroll-behavior-y: auto; }
+
+
+/* Keep global app navigation visible while the main page content scrolls. */
+.wybuild-sticky-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  flex-shrink: 0;
+}
+
+/* Build history is its own bounded list so old builds don't push the current
+   build details far below the fold. The newest/current build remains at top. */
+.wybuild-build-history-list {
+  max-height: min(72dvh, 760px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+  scrollbar-width: thin;
+}
+@media (max-width: 767px) {
+  .wybuild-build-history-list {
+    max-height: 34dvh;
+    min-height: 112px;
+  }
+}

@@ -80,7 +80,7 @@ export const BuildsView: React.FC = () => {
           </div>
         </div>
 
-        <div className="divide-y divide-slate-800/80">
+        <div className="wybuild-build-history-list divide-y divide-slate-800/80">
           {builds.map((build) => {
             const isSelected = !awaitingNewBuild && build.id === selectedBuild?.id;
             return (
@@ -377,11 +377,14 @@ export const BuildsView: React.FC = () => {
                       <div className="flex flex-col sm:flex-row gap-1.5 shrink-0">
                         <a
                           href={art.downloadUrl}
-                          download={art.name}
+                          download={art.name || `wybuild-artifact-${art.id}.zip`}
+                          rel="noopener"
+                          aria-label={`Download build artifact ${art.name}`}
+                          title="Download the GitHub Actions artifact ZIP. Extract it to access the APK/AAB inside."
                           className="px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-semibold flex items-center gap-1 transition cursor-pointer text-xs"
                         >
                           <Download className="w-3.5 h-3.5" />
-                          <span>Download</span>
+                          <span>Download ZIP</span>
                         </a>
                         {selectedBuild.repo && selectedBuild.kind === 'twa' && art.id && (
                           <button
