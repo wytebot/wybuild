@@ -38,6 +38,16 @@
       var target = event.target;
       var url = target.src || target.href || target.tagName || 'unknown resource';
       record('resource-load-failed', url);
+      // Recovery: assets are served from the bundle root. If we are on some other path (a link to the live site's /api/...
+      // opened inside the WebView), go back to the app root once instead of showing a blank screen.
+      try {
+        var path = location.pathname || '/';
+        if (path !== '/' && path !== '/index.html' && !sessionStorage.getItem('wybuild.startup.recovered')) {
+          sessionStorage.setItem('wybuild.startup.recovered', '1');
+          record('startup-recovery', 'Returning to app root from ' + path);
+          location.replace('/');
+        }
+      } catch (_) {}
       return;
     }
     var detail = (event.message || 'JavaScript error') + (event.filename ? ' at ' + event.filename + ':' + event.lineno + ':' + event.colno : '');

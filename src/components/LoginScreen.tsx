@@ -10,6 +10,8 @@ export const LoginScreen: React.FC = () => {
   const [accounts, setAccounts] = useState<Array<{login:string;name:string;avatar?:string}>>(() => { try { return JSON.parse(localStorage.getItem('wybuild:githubAccounts') || '[]').filter((a: any) => a && typeof a.login === 'string').slice(0,5); } catch { return []; } });
   const [selectedAccount, setSelectedAccount] = useState('');
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  // The APK built from this very app serves the UI from https://localhost with no server behind it, so /api links lead nowhere.
+  const isLocalBundle = typeof window !== 'undefined' && window.location.protocol === 'https:' && window.location.hostname === 'localhost' && !!(window as any).Capacitor?.isNativePlatform?.();
   const githubLoginUrl = selectedAccount ? `/api/auth/login?login=${encodeURIComponent(selectedAccount)}` : '/api/auth/login';
 
   const submit = async (e: React.FormEvent) => {
@@ -35,6 +37,8 @@ export const LoginScreen: React.FC = () => {
             Turn your web app or PWA into a signed Android app with Web → Android, powered by GitHub Actions. Sign in with GitHub to pick a repository and build.
           </p>
         </div>
+        {isLocalBundle && <div className="rounded-lg border border-amber-400/30 bg-amber-500/10 p-3 text-left text-xs text-amber-200">This app copy has no WyBuild server inside it, so sign-in cannot work here. Build WyBuild with the Trusted Web Activity shell (shell: "twa") so it opens the live site, or use the web version at wybuild.app.</div>
+        }
         {accounts.length > 0 && <div className="wy-account-chooser">
           <div className="wy-account-eyebrow">PREVIOUSLY USED ACCOUNTS</div>
           <button type="button" className="wy-account-trigger" aria-haspopup="listbox" aria-expanded={accountMenuOpen} onClick={() => setAccountMenuOpen(v => !v)}>

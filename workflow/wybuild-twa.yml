@@ -1,4 +1,5 @@
-# wybuild-twa-workflow-version: 40
+# wybuild-twa-workflow-version: 41
+# v41: Bundled index.html uses root-absolute asset URLs (a stray in-app navigation to /some/path no longer breaks JS/CSS loading), startup self-recovery, warning when the app needs a same-origin server /api.
 # v40: Verify the packaged AND built-APK capacitor config (catches capacitor-patch.sh server.url), fix meta-refresh regex, allow explicit TWA shell.
 # v39: Standalone Capacitor builds are verified to ship local web assets and cannot set Capacitor server.url.
 # v39: Fail the build if the generated app config or packaged entry page redirects the app shell to the live website.
@@ -164,6 +165,9 @@ jobs:
                 # bridge bundling and Capacitor config happen later in this SAME run step.
                 export WYBUILD_WEB_DIR="$WEB_DIR"
                 echo "Capacitor selected: built web assets found in $WEB_DIR (npm run $BUILD_SCRIPT)."
+                if [ -d api ] || grep -qs '"/api/' vercel.json 2>/dev/null || grep -rqsE '[^A-Za-z0-9_.:-]/api/' src 2>/dev/null; then
+                  echo "::warning::This project calls a same-origin /api/ backend. A standalone Capacitor APK is served from https://localhost with NO backend, so sign-in links and API calls cannot work there. Build it with shell: twa (loads the live site), or make the app use an absolute API base URL (for example VITE_API_BASE_URL) when running natively."
+                fi
               else
                 echo "::error::The source build completed but did not produce a bundled index.html in dist/build/www/out/public. WyBuild will not package a URL-only app as a native standalone APK. Configure a static web build (for Next.js, output: 'export' and a build:capacitor-web script that writes out/index.html), or explicitly select Trusted Web Activity for a browser-rendered PWA."
                 exit 1
@@ -271,7 +275,7 @@ jobs:
               head=re.search(r'<head\b[^>]*>', s, flags=re.I)
               if head: s=s[:head.end()]+'\n'+inline+'\n'+s[head.end():]
               else: s=inline+'\n'+s
-          tag='<script type="module" src="./wybuild-native-bridge.js"></script>'
+          tag='<script type="module" src="/wybuild-native-bridge.js"></script>'
           if 'wybuild-native-bridge.js' not in s:
               # Keep the bridge after the early diagnostics bootstrap so a bridge crash is captured.
               if re.search(r'</body>', s, flags=re.I):
@@ -280,6 +284,10 @@ jobs:
                   head=re.search(r'</head>', s, flags=re.I)
                   if head: s=s[:head.start()]+tag+'\n'+s[head.start():]
                   else: s += '\n'+tag+'\n'
+          # Capacitor serves the bundle from https://localhost/. Relative URLs (./assets/x.js) resolve against the CURRENT page path,
+          # so if the WebView ever lands on /api/auth/login (a link written for the live site), every asset 404s and the screen stays blank.
+          # Root-absolute URLs always resolve to the bundle root.
+          s=re.sub(r'''(\b(?:src|href)\s*=\s*["'])\./''', r'\1/', s)
           p.write_text(s, encoding='utf-8')
           print('Installed early Android startup diagnostics and native bridge into bundled index.html.')
           PYHTML
