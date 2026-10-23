@@ -204,6 +204,8 @@ jobs:
 
       - name: Install Capacitor and native plugin toolchain
         if: ${{ env.WYBUILD_ENGINE == 'capacitor' }}
+        env:
+          WYBUILD_WEBVIEW_DEBUG: ${{ vars.WYBUILD_WEBVIEW_DEBUG }}
         run: |
           set -euo pipefail
           # Capacitor discovers native plugins from package.json. Add the build-only dependencies
@@ -241,13 +243,28 @@ jobs:
           import re
           p=Path(os.environ['WYBUILD_WEB_DIR'])/'index.html'
           s=p.read_text(encoding='utf-8')
+          diagnostic_path=Path('.github/wybuild/android-startup-diagnostics.js')
+          if not diagnostic_path.is_file():
+              raise SystemExit('Android startup diagnostic bootstrap is missing.')
+          diagnostic=diagnostic_path.read_text(encoding='utf-8')
+          # Install a non-module bootstrap before Vite's module scripts. This catches failures
+          # that happen before src/main.tsx executes (which React error boundaries cannot catch).
+          if 'WYBUILD_ANDROID_STARTUP_DIAGNOSTICS_BOOTSTRAP' not in s:
+              inline='<script>/* WYBUILD_ANDROID_STARTUP_DIAGNOSTICS_BOOTSTRAP */\n'+diagnostic+'\n</script>'
+              head=re.search(r'<head\b[^>]*>', s, flags=re.I)
+              if head: s=s[:head.end()]+'\n'+inline+'\n'+s[head.end():]
+              else: s=inline+'\n'+s
           tag='<script type="module" src="./wybuild-native-bridge.js"></script>'
           if 'wybuild-native-bridge.js' not in s:
-              head=re.search(r'<head\b[^>]*>', s, flags=re.I)
-              if head: s=s[:head.end()]+'\n'+tag+'\n'+s[head.end():]
-              elif re.search(r'</body>', s, flags=re.I): s=re.sub(r'</body>', lambda m: tag+'\n'+m.group(0), s, count=1, flags=re.I)
-              else: s += '\n'+tag+'\n'
-              p.write_text(s, encoding='utf-8')
+              # Keep the bridge after the early diagnostics bootstrap so a bridge crash is captured.
+              if re.search(r'</body>', s, flags=re.I):
+                  s=re.sub(r'</body>', lambda m: tag+'\n'+m.group(0), s, count=1, flags=re.I)
+              else:
+                  head=re.search(r'</head>', s, flags=re.I)
+                  if head: s=s[:head.start()]+tag+'\n'+s[head.start():]
+                  else: s += '\n'+tag+'\n'
+          p.write_text(s, encoding='utf-8')
+          print('Installed early Android startup diagnostics and native bridge into bundled index.html.')
           PYHTML
           node - <<'NODE'
           const fs = require('fs');
@@ -259,7 +276,7 @@ jobs:
           const versionCode = Number(cfg.versionCode || run);
           const version = String(cfg.versionName || '1.0.' + run).replace(/[^0-9A-Za-z._+-]/g,'').slice(0,30) || '1.0.0';
           const webDir = process.env.WYBUILD_WEB_DIR;
-          fs.writeFileSync('capacitor.config.json', JSON.stringify({ appId, appName: String(cfg.name || cfg.launcherName || new URL(cfg.webUrl).hostname).slice(0,50), webDir, backgroundColor: cfg.backgroundColor || '#ffffff', server: { androidScheme: 'https' }, android: { allowMixedContent: false, captureInput: true, webContentsDebuggingEnabled: false }, plugins: { FirebaseAuthentication: { providers: ['google.com'] }, SplashScreen: { launchShowDuration: 500, backgroundColor: cfg.backgroundColor || '#ffffff', showSpinner: false }, StatusBar: { backgroundColor: cfg.themeColor || '#0f172a' } } }, null, 2));
+          fs.writeFileSync('capacitor.config.json', JSON.stringify({ appId, appName: String(cfg.name || cfg.launcherName || new URL(cfg.webUrl).hostname).slice(0,50), webDir, backgroundColor: cfg.backgroundColor || '#ffffff', server: { androidScheme: 'https' }, android: { allowMixedContent: false, captureInput: true, webContentsDebuggingEnabled: String(process.env.WYBUILD_WEBVIEW_DEBUG || '').toLowerCase() === 'true' }, plugins: { FirebaseAuthentication: { providers: ['google.com'] }, SplashScreen: { launchShowDuration: 500, backgroundColor: cfg.backgroundColor || '#ffffff', showSpinner: false }, StatusBar: { backgroundColor: cfg.themeColor || '#0f172a' } } }, null, 2));
           fs.mkdirSync('.wybuild-out', {recursive:true});
           fs.writeFileSync('.wybuild-out/capacitor-meta.json', JSON.stringify({packageId:appId, versionName:version, versionCode, webDir}, null, 2));
           console.log(`Capacitor app: ${appId} ${version} (${versionCode}); webDir=${webDir}`);
@@ -581,15 +598,27 @@ jobs:
             python3 - "$DIST/$NAME.apk" <<'PYAPK'
           import sys, json, zipfile
           z = zipfile.ZipFile(sys.argv[1]); names = set(z.namelist())
-          for need in ('assets/public/index.html', 'assets/capacitor.config.json'):
-              if need not in names: sys.exit('::error::APK is missing ' + need + ' - it would not ship a local UI.')
+          for need in ('assets/public/index.html', 'assets/capacitor.config.json', 'assets/public/wybuild-native-bridge.js'):
+              if need not in names: sys.exit('::error::APK is missing ' + need + ' - it would not ship the expected local UI/native bridge.')
+          html = z.read('assets/public/index.html').decode('utf-8', errors='replace')
+          if 'WYBUILD_ANDROID_STARTUP_DIAGNOSTICS_BOOTSTRAP' not in html:
+              sys.exit('::error::APK is missing early Android startup diagnostics; refusing to publish an undiagnosable build.')
+          if html.find('WYBUILD_ANDROID_STARTUP_DIAGNOSTICS_BOOTSTRAP') > html.find('wybuild-native-bridge.js'):
+              sys.exit('::error::Android startup diagnostics must be loaded before the native bridge.')
           cfg = json.loads(z.read('assets/capacitor.config.json'))
           if (cfg.get('server') or {}).get('url'):
               sys.exit('::error::Built APK has server.url=' + cfg['server']['url'] + ' (live-website WebView).')
-          print('APK verified: bundled index.html present, no server.url.')
+          print('APK verified: bundled UI, early Android startup diagnostics, native bridge present, and no server.url.')
           PYAPK
           fi
           cp "$META" "$DIST/capacitor-config.json"
+          cat > "$DIST/android-startup-diagnostics.txt" <<'EOF'
+          WyBuild Android startup diagnostics
+          - This APK includes an early diagnostic bootstrap that runs before application modules.
+          - If JavaScript/module startup fails or the app root stays empty for 15 seconds, the APK displays an error panel with details and a Copy diagnostics button.
+          - To inspect a debug build with Chrome DevTools, set repository Actions variable WYBUILD_WEBVIEW_DEBUG=true for one diagnostic build, install it, connect the phone by USB, then open chrome://inspect on desktop Chrome. Turn the variable off after diagnosis; WebView debugging should not be enabled in public production builds.
+          - CI validates the bundled HTML/config/assets but cannot reproduce device-only WebView failures without the affected device's runtime logs.
+          EOF
           if [ "$SIGN_MODE" != "remote" ]; then
             KT_OUT="$(keytool -list -v -keystore "$WB_KEYSTORE_PATH" -alias "$WB_KEY_ALIAS" -storepass "$BUBBLEWRAP_KEYSTORE_PASSWORD" 2>&1 || true)"
             SHA1="$(printf '%s\n' "$KT_OUT" | sed -n 's/^[[:space:]]*SHA1:[[:space:]]*//p' | head -1 | tr -d '\r')"

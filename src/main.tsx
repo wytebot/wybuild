@@ -1,8 +1,69 @@
-import {createRoot} from 'react-dom/client';
+import React, { Component, type ErrorInfo, type ReactNode } from 'react';
+import { createRoot } from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
 
-createRoot(document.getElementById('root')!).render(<App />);
+type BoundaryState = { error: Error | null };
+class StartupErrorBoundary extends Component<{ children: ReactNode }, BoundaryState> {
+  state: BoundaryState = { error: null };
+  static getDerivedStateFromError(error: Error): BoundaryState { return { error }; }
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('[WyBuild startup] React render failed:', error, info.componentStack);
+  }
+  render() {
+    if (this.state.error) {
+      const message = this.state.error?.message || String(this.state.error);
+      return <main style={{ minHeight: '100dvh', boxSizing: 'border-box', padding: '28px 20px', background: '#020617', color: '#e2e8f0', fontFamily: 'system-ui,sans-serif' }}>
+        <section style={{ maxWidth: 560, margin: '8vh auto', padding: 24, border: '1px solid #334155', borderRadius: 16, background: '#0f172a' }}>
+          <h1 style={{ margin: '0 0 10px', fontSize: 22 }}>WyBuild couldn't start</h1>
+          <p style={{ color: '#cbd5e1', lineHeight: 1.55 }}>The app encountered a startup error instead of loading the dashboard. Your saved app data has not been intentionally cleared.</p>
+          <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', padding: 12, borderRadius: 8, background: '#020617', color: '#fca5a5', fontSize: 12 }}>{message}</pre>
+          <button onClick={() => window.location.reload()} style={{ marginTop: 12, padding: '11px 16px', border: 0, borderRadius: 9, background: '#10b981', color: '#022c22', fontWeight: 700 }}>Reload WyBuild</button>
+          <p style={{ marginTop: 16, color: '#94a3b8', fontSize: 12 }}>If this keeps happening, send a screenshot of this error to support.</p>
+        </section>
+      </main>;
+    }
+    return this.props.children;
+  }
+}
+
+const rootElement = document.getElementById('root');
+if (!rootElement) {
+  document.body.innerHTML = '<main style="padding:24px;background:#020617;color:#fca5a5;font:16px system-ui">WyBuild could not start: the root app element is missing.</main>';
+} else {
+  try {
+    createRoot(rootElement).render(<StartupErrorBoundary><App /></StartupErrorBoundary>);
+  } catch (error) {
+    console.error('[WyBuild startup] Failed to mount React:', error);
+    rootElement.innerHTML = '<main style="padding:24px;background:#020617;color:#fca5a5;font:16px system-ui">WyBuild could not start. Please reload the app. If the problem continues, send a screenshot to support.</main>';
+  }
+}
+
+// Display startup-time JavaScript failures instead of leaving a silent black screen.
+(function installStartupErrorOverlay() {
+  if (typeof window === 'undefined' || document.getElementById('wybuild-startup-error')) return;
+  const show = (reason: unknown) => {
+    if (document.getElementById('wybuild-startup-error')) return;
+    const panel = document.createElement('section');
+    panel.id = 'wybuild-startup-error';
+    Object.assign(panel.style, { position: 'fixed', inset: '0', zIndex: '2147483647', overflow: 'auto', boxSizing: 'border-box', padding: '28px 20px', background: '#020617', color: '#e2e8f0', font: '14px system-ui,sans-serif' });
+    const card = document.createElement('div');
+    Object.assign(card.style, { maxWidth: '560px', margin: '8vh auto', padding: '24px', border: '1px solid #334155', borderRadius: '16px', background: '#0f172a' });
+    const title = document.createElement('h1'); title.textContent = 'WyBuild startup error';
+    Object.assign(title.style, { fontSize: '22px', margin: '0 0 12px' });
+    const detail = document.createElement('pre'); detail.textContent = String((reason as any)?.stack || (reason as any)?.message || reason);
+    Object.assign(detail.style, { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', padding: '12px', borderRadius: '8px', background: '#020617', color: '#fca5a5', fontSize: '12px' });
+    const button = document.createElement('button'); button.textContent = 'Reload WyBuild'; button.onclick = () => window.location.reload();
+    Object.assign(button.style, { marginTop: '12px', padding: '11px 16px', border: '0', borderRadius: '9px', background: '#10b981', color: '#022c22', fontWeight: '700' });
+    card.append(title, document.createTextNode('The app failed during startup. This diagnostic is shown instead of a blank screen.'), detail, button);
+    panel.appendChild(card); (document.body || document.documentElement).appendChild(panel);
+  };
+  window.addEventListener('error', (event) => {
+    // Resource errors can be harmless (for example a missing optional icon); show uncaught script errors.
+    if (event.error) show(event.error);
+  });
+  window.addEventListener('unhandledrejection', (event) => show(event.reason));
+})();
 
 // PWA: offline shell + installability. Production only, so dev servers never get a stale worker.
 if (import.meta.env.PROD && 'serviceWorker' in navigator && !(window as any).Capacitor?.isNativePlatform?.()) {
@@ -35,13 +96,10 @@ if (import.meta.env.PROD && 'serviceWorker' in navigator && !(window as any).Cap
   };
   window.addEventListener('offline', () => update(false));
   window.addEventListener('online', () => update(true));
-  // WyBuild's standalone Android WebView emits this from ConnectivityManager.
   window.addEventListener('wybuild:network', (event: Event) => {
     const detail = (event as CustomEvent<{online?: boolean}>).detail;
     if (typeof detail?.online === 'boolean') update(detail.online);
   });
-  // Capacitor builds use the official Network plugin. It is dynamically loaded so the
-  // browser/PWA version does not depend on native runtime availability.
   const cap = (window as any).Capacitor;
   if (cap?.isNativePlatform?.()) {
     import('@capacitor/network').then(async ({ Network }) => {
