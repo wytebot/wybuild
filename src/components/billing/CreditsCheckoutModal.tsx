@@ -1,6 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, ArrowRight, CreditCard, Loader2, Lock, X } from 'lucide-react';
 import { api } from '../../services/api';
+import { App } from '@capacitor/app';
+import { Browser } from '@capacitor/browser';
+import { isNative } from '../../services/apiBase';
 
 type Props = { isOpen: boolean; initialPack: string; onClose: () => void };
 const CREDIT_PACKS: Record<string, { credits: number; amount: number; ngn: number; label: string }> = { starter: { credits: 100, amount: 4.99, ngn: 7500, label: 'Starter' }, builder: { credits: 250, amount: 9.99, ngn: 15000, label: 'Builder' }, studio: { credits: 700, amount: 24.99, ngn: 37500, label: 'Studio' } };
@@ -47,6 +50,9 @@ export const CreditsCheckoutModal: React.FC<Props> = ({ isOpen, initialPack, onC
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [card, setCard] = useState({ number: '', month: '', year: '', cvv: '' });
+  const nativeApp = isNative();
+  const completeSuccess = () => { window.dispatchEvent(new CustomEvent('wybuild:credits-updated')); if (nativeApp) { setStep('processing'); setError('Payment verification confirmed. Your credits will appear in your balance shortly.'); void Browser.close().catch(() => {}); } else window.location.href = '/?credits=success'; };
+  const openPaymentRedirect = async (rawUrl: string) => { if (nativeApp) { const u = new URL(rawUrl); u.searchParams.set('native', '1'); await Browser.open({ url: u.href }); setStep('processing'); } else window.location.href = rawUrl; };
   const [pin, setPin] = useState('');
   const [otp, setOtp] = useState('');
 
@@ -63,6 +69,16 @@ export const CreditsCheckoutModal: React.FC<Props> = ({ isOpen, initialPack, onC
   }, [isOpen, initialPack]);
 
   const price = useMemo(() => CREDIT_PACKS[pack] || CREDIT_PACKS.starter, [pack]);
+
+  useEffect(() => {
+    if (!isOpen || !nativeApp || !chargeId) return;
+    let alive = true;
+    const verify = async () => { if (!alive) return; try { const result = await api.billingStatus(chargeId); if (result.status === 'succeeded') completeSuccess(); else if (result.status === 'pending') setError('Payment is still being confirmed. WyBuild will keep checking; do not pay again.'); } catch { /* retry on next resume; never trust the deep link alone */ } };
+    const appState = App.addListener('appStateChange', state => { if (state.isActive) void verify(); });
+    const deepLink = App.addListener('appUrlOpen', event => { try { const u = new URL(event.url); if (u.protocol === 'wybuild:' && u.hostname === 'billing') { void Browser.close().catch(() => {}); void verify(); } } catch {} });
+    return () => { alive = false; void appState.then(x => x.remove()); void deepLink.then(x => x.remove()); };
+  }, [isOpen, nativeApp, chargeId]);
+
 
   if (!isOpen) return null;
 
@@ -110,11 +126,11 @@ export const CreditsCheckoutModal: React.FC<Props> = ({ isOpen, initialPack, onC
       setChargeId(result.chargeId);
       const type = nextActionType(result.nextAction);
       if (result.redirectUrl) {
-        window.location.href = result.redirectUrl;
+        await openPaymentRedirect(result.redirectUrl);
         return;
       }
       if (result.status === 'succeeded') {
-        window.location.href = '/?credits=success';
+        completeSuccess();
         return;
       }
       if (type.includes('pin')) setStep('pin');
@@ -136,12 +152,12 @@ export const CreditsCheckoutModal: React.FC<Props> = ({ isOpen, initialPack, onC
         if (!/^\d{4,8}$/.test(otp)) throw new Error('Enter the OTP sent by your bank.');
         const result = await api.authorizeBilling({ chargeId, type, otp });
         if (result.redirectUrl) {
-          window.location.href = result.redirectUrl;
+          await openPaymentRedirect(result.redirectUrl);
           return;
         }
         const action = nextActionType(result.nextAction);
         if (result.status === 'succeeded') {
-          window.location.href = '/?credits=success';
+          completeSuccess();
           return;
         }
         if (action.includes('pin')) setStep('pin');
@@ -158,12 +174,12 @@ export const CreditsCheckoutModal: React.FC<Props> = ({ isOpen, initialPack, onC
           pin: { nonce, encrypted_pin: encryptedPin },
         });
         if (result.redirectUrl) {
-          window.location.href = result.redirectUrl;
+          await openPaymentRedirect(result.redirectUrl);
           return;
         }
         const action = nextActionType(result.nextAction);
         if (result.status === 'succeeded') {
-          window.location.href = '/?credits=success';
+          completeSuccess();
           return;
         }
         if (action.includes('otp')) setStep('otp');
@@ -184,13 +200,13 @@ export const CreditsCheckoutModal: React.FC<Props> = ({ isOpen, initialPack, onC
     try {
       const result = await api.billingStatus(chargeId);
       if (result.status === 'succeeded') {
-        window.location.href = '/?credits=success';
+        completeSuccess();
         return;
       }
       const action = nextActionType(result.nextAction);
       if (action.includes('pin')) setStep('pin');
       else if (action.includes('otp')) setStep('otp');
-      else if (result.redirectUrl) window.location.href = result.redirectUrl;
+      else if (result.redirectUrl) await openPaymentRedirect(result.redirectUrl);
       else setError(`Payment status: ${result.status}. Please try again.`);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not check payment status.');

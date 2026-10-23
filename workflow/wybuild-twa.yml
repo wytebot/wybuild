@@ -1,4 +1,5 @@
-# wybuild-twa-workflow-version: 41
+# wybuild-twa-workflow-version: 46
+# v43: native survival configuration, compatibility analyzer/report, optional HTTPS/Chromium smoke test and custom-scheme handoff support.
 # v41: Bundled index.html uses root-absolute asset URLs (a stray in-app navigation to /some/path no longer breaks JS/CSS loading), startup self-recovery, warning when the app needs a same-origin server /api.
 # v40: Verify the packaged AND built-APK capacitor config (catches capacitor-patch.sh server.url), fix meta-refresh regex, allow explicit TWA shell.
 # v39: Standalone Capacitor builds are verified to ship local web assets and cannot set Capacitor server.url.
@@ -70,6 +71,7 @@ jobs:
       NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID: ${{ vars.NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID }}
       WB_OUT: ${{ github.workspace }}/.wybuild-out
       WB_TOOLS: ${{ github.workspace }}/.wybuild-tools
+      WYBUILD_NATIVE_SMOKE_TEST: ${{ vars.WYBUILD_NATIVE_SMOKE_TEST || 'false' }}
       WB_KEYSTORE_B64: ${{ inputs.sign_mode != 'remote' && secrets.WB_KEYSTORE_BASE64 || '' }} # never mapped into the job in remote-signing mode
       WB_KEYSTORE_PASSWORD: ${{ inputs.sign_mode != 'remote' && secrets.WB_KEYSTORE_PASSWORD || '' }} # never mapped into the job in remote-signing mode
       WB_KEY_ALIAS_SECRET: ${{ inputs.sign_mode != 'remote' && secrets.WB_KEY_ALIAS || '' }} # never mapped into the job in remote-signing mode
@@ -105,6 +107,27 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: "20"
+
+      - name: Analyze native compatibility (informational; credit gate ran before dispatch)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ANALYZER=".github/wybuild/compat-analyzer.mjs"
+          if [ ! -f "$ANALYZER" ]; then
+            echo "::error::WyBuild compatibility analyzer is missing from the checked-out repository. Update the workflow files and retry."
+            exit 1
+          fi
+          node "$ANALYZER" .
+          mkdir -p "$WB_OUT/dist"
+          cp wybuild-compat-report.json "$WB_OUT/dist/wybuild-compat-report.json"
+          node -e 'const r=require("./wybuild-compat-report.json"); console.log(`Native compatibility: ${r.summary.status}; ${r.summary.blocking} blocking, ${r.summary.warnings} warnings across ${r.summary.filesScanned} files.`); for (const f of r.findings.slice(0,30)) console.log(`${f.level.toUpperCase()} ${f.file}:${f.line} ${f.message}`)'
+
+      - name: Prepare optional native smoke-test browser
+        if: ${{ vars.WYBUILD_NATIVE_SMOKE_TEST == 'true' }}
+        run: |
+          set -euo pipefail
+          npm install --no-save --no-package-lock playwright
+          npx playwright install --with-deps chromium
 
       - name: Set up Java 17
         uses: actions/setup-java@v5
@@ -293,6 +316,8 @@ jobs:
           PYHTML
           node - <<'NODE'
           const fs = require('fs');
+          const path = require('path');
+          const { execFileSync } = require('child_process');
           const cfg = JSON.parse(process.env.TWA_CONFIG || '{}');
           const host = new URL(cfg.webUrl).hostname.toLowerCase().replace(/^www\./,'').replace(/[^a-z0-9]+/g,'.').replace(/^\.|\.$/g,'');
           const packageId = cfg.packageId || ('app.wybuild.' + host.replace(/\./g,'').slice(0,30));
@@ -301,7 +326,24 @@ jobs:
           const versionCode = Number(cfg.versionCode || run);
           const version = String(cfg.versionName || '1.0.' + run).replace(/[^0-9A-Za-z._+-]/g,'').slice(0,30) || '1.0.0';
           const webDir = process.env.WYBUILD_WEB_DIR;
+          const ownWyBuildPackages = ['app.wybuildblack.vercel', 'app.wybuildapk.vercel', 'app.wybuild.vercel'];
+          const derivedScheme = ownWyBuildPackages.includes(appId) ? 'wybuild' : String(appId).replaceAll('.', '-');
+          const requestedScheme = String(cfg.returnScheme || derivedScheme).toLowerCase();
+          const returnScheme = /^[a-z][a-z0-9+.-]{1,30}$/.test(requestedScheme) && !['http','https','javascript','file','content','intent','data'].includes(requestedScheme) ? requestedScheme : derivedScheme;
+          const runtimeConfig = { apiBaseUrl: cfg.apiBaseUrl || '', apiPrefixes: Array.isArray(cfg.apiPrefixes) ? cfg.apiPrefixes : ['/api'], authMode: cfg.authMode || 'none', returnScheme, webFallbackUrl: cfg.webFallbackUrl || cfg.webUrl };
+          fs.writeFileSync(path.join(webDir, 'wybuild-runtime-config.json'), JSON.stringify(runtimeConfig, null, 2));
+          fs.writeFileSync(path.join(webDir, 'wybuild-runtime-config.js'), 'window.__WYBUILD_RUNTIME_CONFIG__=' + JSON.stringify(runtimeConfig).replace(/</g, '\\u003c') + ';');
+          const entryPath = path.join(webDir, 'index.html');
+          let entryHtml = fs.readFileSync(entryPath, 'utf8');
+          if (!entryHtml.includes('wybuild-runtime-config.js')) entryHtml = entryHtml.replace(/<head([^>]*)>/i, '<head$1><script src="./wybuild-runtime-config.js"></script>');
+          fs.writeFileSync(entryPath, entryHtml);
           fs.writeFileSync('capacitor.config.json', JSON.stringify({ appId, appName: String(cfg.name || cfg.launcherName || new URL(cfg.webUrl).hostname).slice(0,50), webDir, backgroundColor: cfg.backgroundColor || '#ffffff', server: { androidScheme: 'https' }, android: { allowMixedContent: false, captureInput: true, webContentsDebuggingEnabled: String(process.env.WYBUILD_WEBVIEW_DEBUG || '').toLowerCase() === 'true' }, plugins: { FirebaseAuthentication: { providers: ['google.com'] }, SplashScreen: { launchShowDuration: 500, backgroundColor: cfg.backgroundColor || '#ffffff', showSpinner: false }, StatusBar: { backgroundColor: cfg.themeColor || '#0f172a' } } }, null, 2));
+          if (String(process.env.WYBUILD_NATIVE_SMOKE_TEST || '').toLowerCase() === 'true') {
+            console.log('Running optional HTTPS/Chromium native smoke test.');
+            execFileSync('npm', ['install', '--no-save', 'playwright'], { stdio: 'inherit' });
+            execFileSync('npx', ['playwright', 'install', '--with-deps', 'chromium'], { stdio: 'inherit' });
+            execFileSync('node', ['.github/wybuild/wybuild-smoke.mjs', webDir], { stdio: 'inherit', env: process.env });
+          }
           fs.mkdirSync('.wybuild-out', {recursive:true});
           fs.writeFileSync('.wybuild-out/capacitor-meta.json', JSON.stringify({packageId:appId, versionName:version, versionCode, webDir}, null, 2));
           console.log(`Capacitor app: ${appId} ${version} (${versionCode}); webDir=${webDir}`);
@@ -523,6 +565,8 @@ jobs:
           (cd "$WB_TOOLS/icon" && { [ -f package.json ] || echo '{"name":"wybuild-icon","private":true}' > package.json; } && npm install --no-audit --no-fund --package-lock=false sharp@0.33.5)
           NODE_PATH="$WB_TOOLS/icon/node_modules" node - <<'NODEICONCHECK'
           const fs = require('fs');
+          const path = require('path');
+          const { execFileSync } = require('child_process');
           const cfg = JSON.parse(process.env.TWA_CONFIG || '{}');
           const manifest = JSON.parse(fs.readFileSync(process.env.WB_OUT + '/twa-resolved.json', 'utf8'));
           if (!(cfg.iconUrl || manifest.iconUrl || cfg.maskableIconUrl || manifest.maskableIconUrl)) {

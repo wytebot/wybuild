@@ -8,10 +8,12 @@ import tls from 'node:tls';
 import nacl from 'tweetnacl';
 import blake from 'blakejs';
 import JSZip from 'jszip';
+import { analyzeCompatibility } from '../workflow/wybuild/compat-analyzer.mjs';
+import { handoffKey, consumeHandoff } from './native-handoff.mjs';
 
 const TWA_WORKFLOW_FILE = 'wybuild-twa.yml';
 const TWA_WORKFLOW_PATH = `.github/workflows/${TWA_WORKFLOW_FILE}`;
-const TWA_WORKFLOW_VERSION = 41;
+const TWA_WORKFLOW_VERSION = 46;
 const TWA_MIN_SDK = 24; // androidbrowserhelper 2.7.x declares minSdk 24; a lower value fails the manifest merge
 // every file committed to a repo for each workflow kind: [path in repo, path in ./workflow]
 const WORKFLOW_KINDS = {
@@ -31,6 +33,8 @@ const WORKFLOW_KINDS = {
       ['.github/wybuild/capacitor-bridge.entry.js', 'wybuild/capacitor-bridge.entry.js'],
       ['.github/wybuild/capacitor-finalize.py', 'wybuild/capacitor-finalize.py'],
       ['.github/wybuild/android-startup-diagnostics.js', 'wybuild/android-startup-diagnostics.js'],
+      ['.github/wybuild/compat-analyzer.mjs', 'wybuild/compat-analyzer.mjs'],
+      ['.github/wybuild/wybuild-smoke.mjs', 'wybuild/wybuild-smoke.mjs'],
     ],
   },
 };
@@ -146,9 +150,9 @@ class HttpError extends Error {
 /* ---------------------------------- utils --------------------------------- */
 
 const env = (k) => process.env[k] || '';
+const CANONICAL_APP_URL = 'https://wybuild-black.vercel.app';
 const appUrl = (req) =>
-  env('APP_URL').replace(/\/$/, '') ||
-  `${req.headers['x-forwarded-proto'] || 'https'}://${req.headers['x-forwarded-host'] || req.headers.host}`;
+  (env('APP_URL') || env('WB_APP_URL') || CANONICAL_APP_URL).replace(/\/$/, '');
 
 function send(res, status, body) {
   res.statusCode = status;
@@ -219,39 +223,46 @@ function unseal(str) {
   }
 }
 
-function oauthState(secret) {
-  const payload = {
-    n: crypto.randomBytes(16).toString('hex'),
-    iat: Date.now(),
-  };
+function oauthState(extra = {}) {
+  const payload = { n: crypto.randomBytes(16).toString('hex'), iat: Date.now(), ...extra };
   const raw = Buffer.from(JSON.stringify(payload)).toString('base64url');
   const sig = crypto.createHmac('sha256', key32()).update(raw).digest('base64url');
   return `${raw}.${sig}`;
 }
 
-function verifyOAuthState(state) {
+function readOAuthState(state) {
   try {
     const [raw, sig] = String(state || '').split('.');
-    if (!raw || !sig) return false;
+    if (!raw || !sig) return null;
     const expected = crypto.createHmac('sha256', key32()).update(raw).digest('base64url');
-    const a = Buffer.from(sig);
-    const b = Buffer.from(expected);
-    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return false;
+    const a = Buffer.from(sig); const b = Buffer.from(expected);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
     const payload = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
-    return Number.isFinite(payload.iat) && Date.now() - payload.iat >= 0 && Date.now() - payload.iat <= 10 * 60 * 1000;
-  } catch {
-    return false;
+    if (!Number.isFinite(payload.iat) || Date.now() - payload.iat < 0 || Date.now() - payload.iat > 10 * 60 * 1000) return null;
+    return payload;
+  } catch { return null; }
+}
+const verifyOAuthState = (state) => !!readOAuthState(state);
+
+async function getSession(req) {
+  const auth = String(req.headers.authorization || '');
+  const bearer = /^Bearer\s+([A-Za-z0-9_.-]+)$/i.exec(auth)?.[1];
+  if (bearer) {
+    const native = unseal(bearer);
+    if (!native || native.aud !== 'native' || !native.jti || !native.exp || native.exp <= Date.now()) return null;
+    if (await kv.get(`wb:native-revoked:${native.jti}`)) return null;
+    // A sealed token is accepted only while its server-side session record exists.
+    // This makes revocation/storage expiry authoritative instead of merely advisory.
+    if (!(await kv.get(`wb:native-session:${native.jti}`))) return null;
+    return native;
   }
-}
-
-function getSession(req) {
   const raw = parseCookies(req)[SESSION_COOKIE];
-  const s = raw && unseal(raw);
-  return s && s.exp > Date.now() ? s : null;
+  const session = raw && unseal(raw);
+  return session && session.exp > Date.now() ? session : null;
 }
 
-function requireSession(req) {
-  const s = getSession(req);
+async function requireSession(req) {
+  const s = await getSession(req);
   if (!s) throw new HttpError(401, 'Your WyBuild login session has expired or is missing. Sign in again to continue.', 'SESSION_EXPIRED', { hint: 'Return to the login screen and choose Continue with GitHub. Your projects and subscription are not deleted.' });
   return s;
 }
@@ -1012,7 +1023,7 @@ async function createCreditCheckout(session, body, base) {
   if (!paymentMethodId) throw new HttpError(502, 'Flutterwave did not return a payment method id');
   const pending = { type: 'credits', login: session.login, pack: packId, amount: pack.amount, currency: pack.currency, customerId, paymentMethodId, customerEmail: email, reference };
   await kv.set(`wb:tx:${reference}`, pending, { ex: 60 * 60 * 24 * 3 });
-  const result = await flw4('/charges', { method: 'POST', body: JSON.stringify({ reference, amount: pack.amount, currency: pack.currency, customer_id: customerId, payment_method_id: paymentMethodId, redirect_url: `${base}/api/billing/callback`, meta: { wybuild_login: session.login, type: 'credits', pack: packId } }) }, { idempotencyPrefix: `credit-charge-${reference}` });
+  const result = await flw4('/charges', { method: 'POST', body: JSON.stringify({ reference, amount: pack.amount, currency: pack.currency, customer_id: customerId, payment_method_id: paymentMethodId, redirect_url: `${base}/api/billing/callback${(/^Bearer\s+/i.test(String(req.headers.authorization || '')) || String(req.headers['x-wybuild-native'] || '') === '1') ? '?native=1' : ''}`,  meta: { wybuild_login: session.login, type: 'credits', pack: packId } }) }, { idempotencyPrefix: `credit-charge-${reference}` });
   const charge = result.data;
   if (!charge?.id) throw new HttpError(502, 'Flutterwave did not return a charge id');
   await kv.set(`wb:charge:${charge.id}`, { login: session.login, reference, type: 'credits' }, { ex: 60 * 60 * 24 * 3 });
@@ -1099,7 +1110,7 @@ async function createV4Checkout(session, body, base) {
       currency: 'USD',
       customer_id: customerId,
       payment_method_id: paymentMethodId,
-      redirect_url: `${base}/api/billing/callback`,
+      redirect_url: `${base}/api/billing/callback${(/^Bearer\s+/i.test(String(req.headers.authorization || '')) || String(req.headers['x-wybuild-native'] || '') === '1') ? '?native=1' : ''}`, 
       meta: { wybuild_login: session.login, cycle },
     }),
   }, { idempotencyPrefix: `charge-${reference}` });
@@ -1119,7 +1130,7 @@ async function createV4Checkout(session, body, base) {
 }
 
 function appUrlFromEnv() {
-  return (env('APP_URL') || 'https://wybuild.app').replace(/\/$/, '');
+  return (env('APP_URL') || env('WB_APP_URL') || CANONICAL_APP_URL).replace(/\/$/, '');
 }
 
 async function renewDueSubscriptions() {
@@ -1989,6 +2000,26 @@ function cleanTwaConfig(c = {}) {
     out.playSigningFingerprint = str(c.playSigningFingerprint, 120);
     if (!/^([0-9A-Fa-f]{2}:?){32}$/.test(out.playSigningFingerprint)) throw new HttpError(400, 'Play signing fingerprint must be a SHA-256 value (64 hex characters)');
   }
+  // Native survival/backend configuration. API endpoints must be HTTPS and must share the web origin or be explicitly trusted.
+  if (c.apiBaseUrl) {
+    out.apiBaseUrl = cleanHttps(c.apiBaseUrl, 'API base URL', true).replace(/\/$/, '');
+    const apiHost = new URL(out.apiBaseUrl).hostname.toLowerCase();
+    const webHost = new URL(out.webUrl).hostname.toLowerCase();
+    const trusted = Array.isArray(c.additionalTrustedOrigins) ? c.additionalTrustedOrigins.map(String) : [];
+    const trustedHosts = trusted.map(v => { try { return new URL(v.includes('://') ? v : `https://${v}`).hostname.toLowerCase(); } catch { return ''; } });
+    const privateHost = /^(localhost|.*\.localhost|.*\.local|127(?:\.\d{1,3}){3}|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|169\.254(?:\.\d{1,3}){2}|::1)$/i.test(apiHost) || /^172\.(1[6-9]|2\d|3[01])\./.test(apiHost);
+    if (privateHost) throw new HttpError(400, 'API base URL cannot point to a private or loopback host. Use a public HTTPS API.', 'BAD_API_BASE_URL');
+    if (apiHost !== webHost && !trustedHosts.includes(apiHost)) throw new HttpError(400, 'API base URL must use the web app host or a host listed in trusted origins.', 'UNTRUSTED_API_BASE_URL');
+  }
+  out.apiPrefixes = Array.isArray(c.apiPrefixes) ? [...new Set(c.apiPrefixes.map(v => str(v, 80)).filter(v => /^\/[A-Za-z0-9_/-]*$/.test(v)))].slice(0, 20) : ['/api'];
+  out.authMode = ['none','bearer-handoff','custom-tab'].includes(c.authMode) ? c.authMode : 'none';
+  const ownWyBuildPackages = ['app.wybuildblack.vercel', 'app.wybuildapk.vercel', 'app.wybuild.vercel'];
+  const derivedScheme = ownWyBuildPackages.includes(String(out.packageId || '').toLowerCase()) ? 'wybuild' : String(out.packageId || 'app.wybuild.user').split('.').join('-').toLowerCase();
+  out.returnScheme = String(c.returnScheme || derivedScheme).toLowerCase();
+  const blockedSchemes = new Set(['http','https','javascript','data','file','content','intent','about','chrome','android','ftp','mailto','tel','sms','market','blob','capacitor']);
+  if (!/^[a-z][a-z0-9+.-]{1,30}$/.test(out.returnScheme) || blockedSchemes.has(out.returnScheme)) throw new HttpError(400, 'Return scheme is invalid or reserved.', 'BAD_RETURN_SCHEME');
+  out.webFallbackUrl = c.webFallbackUrl ? cleanHttps(c.webFallbackUrl, 'Web fallback URL', true) : out.webUrl;
+  out.compatibilityAcknowledged = c.compatibilityAcknowledged === true;
   return out;
 }
 
@@ -2230,19 +2261,53 @@ async function registerPushToken(login, token, platform = 'android') {
   await kv.sadd(pushTokenIndex(login), key);
 }
 
+async function analyzeRepoCompatibility(session, repo, branch) {
+  const tree = await ghJson(session, `/repos/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`);
+  const skip = /(^|\/)(node_modules|vendor|dist|build|\.next|\.git|coverage)(\/|$)/;
+  const candidates = (tree.tree || []).filter(x => x.type === 'blob' && /\.(?:[cm]?[jt]sx?|html|json|vue|svelte)$/i.test(x.path) && !skip.test(x.path) && Number(x.size || 0) < 500000).slice(0, 60);
+  const files = await Promise.all(candidates.map(async item => {
+    try { const r = await gh(session, `/repos/${repo}/contents/${item.path.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(branch)}`); if (!r.ok) return null; const f = await r.json(); return { path: item.path, content: Buffer.from(f.content || '', 'base64').toString('utf8') }; } catch { return null; }
+  }));
+  return analyzeCompatibility(files.filter(Boolean));
+}
+
 /* --------------------------------- routes --------------------------------- */
 
 async function route(req, res, path, query) {
   const m = req.method;
   const post = m === 'POST';
-  if (m !== 'GET' && !sameOrigin(req) && path !== 'billing/webhook') throw new HttpError(403, 'Bad origin');
+  const authorization = String(req.headers.authorization || '');
+  const bearer = /^Bearer\s+([A-Za-z0-9_.-]+)$/i.exec(authorization)?.[1];
+  const hasSessionCookie = !!parseCookies(req)[SESSION_COOKIE];
+  let bearerRequest = false;
+  // Do not relax origin checks for a merely well-shaped Authorization header.
+  // It must be a genuine, unexpired, non-revoked native session and must not
+  // accompany the ambient cookie (which would reintroduce CSRF semantics).
+  if (bearer && !hasSessionCookie) {
+    const native = unseal(bearer);
+    if (native?.aud === 'native' && native.jti && Number(native.exp) > Date.now()) {
+      const [revoked, active] = await Promise.all([
+        kv.get(`wb:native-revoked:${native.jti}`),
+        kv.get(`wb:native-session:${native.jti}`),
+      ]);
+      bearerRequest = !revoked && !!active;
+    }
+  }
+  const nativeOrigin = ['https://localhost', 'capacitor://localhost'].includes(String(req.headers.origin || '')) || (process.env.NODE_ENV !== 'production' && String(req.headers.origin || '') === 'http://localhost');
+  const nativeBootstrap = nativeOrigin && ((path === 'auth/native/exchange' && post) || (path === 'auth/token' && post && String(req.headers['x-wybuild-native'] || '') === '1'));
+  if (m !== 'GET' && !sameOrigin(req) && !bearerRequest && !nativeBootstrap && path !== 'billing/webhook') throw new HttpError(403, 'Bad origin');
 
   /* auth */
   if (path === 'auth/login') {
     if (!env('GITHUB_CLIENT_ID')) throw new HttpError(500, 'GitHub OAuth is not configured');
     // Stateless, signed OAuth state avoids Vercel/host cookie mismatches while
     // retaining CSRF protection. The signature is tied to SESSION_SECRET.
-    const state = oauthState();
+    const native = String(query.native || '') === '1';
+    const challenge = String(query.challenge || '');
+    const returnScheme = String(query.return || 'wybuild').toLowerCase();
+    const blockedReturnSchemes = new Set(['http','https','javascript','data','file','content','intent','about','chrome','android','ftp','mailto','tel','sms','market','blob','capacitor']);
+    if (native && (!/^[A-Za-z0-9_-]{43,128}$/.test(challenge) || !/^[a-z][a-z0-9+.-]{1,30}$/.test(returnScheme) || blockedReturnSchemes.has(returnScheme))) throw new HttpError(400, 'Invalid native sign-in handoff parameters.', 'BAD_NATIVE_HANDOFF');
+    const state = oauthState(native ? { native: true, challenge, returnScheme } : {});
     const url = new URL('https://github.com/login/oauth/authorize');
     url.searchParams.set('client_id', env('GITHUB_CLIENT_ID'));
     url.searchParams.set('redirect_uri', `${appUrl(req)}/api/auth/callback`);
@@ -2257,9 +2322,8 @@ async function route(req, res, path, query) {
   }
 
   if (path === 'auth/callback') {
-    if (!query.code || !query.state || !verifyOAuthState(query.state)) {
-      throw new HttpError(400, 'Invalid or expired OAuth state. Please start GitHub sign-in again.');
-    }
+    const oauth = readOAuthState(query.state);
+    if (!query.code || !oauth) throw new HttpError(400, 'Invalid or expired OAuth state. Please start GitHub sign-in again.');
 
     // Exchange the code and set the session cookie right here. The browser is
     // then sent to a relative '/', so it stays on the exact host that received
@@ -2275,7 +2339,30 @@ async function route(req, res, path, query) {
     if (!t.access_token) throw new HttpError(400, t.error_description || 'GitHub sign-in failed');
     const u = await ghJson({ token: t.access_token }, '/user');
     const session = { token: t.access_token, login: u.login, name: u.name || u.login, avatar: u.avatar_url, email: u.email || '', exp: Date.now() + 7 * 24 * 3600 * 1000 };
+    if (oauth.native === true) {
+      const code = crypto.randomBytes(32).toString('base64url');
+      await kv.set(handoffKey(code), { challenge: oauth.challenge, returnScheme: oauth.returnScheme, session, createdAt: Date.now() }, { ex: 120 });
+      const deepLink = `${oauth.returnScheme}://auth?code=${encodeURIComponent(code)}`;
+      res.statusCode = 200; res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.setHeader('Cache-Control', 'no-store');
+      res.end(`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Return to WyBuild</title><main style="font:16px system-ui;max-width:34rem;margin:12vh auto;padding:24px;color:#e2e8f0;background:#020617;border-radius:16px"><h1>Return to WyBuild</h1><p>Your GitHub sign-in is complete. Tap the button to return to the app.</p><p><a style="display:inline-block;background:#34d399;color:#022c22;padding:12px 18px;border-radius:8px;font-weight:700;text-decoration:none" href="${deepLink}">Open WyBuild</a></p><p>If the button does not open the app, copy this one-time manual code into WyBuild. It expires in 2 minutes.</p><code style="display:block;overflow-wrap:anywhere;padding:12px;background:#111827">${code}</code><p>This code can only be used once. Do not share it.</p></main><script>setTimeout(()=>location.href=${JSON.stringify(deepLink)},350)</script>`);
+      return;
+    }
     return redirect(res, '/', [cookie(SESSION_COOKIE, seal(session), 7 * 24 * 3600)]);
+  }
+
+  if (path === 'auth/native/exchange' && post) {
+    const body = bodyOf(req); const code = String(body.code || ''); const verifier = String(body.verifier || '');
+    if (!/^[A-Za-z0-9_-]{20,128}$/.test(code) || !/^[A-Za-z0-9._~-]{43,128}$/.test(verifier)) throw new HttpError(400, 'The sign-in code or verifier is invalid.', 'BAD_HANDOFF');
+    const ip = String(req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown').split(',')[0].trim();
+    const rateKey = `wb:native-exchange-rate:${crypto.createHash('sha256').update(ip).digest('hex')}`;
+    const attempts = await kv.incr(rateKey); if (attempts === 1) await kv.expire(rateKey, 60);
+    if (attempts > 12) throw new HttpError(429, 'Too many sign-in attempts. Wait a minute and try again.', 'HANDOFF_RATE_LIMIT');
+    let record;
+    try { record = await consumeHandoff({ kv, code, verifier }); }
+    catch (e) { throw new HttpError(e.status || 400, e.message || 'The sign-in code could not be exchanged.', e.code || 'HANDOFF_FAILED'); }
+    const jti = crypto.randomBytes(24).toString('base64url'); const session = { ...record.session, aud: 'native', jti, exp: Date.now() + 24 * 3600 * 1000 };
+    await kv.set(`wb:native-session:${jti}`, { login: session.login, createdAt: Date.now() }, { ex: 24 * 3600 });
+    return send(res, 200, { ok: true, accessToken: seal(session), expiresAt: session.exp, user: { login: session.login, name: session.name, avatar: session.avatar, email: session.email } });
   }
 
   if (path === 'auth/token' && post) {
@@ -2300,11 +2387,19 @@ async function route(req, res, path, query) {
       }
     }
     const session = { token: raw, login: u.login, name: u.name || u.login, avatar: u.avatar_url, email: u.email || '', exp: Date.now() + 7 * 24 * 3600 * 1000 };
+    if (String(req.headers['x-wybuild-native'] || '') === '1') {
+      const jti = crypto.randomBytes(24).toString('base64url');
+      const bearer = seal({ ...session, aud: 'native', jti, exp: Date.now() + 24 * 3600 * 1000 });
+      await kv.set(`wb:native-session:${jti}`, { login: u.login, createdAt: Date.now() }, { ex: 24 * 3600 });
+      return send(res, 200, { ok: true, login: u.login, tokenType: fine ? 'fine-grained' : 'classic', accessToken: bearer, expiresAt: Date.now() + 24 * 3600 * 1000 });
+    }
     res.setHeader('Set-Cookie', cookie(SESSION_COOKIE, seal(session), 7 * 24 * 3600));
     return send(res, 200, { ok: true, login: u.login, tokenType: fine ? 'fine-grained' : 'classic' });
   }
 
   if (path === 'auth/logout' && post) {
+    const bearer = /^Bearer\s+([A-Za-z0-9_.-]+)$/i.exec(String(req.headers.authorization || ''))?.[1];
+    if (bearer) { const native = unseal(bearer); if (native?.jti) { await kv.set(`wb:native-revoked:${native.jti}`, { at: Date.now() }, { ex: Math.max(60, Math.ceil((native.exp - Date.now()) / 1000)) }); await kv.del(`wb:native-session:${native.jti}`).catch(() => {}); } }
     res.setHeader('Set-Cookie', cookie(SESSION_COOKIE, '', 0));
     return send(res, 200, { ok: true });
   }
@@ -2457,6 +2552,7 @@ async function route(req, res, path, query) {
     } catch {
       result = 'failed';
     }
+    if (String(query.native || '') === '1') { const status = result === 'credits-success' ? 'credits-success' : result; return redirect(res, `wybuild://billing?status=${encodeURIComponent(status)}&ref=${encodeURIComponent(String(ref || chargeId || '').slice(0, 160))}`); }
     if (result === 'credits-success') return redirect(res, `${appUrl(req)}/?credits=success`);
     if (result === 'pending' && ref && (await kv.get(`wb:tx:${ref}`))?.type === 'credits') return redirect(res, `${appUrl(req)}/?credits=pending`);
     return redirect(res, `${appUrl(req)}/?billing=${result}`);
@@ -2559,7 +2655,7 @@ async function route(req, res, path, query) {
   }
 
   /* everything below needs a session */
-  const session = requireSession(req);
+  const session = await requireSession(req);
 
   if (path === 'drive-storage' && m === 'GET') {
     const config = await kv.get(driveStorageKey(session.login));
@@ -2905,8 +3001,10 @@ async function route(req, res, path, query) {
     const repoServiceWorker = SW_PATHS.find((_, i) => String(repoSwFiles[i] || '').trim());
     const pwaSource = repoWeb ? { ...repoWeb, serviceWorker: repoServiceWorker || '' } : (repoServiceWorker ? { source: repoServiceWorker, name: '', launcherName: '', themeColor: '', backgroundColor: '', display: '', orientation: '', startUrl: '', manifestUrl: '', id: '', scope: '', iconCount: 0, hasMaskableIcon: false, hasMonochromeIcon: false, serviceWorker: repoServiceWorker } : undefined);
     if (!homepage && info.has_pages) homepage = /\.github\.io$/i.test(info.name) ? `https://${info.name.toLowerCase()}/` : `https://${info.owner.login.toLowerCase()}.github.io/${info.name}/`;
+    let compatReport = { version: 1, summary: { status: 'amber', blocking: 0, warnings: 0, filesScanned: 0 }, findings: [], note: 'Compatibility scan was unavailable.' };
+    try { compatReport = await analyzeRepoCompatibility(session, repo, branch); } catch (e) { console.warn('[compat-analyzer] scan unavailable', String(e?.message || e).slice(0, 100)); }
     return send(res, 200, {
-      repo, name: info.name, defaultBranch: branch, framework, flutterVersion: 'n/a', packageId, latestCommitSha, nativeBuild,
+      repo, name: info.name, defaultBranch: branch, framework, flutterVersion: 'n/a', packageId, latestCommitSha, nativeBuild, compatReport,
       workflowInstalled: workflows.twa.installed, workflowUpToDate: workflows.twa.upToDate, workflows,
       signing, signingProblem: signing === 'none' ? (defaultKeystoreState().problem || undefined) : undefined, homepage: homepage.startsWith('https://') ? homepage : '',
       canPush: !!info.permissions?.push, private: !!info.private, web: pwaSource, pwa: { manifestFound: !!repoWeb && repoWeb.source !== 'package.json', manifestPath: repoWeb?.manifestUrl || '', serviceWorkerFound: !!repoServiceWorker, serviceWorkerPath: repoServiceWorker || '', maskableIcon: !!repoWeb?.hasMaskableIcon, monochromeIcon: !!repoWeb?.hasMonochromeIcon }, homepageFrom: info.homepage ? 'github' : homepage ? 'repo' : '',
@@ -2995,7 +3093,7 @@ async function route(req, res, path, query) {
     {
       const wfText = Buffer.from(((await wf.json().catch(() => ({}))).content || ''), 'base64').toString('utf8');
       const have = Number((/wybuild-workflow-version:\s*(\d+)/.exec(wfText) || [])[1] || 0);
-      if (have < WORKFLOW_VERSION) throw new HttpError(409, `The WyBuild workflow in ${repo} is outdated (v${have}, current v${WORKFLOW_VERSION}).`, 'WORKFLOW_OUTDATED', { hint: 'WyBuild reinstalls it automatically; if you see this, press Build again.' });
+      if (have < TWA_WORKFLOW_VERSION) throw new HttpError(409, `The WyBuild workflow in ${repo} is outdated (v${have}, current v${TWA_WORKFLOW_VERSION}).`, 'WORKFLOW_OUTDATED', { hint: 'WyBuild reinstalls it automatically; if you see this, press Build again.' });
     }
 
     // Every build first makes sure the repo has the keystore secrets (own key, or a copy of the Vercel default).
@@ -3118,6 +3216,14 @@ async function route(req, res, path, query) {
     if (stale.length) throw new HttpError(409, `The WyBuild TWA workflow in ${repo} is outdated (${stale.map((x) => x.split('/').pop()).join(', ')} differ from v${TWA_WORKFLOW_VERSION}).`, 'WORKFLOW_OUTDATED', { hint: 'Update workflow for this branch, then retry the build.', details: { stale } });
     if (signingRes.status === 'rejected') throw signingRes.reason; // signing secrets must be ready before dispatch
     const signMode = signingRes.value;
+    let compatReport;
+    try { compatReport = await analyzeRepoCompatibility(session, repo, branch); }
+    catch (e) { throw new HttpError(502, 'WyBuild could not finish the native compatibility scan, so no credits were reserved.', 'COMPAT_SCAN_FAILED', { hint: 'Retry the build. If this persists, check GitHub repository access and try again.' }); }
+    const compatCfg = twa;
+    const findings = compatReport.findings || [];
+    const unmitigated = twa.shell === 'twa' ? [] : findings.filter(f => f.level === 'blocking' && !(f.id === 'same-origin-api' && compatCfg.apiBaseUrl) && !(f.id === 'oauth-popup' && ['bearer-handoff','custom-tab'].includes(compatCfg.authMode)));
+    if (unmitigated.length && compatCfg.compatibilityAcknowledged !== true) throw new HttpError(409, `Native compatibility check found ${unmitigated.length} blocking issue(s). No credits were reserved.`, 'NATIVE_COMPAT_BLOCKED', { hint: 'Fix the listed issue(s), configure the backend/sign-in settings, or select “I understand, build anyway” to acknowledge the risk.', details: { report: compatReport, blockers: unmitigated.slice(0, 20) } });
+    if (compatCfg.compatibilityAcknowledged === true) await kv.set(`wb:compat-ack:${session.login}:${repo}:${Date.now()}`, { login: session.login, repo, at: Date.now(), status: compatReport.summary?.status, findings: findings.length, acknowledged: true }, { ex: 365 * 24 * 3600 });
     await saddDone;
     mark('repo_checks');
     // Nothing has been charged yet, so stop cleanly instead of running into the platform timeout.
@@ -3409,6 +3515,15 @@ async function route(req, res, path, query) {
 }
 
 export default async function handler(req, res) {
+  const origin = String(req.headers.origin || '');
+  const allowed = origin === 'https://localhost' || origin === 'capacitor://localhost' || (process.env.NODE_ENV !== 'production' && origin === 'http://localhost');
+  if (origin && allowed) {
+    res.setHeader('Access-Control-Allow-Origin', origin); res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-WyBuild-Native');
+    res.setHeader('Access-Control-Max-Age', '600');
+  } else if (origin) res.setHeader('Vary', 'Origin');
+  if (req.method === 'OPTIONS') { if (!allowed) { res.statusCode = 403; return res.end(); } res.statusCode = 204; return res.end(); }
   try {
     const url = new URL(req.url, 'http://localhost');
     const path = url.pathname.replace(/^\/api\//, '').replace(/\/$/, '');

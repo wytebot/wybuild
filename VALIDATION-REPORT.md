@@ -34,3 +34,8 @@ This is source-level validation, not a signed Android release test. A full Vite/
 5. Confirm denied permissions and unsupported hardware are handled without crashing.
 
 Offline startup cannot be guaranteed before the app has ever loaded online and cached its resources. Login, billing, cloud builds, and server-backed operations still need internet; offline caching preserves the app shell, not remote server availability.
+
+
+## Native offline limitation
+
+The service worker is deliberately disabled in Capacitor. The app shell is bundled, but API calls, GitHub operations, payments and other server-backed actions require network access. On native startup a server outage is represented as an unreachable-backend state rather than silently signing the user out.

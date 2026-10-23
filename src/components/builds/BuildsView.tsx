@@ -1,3 +1,4 @@
+import { apiUrl, authHeaders, isNative, API_BASE } from '../../services/apiBase';
 import React, { useEffect, useState } from 'react';
 import { api } from '../../services/api';
 import { useApp } from '../../context/AppContext';
@@ -61,11 +62,8 @@ export const BuildsView: React.FC = () => {
     setDownloadPct(null);
     setDownloadingArtifact(art.id ?? art.name);
     const capacitor = (window as any).Capacitor;
-    const isNative = !!capacitor?.isNativePlatform?.();
-    // The Capacitor APK loads the live site, so location.origin is normally right; fall back for a bundled copy.
-    const appOrigin = /^https?:$/.test(window.location.protocol) && window.location.hostname !== 'localhost'
-      ? window.location.origin
-      : 'https://wybuild-black.vercel.app';
+    const nativeBuild = !!capacitor?.isNativePlatform?.();
+    const appOrigin = API_BASE || window.location.origin;
     const proxyUrl = new URL(art.downloadUrl, appOrigin).href;
     const safeName = String(art.name || 'wybuild-artifact').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 140) || 'wybuild-artifact';
     const fileName = /\.zip$/i.test(safeName) ? safeName : `${safeName}.zip`;
@@ -79,7 +77,7 @@ export const BuildsView: React.FC = () => {
       let direct = '';
       try {
         const linkUrl = proxyUrl + (proxyUrl.includes('?') ? '&' : '?') + 'mode=link';
-        const r = await fetch(linkUrl, { credentials: 'include', cache: 'no-store', signal: ctrl.signal });
+        const r = await fetch(linkUrl, { credentials: nativeBuild ? 'omit' : 'include', headers: await authHeaders(), cache: 'no-store', signal: ctrl.signal });
         if (r.status === 401 || r.status === 403) throw new Error('Your WyBuild session expired or lacks access. Sign in again and retry.');
         const data = await r.json().catch(() => ({} as any));
         if (!r.ok) throw new Error(data?.error || `Artifact download failed (HTTP ${r.status}).`);

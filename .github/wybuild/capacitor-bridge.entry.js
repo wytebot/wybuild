@@ -23,6 +23,90 @@ import { registerPlugin } from '@capacitor/core';
 const WyBuildContactsPlugin = registerPlugin('WyBuildContacts');
 
 const safe = async (fn) => { try { return await fn(); } catch (e) { return { ok: false, error: String(e?.message || e) }; } };
+const pendingNativeUrls = (window.__WYBUILD_PENDING_APP_URLS__ = window.__WYBUILD_PENDING_APP_URLS__ || []);
+const emitNativeUrl = (raw) => {
+  const url = String(raw || ''); if (!url) return;
+  pendingNativeUrls.push(url); if (pendingNativeUrls.length > 10) pendingNativeUrls.shift();
+  window.dispatchEvent(new CustomEvent('wybuild-native-url-open', { detail: { url } }));
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname === 'auth') window.dispatchEvent(new CustomEvent('wybuild-native-auth', { detail: { code: parsed.searchParams.get('code') || '', status: parsed.searchParams.get('status') || '', url } }));
+    if (parsed.hostname === 'billing') window.dispatchEvent(new CustomEvent('wybuild-native-billing', { detail: { status: parsed.searchParams.get('status') || '', ref: parsed.searchParams.get('ref') || '', url } }));
+  } catch { /* malformed app URLs are ignored */ }
+};
+try { App.addListener('appUrlOpen', event => emitNativeUrl(event?.url)); } catch { /* cold-start URL is also read via App.getLaunchUrl */ }
+
+// Native survival runtime: only rewrite configured API prefixes; never rewrite normal site navigation.
+const runtimeConfig = (() => { try { return window.__WYBUILD_RUNTIME_CONFIG__ || {}; } catch { return {}; } })();
+const nativeApiBase = String(runtimeConfig.apiBaseUrl || '').replace(/\/$/, '');
+const nativeApiPrefixes = Array.isArray(runtimeConfig.apiPrefixes) && runtimeConfig.apiPrefixes.length ? runtimeConfig.apiPrefixes : ['/api'];
+const nativeAuthMode = String(runtimeConfig.authMode || 'none');
+const rewriteNativeApi = (raw) => {
+  try {
+    const value = typeof raw === 'string' ? raw : raw?.url;
+    if (!value || !nativeApiBase) return raw;
+    const u = new URL(value, location.href);
+    if (u.origin === location.origin && nativeApiPrefixes.some(prefix => u.pathname === prefix || u.pathname.startsWith(prefix.replace(/\/$/, '') + '/'))) {
+      return new URL(u.pathname + u.search + u.hash, nativeApiBase).href;
+    }
+    return raw;
+  } catch { return raw; }
+};
+const nativeToken = async () => { if (!['bearer-handoff','custom-tab'].includes(nativeAuthMode)) return ''; try { return (await Preferences.get({ key: 'wybuild:nativeAccessToken' })).value || ''; } catch { return ''; } };
+try {
+  const originalFetch = window.fetch.bind(window);
+  window.fetch = async (input, init = {}) => {
+    const rewritten = rewriteNativeApi(input);
+    const isApi = typeof rewritten === 'string' && (typeof input !== 'string' || rewritten !== input);
+    // Preserve Request method, body, signal, cache and other options when rewriting a Request object.
+    // Passing only its URL to fetch() would silently turn POST/PUT requests into GET requests.
+    let requestInput = rewritten;
+    if (input instanceof Request && typeof rewritten === 'string') requestInput = new Request(rewritten, input);
+    let nextInit = init;
+    if (isApi && ['bearer-handoff','custom-tab'].includes(nativeAuthMode)) {
+      const token = await nativeToken();
+      if (token) { const headers = new Headers(init.headers || (input instanceof Request ? input.headers : undefined)); headers.set('Authorization', `Bearer ${token}`); nextInit = { ...init, headers }; }
+    }
+    try { return await originalFetch(requestInput, nextInit); }
+    catch (e) { if (isApi && window.Capacitor?.isNativePlatform?.()) showBackendUnavailable(); throw e; }
+  };
+  const xhrOpen = XMLHttpRequest.prototype.open; const xhrSend = XMLHttpRequest.prototype.send; const xhrHeader = XMLHttpRequest.prototype.setRequestHeader;
+  XMLHttpRequest.prototype.open = function(method, url, ...rest) { const rewritten = rewriteNativeApi(String(url)); this.__wyNativeApi = rewritten !== url; return xhrOpen.call(this, method, rewritten, ...rest); };
+  XMLHttpRequest.prototype.send = function(...args) { const xhr = this; if (!xhr.__wyNativeApi || !['bearer-handoff','custom-tab'].includes(nativeAuthMode)) return xhrSend.apply(xhr, args); nativeToken().then(token => { if (token) { try { xhrHeader.call(xhr, 'Authorization', `Bearer ${token}`); } catch {} } xhrSend.apply(xhr, args); }).catch(() => xhrSend.apply(xhr, args)); };
+} catch { /* network wrappers must never prevent app startup */ }
+let backendPanelShown = false;
+function showBackendUnavailable() {
+  if (backendPanelShown || !document.body) return; backendPanelShown = true;
+  const panel = document.createElement('section'); panel.id = 'wybuild-backend-unreachable';
+  panel.style.cssText = 'position:fixed;inset:0;z-index:2147483646;background:#020617;color:#e2e8f0;display:flex;align-items:center;justify-content:center;padding:24px;font:14px system-ui';
+  const card = document.createElement('div'); card.style.cssText='max-width:420px;width:100%;border:1px solid #334155;border-radius:16px;padding:24px;background:#0f172a';
+  const title=document.createElement('h1'); title.textContent='Can’t reach the app server'; title.style.cssText='font-size:22px;font-weight:700;margin:0 0 10px';
+  const desc=document.createElement('p'); desc.textContent='The app interface is installed, but its backend is not responding. Check your connection or open the web version.'; desc.style.cssText='line-height:1.5;color:#cbd5e1';
+  const retry=document.createElement('button'); retry.textContent='Retry'; retry.style.cssText='margin-top:16px;width:100%;padding:12px;border-radius:8px;background:#34d399;color:#022c22;font-weight:700'; retry.onclick=()=>location.reload();
+  const web=document.createElement('button'); web.textContent='Open web version'; web.style.cssText='margin-top:8px;width:100%;padding:12px;border:1px solid #334155;border-radius:8px;color:#e2e8f0'; web.onclick=()=>Browser.open({url:String(runtimeConfig.webFallbackUrl||location.href)});
+  card.append(title,desc,retry,web); panel.append(card); document.body.append(panel);
+}
+const openExternal = async (url) => { const parsed = new URL(String(url), location.href); if (!['https:','http:','mailto:','tel:'].includes(parsed.protocol)) throw new Error('Unsupported external link'); return Browser.open({ url: parsed.href }); };
+try {
+  const originalOpen = window.open.bind(window); window.open = (url, target, features) => { if (window.Capacitor?.isNativePlatform?.() && url) { void openExternal(url); return null; } return originalOpen(url, target, features); };
+  document.addEventListener('click', event => { const a = event.target?.closest?.('a[target="_blank"],a[href^="/privacy.html"],a[href^="/terms.html"],a[href^="/acceptable-use.html"],a[href^="/refunds.html"]'); if (!a || !window.Capacitor?.isNativePlatform?.()) return; event.preventDefault(); const target = a.getAttribute('href') || ''; const url = target.startsWith('/') ? new URL(target, runtimeConfig.webFallbackUrl || location.href).href : target; void openExternal(url); }, true);
+} catch { /* external link handling is best effort */ }
+
+// A same-origin backend link (for example /api/auth/login) has no server behind it on the bundled https://localhost origin.
+// Navigating there loads Capacitor's index.html fallback at the wrong path and leaves a blank screen, so open it on the live backend instead.
+try {
+  const isApiPath = (p) => nativeApiPrefixes.some(prefix => { const x = String(prefix).replace(/\/$/, ''); return p === x || p.startsWith(x + '/'); });
+  document.addEventListener('click', event => {
+    if (event.defaultPrevented || !window.Capacitor?.isNativePlatform?.()) return;
+    const a = event.target?.closest?.('a[href]'); if (!a) return;
+    let u; try { u = new URL(a.getAttribute('href') || '', location.href); } catch { return; }
+    if (u.origin !== location.origin || !isApiPath(u.pathname)) return;
+    event.preventDefault(); event.stopPropagation();
+    const base = nativeApiBase || String(runtimeConfig.webFallbackUrl || '').replace(/\/$/, '');
+    if (base) void openExternal(new URL(u.pathname + u.search + u.hash, base + '/').href);
+  }, true);
+} catch { /* link guard is best effort */ }
+
 // Shared scroll-quality layer: smooth page scroll, resilient nested scrollers and horizontal rails.
 // Does not prevent touchmove or override app-specific scroll handlers.
 try {
@@ -101,6 +185,7 @@ const native = {
     onAction: (callback) => PushNotifications.addListener('pushNotificationActionPerformed', callback),
   },
   auth: {
+    signIn: async ({ url } = {}) => safe(async () => { const target = new URL(String(url || ''), runtimeConfig.webFallbackUrl || location.href); if (!['https:'].includes(target.protocol)) throw new Error('Sign-in URL must use HTTPS'); target.searchParams.set('wybuild_return', `${runtimeConfig.returnScheme || 'wybuild'}://auth`); await Browser.open({ url: target.href }); return { waiting: true }; }),
     google: (options = {}) => safe(() => FirebaseAuthentication.signInWithGoogle(options)),
     apple: (options = {}) => safe(() => FirebaseAuthentication.signInWithApple(options)),
     signOut: () => safe(() => FirebaseAuthentication.signOut()),
@@ -138,8 +223,8 @@ const native = {
   // Opt-in deep links (needs the "Deep links" feature so the Android link filter exists). Returns the https URL
   // that opened the app, and notifies on links opened while the app is already running.
   deepLinks: {
-    getLaunchUrl: () => safe(async () => (await App.getLaunchUrl())?.url || null),
-    onOpen: (callback) => App.addListener('appUrlOpen', (event) => { try { callback(event?.url || ''); } catch { /* site callback errors must not break the bridge */ } }),
+    getLaunchUrl: async () => safe(async () => { const url = (await App.getLaunchUrl())?.url || null; if (url) emitNativeUrl(url); return url; }),
+    onOpen: (callback) => App.addListener('appUrlOpen', (event) => { try { const url = event?.url || ''; emitNativeUrl(url); callback(url); } catch { /* site callback errors must not break the bridge */ } }),
   },
   // Opt-in swipe detector for app-specific navigation. It observes gestures but never prevents
   // native scrolling; callbacks run only for clear horizontal swipes that dominate vertical movement.
@@ -302,5 +387,6 @@ const native = {
   actionSheet: (title, options = []) => safe(() => ActionSheet.showActions({ title, options: options.map((title, i) => ({ title: String(title), style: 'DEFAULT' })) })),
   alert: (title, message) => safe(() => Dialog.alert({ title: String(title), message: String(message || '') })),
 };
+native.openExternal = openExternal;
 window.WyBuildNative = Object.freeze(native);
 setTimeout(() => window.dispatchEvent(new CustomEvent('wybuild-native-ready', { detail: { platform: native.platform() } })), 0);

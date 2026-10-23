@@ -25,3 +25,9 @@ The Web → Android screen now labels feature selections green or red against th
 ## Native bridge build safeguards (v45)
 
 The Capacitor bridge is plain JavaScript and must not contain TypeScript-only syntax such as `registerPlugin<any>(...)`. The workflow now checks the canonical bridge source, checks that the legacy duplicate is identical, validates the esbuild output with a TypeScript-generic leak scan and `node --check`, validates the bridge copied into Android assets, and revalidates the bridge extracted from the final APK before the artifact can be published. A failed check stops the build instead of shipping an APK likely to fail during startup. Keep both bridge source copies synchronized when changing the native bridge.
+
+## Capacitor native survival (workflow v44)
+
+Standalone Capacitor builds package the UI locally and do not set `server.url`. Server-backed features still require a reachable public HTTPS API. Configure `apiBaseUrl`, `apiPrefixes`, `authMode`, `returnScheme`, and `webFallbackUrl` in Web → Android → MORE → Backend & sign-in survival settings. The compatibility report lists findings with source file and line. Blocking findings stop a build before credits are reserved unless the user explicitly checks “I understand, build anyway”; the acknowledgement is recorded.
+
+Native GitHub sign-in uses a Custom Tab and a single-use 120-second PKCE-bound handoff. Native bearer sessions expire after 24 hours and are revocable. Never put provider tokens, handoff codes or PKCE verifiers in URLs, logs, or localStorage. Native billing returns via the custom scheme but the app must poll `billing/status`; the webhook remains authoritative for crediting. Offline mode can show the bundled shell but cannot complete server-backed work. The optional HTTPS/Chromium smoke test runs when `WYBUILD_NATIVE_SMOKE_TEST=true`. Device, live OAuth, Flutterwave and Gradle release verification must still be done before shipping.

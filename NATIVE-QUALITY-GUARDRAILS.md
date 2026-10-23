@@ -10,3 +10,9 @@
 - The workflow now verifies the packaged `android/app/src/main/assets/capacitor.config.json` and the built APK (`assets/public/index.html` present, no `server.url`), so a project hook such as `wybuild/capacitor-patch.sh` can no longer turn the APK into a live-website WebView.
 - `wybuild/capacitor-patch.sh` was removed from this repository. Bundled-asset builds of WyBuild itself need an absolute API base URL, CORS with credentials and cookie/OAuth handling before they work on `https://localhost`.
 - Fixed the meta-refresh check regex and allowed an explicitly selected TWA shell.
+
+## Capacitor native survival (workflow v44)
+
+Standalone Capacitor builds package the UI locally and do not set `server.url`. Server-backed features still require a reachable public HTTPS API. Configure `apiBaseUrl`, `apiPrefixes`, `authMode`, `returnScheme`, and `webFallbackUrl` in Web → Android → MORE → Backend & sign-in survival settings. The compatibility report lists findings with source file and line. Blocking findings stop a build before credits are reserved unless the user explicitly checks “I understand, build anyway”; the acknowledgement is recorded.
+
+Native GitHub sign-in uses a Custom Tab and a single-use 120-second PKCE-bound handoff. Native bearer sessions expire after 24 hours and are revocable. Never put provider tokens, handoff codes or PKCE verifiers in URLs, logs, or localStorage. Native billing returns via the custom scheme but the app must poll `billing/status`; the webhook remains authoritative for crediting. Offline mode can show the bundled shell but cannot complete server-backed work. The optional HTTPS/Chromium smoke test runs when `WYBUILD_NATIVE_SMOKE_TEST=true`. Device, live OAuth, Flutterwave and Gradle release verification must still be done before shipping.

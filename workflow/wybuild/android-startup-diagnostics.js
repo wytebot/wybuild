@@ -2,6 +2,9 @@
 (function () {
   'use strict';
   if (window.__WYBUILD_STARTUP_DIAGNOSTICS__) return;
+  // The bundle has no backend. If the WebView ever lands on /api/... (a link written for the live site), go back to the app root
+  // before the app modules load. '/' never matches, so this cannot loop and needs no once-per-session flag.
+  try { if (/^\/api(\/|$)/.test(location.pathname || '/')) { location.replace('/'); return; } } catch (_) {}
   window.__WYBUILD_STARTUP_DIAGNOSTICS__ = true;
   var startedAt = Date.now();
   var entries = [];
@@ -10,8 +13,9 @@
     try { return String(value && (value.stack || value.message) || value); }
     catch (_) { return 'Unknown startup error'; }
   }
+  function redact(value) { return String(value || '').replace(/https?:\/\/[^\s?#]+[^\s]*/g, function (u) { try { var x = new URL(u); return x.origin + x.pathname; } catch (_) { return '[url]'; } }).replace(/(authorization|access_token|token|code|verifier|secret|password)[=:][^&\s]+/ig, '$1=[redacted]'); }
   function record(kind, detail) {
-    var entry = { time: new Date().toISOString(), kind: kind, detail: String(detail || '') };
+    var entry = { time: new Date().toISOString(), kind: kind, detail: redact(detail) };
     entries.push(entry);
     if (entries.length > 30) entries.shift();
     try { localStorage.setItem('wybuild.android.startupDiagnostics', JSON.stringify(entries)); } catch (_) {}
@@ -25,7 +29,7 @@
     var card = document.createElement('section'); card.style.cssText = 'max-width:620px;margin:4vh auto;padding:22px;border:1px solid #475569;border-radius:16px;background:#0f172a';
     var title = document.createElement('h1'); title.textContent = 'WyBuild could not start'; title.style.cssText = 'font-size:22px;margin:0 0 12px';
     var intro = document.createElement('p'); intro.textContent = 'Android detected that the app interface did not finish loading. This diagnostic is local to the app and does not clear your data.'; intro.style.cssText = 'line-height:1.5;color:#cbd5e1';
-    var details = document.createElement('pre'); details.textContent = String(reason || 'No visible app content was detected.') + '\n\nPage: ' + location.href + '\nElapsed: ' + (Date.now() - startedAt) + ' ms\nUser agent: ' + navigator.userAgent + '\n\nRecent errors:\n' + entries.map(function (e) { return e.time + ' [' + e.kind + '] ' + e.detail; }).join('\n');
+    var details = document.createElement('pre'); details.textContent = String(reason || 'No visible app content was detected.') + '\n\nPage: ' + location.origin + location.pathname + '\nElapsed: ' + (Date.now() - startedAt) + ' ms\nUser agent: ' + navigator.userAgent + '\n\nRecent errors:\n' + entries.map(function (e) { return e.time + ' [' + e.kind + '] ' + e.detail; }).join('\n');
     details.style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere;max-height:42vh;overflow:auto;padding:12px;border-radius:8px;background:#020617;color:#fca5a5;font-size:11px';
     var row = document.createElement('div'); row.style.cssText = 'display:flex;flex-wrap:wrap;gap:10px;margin-top:14px';
     function button(label, action, bg) { var b = document.createElement('button'); b.textContent = label; b.onclick = action; b.style.cssText = 'padding:11px 14px;border:0;border-radius:9px;background:' + bg + ';color:#fff;font-weight:700'; return b; }
@@ -55,8 +59,9 @@
     window.setTimeout(function () { show(detail); }, 0);
   }, true);
   window.addEventListener('unhandledrejection', function (event) {
-    var detail = describe(event.reason); record('unhandled-rejection', detail);
-    window.setTimeout(function () { show(detail); }, 0);
+    var detail = describe(event.reason);
+    if (/failed to fetch|network request failed|load failed|networkerror|could not reach|server.*unreachable/i.test(detail)) { record('backend-unreachable', detail); return; }
+    record('unhandled-rejection', detail); window.setTimeout(function () { show(detail); }, 0);
   });
   window.addEventListener('securitypolicyviolation', function (event) { record('csp-violation', event.violatedDirective + ' ' + event.blockedURI); });
   document.addEventListener('DOMContentLoaded', function () {

@@ -33,6 +33,13 @@ export interface LinkRule { pattern: string; mode: LinkMode }
 
 export interface TwaConfig {
   webUrl: string;
+  /** Native API backend; HTTPS, public, same host as webUrl or an explicitly trusted origin. */
+  apiBaseUrl?: string;
+  apiPrefixes?: string[];
+  authMode?: 'none' | 'bearer-handoff' | 'custom-tab';
+  returnScheme?: string;
+  webFallbackUrl?: string;
+  compatibilityAcknowledged?: boolean;
   packageId: string;
   name: string;
   launcherName: string;

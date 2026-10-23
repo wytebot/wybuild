@@ -1,3 +1,4 @@
+import { apiUrl, authHeaders, isNative, API_BASE } from './services/apiBase';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -44,7 +45,7 @@ const ViewFallback: React.FC = () => <div className="p-6 text-sm text-slate-400"
 const preloadViews = () => { Object.values(loaders).forEach((load) => { void load().catch(() => {}); }); };
 
 const MainLayout: React.FC = () => {
-  const { currentTab, toastMessage, builds, setActiveBuildId, setCurrentTab, authState, user, repos } = useApp();
+  const { currentTab, toastMessage, builds, setActiveBuildId, setCurrentTab, authState, user, repos, retryAuth } = useApp();
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);
   const [showQuickBuildModal, setShowQuickBuildModal] = useState(false);
   const [showBillingModal, setShowBillingModal] = useState(false);
@@ -92,8 +93,8 @@ const MainLayout: React.FC = () => {
         tokenListener = await native.push.onToken(async (event: any) => {
           const token = String(event?.value || event?.token || '');
           if (!token || disposed) return;
-          await fetch('/api/push/register', {
-            method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+          await fetch(apiUrl('push/register'), {
+            method: 'POST', credentials: isNative() ? 'omit' : 'same-origin', headers: await authHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({ token, platform: native.platform?.() || 'android', repos: repos.map((r) => r.fullName).filter(Boolean) }),
           }).catch(() => {});
         });
@@ -104,7 +105,7 @@ const MainLayout: React.FC = () => {
           try {
             const target = new URL(rawUrl, window.location.origin);
             // Never let a push payload navigate the app to an arbitrary external site.
-            const trustedWebHost = target.hostname === 'wybuild-black.vercel.app';
+            const trustedWebHost = target.hostname === new URL(API_BASE || 'https://wybuild-black.vercel.app').hostname;
             if (target.origin !== window.location.origin && !trustedWebHost) return;
             // Native Capacitor builds use a local WebView origin; keep navigation inside the app shell.
             window.location.assign(`${target.pathname}${target.search}${target.hash}`);
@@ -215,6 +216,9 @@ const MainLayout: React.FC = () => {
 
 const Gate: React.FC = () => {
   const { authState } = useApp();
+  if (authState === 'unreachable') {
+    return <main className="min-h-dvh bg-slate-950 text-slate-100 flex items-center justify-center p-6"><section className="max-w-md w-full rounded-2xl border border-amber-400/20 bg-slate-900 p-6"><h1 className="text-xl font-bold">Can’t reach WyBuild</h1><p className="mt-2 text-sm text-slate-300">Your saved sign-in has not been cleared. Check your connection, then retry. {user?.login ? `Last signed in as @${user.login}.` : ''}</p><div className="mt-5 flex flex-col gap-2"><button onClick={() => void retryAuth()} className="rounded-lg bg-emerald-400 px-4 py-3 font-bold text-slate-950">Retry connection</button><a href="https://wybuild-black.vercel.app" onClick={e => { if ((window as any).Capacitor?.isNativePlatform?.()) { e.preventDefault(); void import('@capacitor/browser').then(({ Browser }) => Browser.open({ url: 'https://wybuild-black.vercel.app' })); } }} className="rounded-lg border border-white/10 px-4 py-3 text-center">Open web version</a></div></section></main>;
+  }
   if (authState === 'loading') {
     return <div className="h-dvh bg-slate-950 flex items-center justify-center text-slate-500 text-sm">Loading...</div>;
   }

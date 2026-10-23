@@ -1,3 +1,4 @@
+import { apiUrl, authHeaders, isNative } from '../services/apiBase';
 import React, { useCallback, useEffect, useState } from 'react';
 import { RefreshCw, Folder, ShieldCheck, CheckCircle2, RotateCcw, HardDrive, Save, AlertTriangle } from 'lucide-react';
 import { useApp } from '../context/AppContext';
@@ -5,7 +6,7 @@ import { useApp } from '../context/AppContext';
 type DriveConfig = { configured: boolean; folderId: string; updatedAt?: string; serviceEmail?: string; serviceAccountConfigured?: boolean };
 type DriveHistory = { found: boolean; fileId?: string; builds: unknown[]; projects: unknown[]; updatedAt?: string };
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(`/api/${path}`, { ...init, credentials: 'same-origin', headers: { Accept: 'application/json', ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...(init.headers || {}) } });
+  const response = await fetch(apiUrl(path), { ...init, credentials: isNative() ? 'omit' : 'same-origin', headers: await authHeaders({ Accept: 'application/json', ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...(init.headers || {}) }) });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data?.error || data?.message || `Request failed (${response.status})`);
   return data as T;

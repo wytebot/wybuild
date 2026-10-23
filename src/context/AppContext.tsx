@@ -41,7 +41,8 @@ interface AppContextType {
   openFlutterwaveCheckout: (cycle: BillingCycle) => void;
   cancelSubscription: () => Promise<void>;
   user: AuthUser | null;
-  authState: 'loading' | 'anon' | 'authed';
+  authState: 'loading' | 'anon' | 'authed' | 'unreachable';
+  retryAuth: () => Promise<void>;
   logout: () => Promise<void>;
   repos: RepoInfo[];
   reposLoading: boolean;
@@ -139,8 +140,8 @@ const errMsg = (e: unknown) => {
 };
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [authState, setAuthState] = useState<'loading' | 'anon' | 'authed'>('loading');
-  const [user, setUser] = useState<AuthUser | null>(null);
+  const [authState, setAuthState] = useState<'loading' | 'anon' | 'authed' | 'unreachable'>('loading');
+  const [user, setUser] = useState<AuthUser | null>(() => { try { const raw = localStorage.getItem('wybuild:lastKnownUser'); return raw ? JSON.parse(raw) as AuthUser : null; } catch { return null; } });
   const [repos, setRepos] = useState<RepoInfo[]>([]);
   const [reposLoading, setReposLoading] = useState(false);
   const [defaultKeystore, setDefaultKeystore] = useState(false);
@@ -327,6 +328,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       const me = await api.me();
       setUser(me.user);
+      try { localStorage.setItem('wybuild:lastKnownUser', JSON.stringify(me.user)); } catch { /* optional offline identity cache */ }
       try {
         const key = 'wybuild:githubAccounts';
         const old = JSON.parse(localStorage.getItem(key) || '[]');
@@ -349,8 +351,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (e) {
       // Only a 401 means "not signed in"; other errors must not bounce a
       // signed-in user back to the login screen.
-      if (e instanceof ApiError && e.status === 401) setAuthState('anon');
-      else setAuthState((prev) => (prev === 'loading' ? 'anon' : prev));
+      if (e instanceof ApiError && e.status === 401) { setAuthState('anon'); setUser(null); try { localStorage.removeItem('wybuild:lastKnownUser'); } catch {} }
+      else setAuthState('unreachable');
     }
   }, []);
 
@@ -739,6 +741,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       await api.logout();
     } finally {
       setUser(null);
+      try { localStorage.removeItem('wybuild:lastKnownUser'); } catch {}
       setHydratedFor(null);
       resetSessionData();
       setSubscription(EMPTY_SUB);
@@ -950,6 +953,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         cancelSubscription,
         user,
         authState,
+        retryAuth: refreshMe,
         logout,
         repos,
         reposLoading,

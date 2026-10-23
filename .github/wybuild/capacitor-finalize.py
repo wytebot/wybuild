@@ -185,12 +185,32 @@ if 'deeplinks' in (config.get('nativeFeatures') or []) and manifest.exists():
         manifest.write_text(_mtxt[:_act.end()] + _filter + _mtxt[_act.end():], encoding='utf-8')
         print(f'Deep links enabled for https://{_host}')
 
+# Custom-scheme return path for OAuth/billing Custom Tab handoffs. PKCE is mandatory.
+if manifest.exists():
+    package_id = str(config.get('packageId') or '').lower()
+    default_scheme = 'wybuild' if package_id in ('app.wybuildblack.vercel', 'app.wybuildapk.vercel', 'app.wybuild.vercel') else package_id.replace('.', '-')
+    scheme = str(config.get('returnScheme') or default_scheme).lower()
+    blocked = {'http','https','javascript','data','file','content','intent','about','chrome','android','ftp','mailto','tel','sms','market','blob','capacitor'}
+    if not re.fullmatch(r'[a-z][a-z0-9+.-]{1,30}', scheme) or scheme in blocked:
+        raise SystemExit('Invalid or blocked custom return scheme.')
+    _mtxt = manifest.read_text(encoding='utf-8')
+    _act = re.search(r'<activity\b(?=[^>]*android:name="[^"]*MainActivity")[^>]*>', _mtxt)
+    if not _act:
+        raise SystemExit('MainActivity was not found; cannot add the custom-scheme return path.')
+    if f'android:scheme="{scheme}"' not in _mtxt:
+        _filter = (f'\n        <intent-filter>\n            <action android:name="android.intent.action.VIEW" />\n'
+                   f'            <category android:name="android.intent.category.DEFAULT" />\n'
+                   f'            <category android:name="android.intent.category.BROWSABLE" />\n'
+                   f'            <data android:scheme="{scheme}" />\n        </intent-filter>\n')
+        manifest.write_text(_mtxt[:_act.end()] + _filter + _mtxt[_act.end():], encoding='utf-8')
+        print(f'Custom-scheme return path enabled: {scheme}://')
+
 # Incoming Android share target: declare Android SEND intents when enabled.
 
 
 if 'sharetarget' in (config.get('nativeFeatures') or []) and manifest.exists():
     manifest_text = manifest.read_text(encoding='utf-8')
-    activity_match = re.search(r'<activity\\b(?=[^>]*android:name="[^"]*MainActivity")[^>]*>', manifest_text)
+    activity_match = re.search(r'<activity\b(?=[^>]*android:name="[^"]*MainActivity")[^>]*>', manifest_text)
     if activity_match and 'android.intent.action.SEND' not in manifest_text:
         filters = '''
         <intent-filter>

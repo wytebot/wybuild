@@ -1,3 +1,4 @@
+import { apiUrl, authHeaders, isNative, saveNativeToken, clearNativeToken } from './apiBase';
 import { AuthUser, BillingCycle, BuildConfiguration, BuildKind, BuildRecord, Keystore, RepoInfo, SubscriptionInfo, TwaConfig } from '../types';
 
 export class ApiError extends Error {
@@ -34,11 +35,8 @@ async function requestNow<T>(path: string, init: RequestInit = {}): Promise<T> {
   const where = `${method} /api/${path.split('?')[0]}`;
   let res: Response;
   try {
-    res = await fetch(`/api/${path}`, {
-      credentials: 'same-origin',
-      ...init,
-      headers: init.body ? { 'Content-Type': 'application/json' } : undefined,
-    });
+    const mergedHeaders = await authHeaders({ ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...(init.headers as Record<string, string> || {}) });
+    res = await fetch(apiUrl(path), { credentials: isNative() ? 'omit' : 'same-origin', ...init, headers: mergedHeaders });
   } catch {
     throw new ApiError(`Could not reach the WyBuild server (${where}).`, 0, 'NETWORK', navigator.onLine ? 'The server may be redeploying or blocked by an extension/VPN. Retry in a few seconds.' : 'You appear to be offline.');
   }
@@ -65,6 +63,7 @@ const enc = encodeURIComponent;
 
 export interface TwaInspection {
   detected: Partial<Pick<TwaConfig, 'webUrl' | 'webManifestUrl' | 'name' | 'launcherName' | 'themeColor' | 'backgroundColor' | 'startUrl' | 'display' | 'orientation' | 'iconUrl' | 'maskableIconUrl' | 'monochromeIconUrl' | 'packageId' | 'additionalTrustedOrigins' | 'shortcuts'>>;
+  compatReport?: { version: number; summary: { status: 'red' | 'amber' | 'green'; blocking: number; warnings: number; filesScanned: number }; findings: Array<{ id: string; level: 'blocking' | 'warning'; file: string; line: number; message: string }>; note?: string };
   /** native features the live site's code appears to use (suggestions) */
   featureHints?: ('notifications' | 'location' | 'camera' | 'microphone' | 'vibration')[];
   checks: { id: string; ok: boolean; level: 'ok' | 'warn' | 'error'; msg: string }[];
@@ -88,6 +87,7 @@ export interface RepoInspection {
   packageId?: string;
   workflowInstalled: boolean;
   workflowUpToDate: boolean;
+  compatReport?: { version: number; summary: { status: 'red' | 'amber' | 'green'; blocking: number; warnings: number; filesScanned: number }; findings: Array<{ id: string; level: 'blocking' | 'warning'; file: string; line: number; message: string }>; note?: string };
   workflows?: { flutter: { installed: boolean; upToDate: boolean }; twa: { installed: boolean; upToDate: boolean } };
   /** repo = repo has its own key, default = server default key will be copied in automatically, none = needs an upload */
   signing?: 'repo' | 'default' | 'none';
@@ -136,8 +136,19 @@ export const api = {
   automationDiagnose: (body: { repo: string; runId: string | number }) => post<{ diagnosis: { title: string; category: string; summary: string; rootCause: string; suggestions: string[]; canAutoFix: boolean; filesToInspect?: string[]; manualSteps?: string[] }; engine: string; creditsCharged: number; creditsRemaining: number; usage?: { inputTokens: number; outputTokens: number } }>('automation/diagnose', body),
   automationFix: (body: { repo: string; runId: string | number; branch: string }) => post<{ applied: boolean; summary: string; fixes: { path: string; reason: string; commit: string }[]; settingsChanges: { key: string; value: string; where: string }[]; manualSteps: string[]; creditsCharged: number; creditsRemaining: number; engine: string }>('automation/fix', body),
   automationIntegrateApi: (body: { repo: string; branch: string; integrationId: string; goal?: string; shell?: 'twa' | 'standalone' }) => post<{ applied: boolean; upToDate?: boolean; integration: string; summary: string; fixes: { path: string; reason: string; commit: string }[]; manualSteps: string[]; requiresSecrets: boolean; detectedCapabilities?: string[]; verificationChecks?: string[]; status?: string; actualCostUsd?: number; engine: string; creditsCharged: number; creditsRemaining: number; usage?: { inputTokens: number; outputTokens: number }; buildVerified?: boolean; verificationMessage?: string }>('automation/integrate-api', body),
-  logout: () => post<{ ok: true }>('auth/logout', {}),
-  loginWithToken: (token: string) => post<{ ok: true; login: string; tokenType: 'classic' | 'fine-grained' }>('auth/token', { token }),
+  exchangeNativeCode: async (code: string, verifier: string) => {
+    const r = await request<{ ok: true; accessToken: string; user: AuthUser }>('auth/native/exchange', { method: 'POST', body: JSON.stringify({ code, verifier }), headers: { 'Content-Type': 'application/json' } });
+    await saveNativeToken(r.accessToken); return r;
+  },
+  logout: async () => { try { await post<{ ok: true }>('auth/logout', {}); } finally { if (isNative()) await clearNativeToken(); } return { ok: true as const }; },
+  loginWithToken: async (token: string) => {
+    if (isNative()) {
+      const result = await request<{ ok: true; login: string; tokenType: 'classic' | 'fine-grained'; accessToken: string }>('auth/token', { method: 'POST', body: JSON.stringify({ token }), headers: { 'Content-Type': 'application/json', 'X-WyBuild-Native': '1' } });
+      if (result.accessToken) await saveNativeToken(result.accessToken);
+      return result;
+    }
+    return post<{ ok: true; login: string; tokenType: 'classic' | 'fine-grained' }>('auth/token', { token });
+  },
   repos: () => request<{ repos: RepoInfo[] }>('repos').then((r) => r.repos),
   inspectRepo: (repo: string, kind: BuildKind = 'twa') => request<RepoInspection>(`inspect-repo?repo=${enc(repo)}&kind=${kind}`),
   workflow: (repo: string, branch: string, kind: BuildKind = 'twa') =>

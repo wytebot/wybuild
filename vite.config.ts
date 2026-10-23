@@ -5,9 +5,9 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
-    // Capacitor serves bundled files from its local HTTPS origin. Relative asset URLs
-    // keep JS/CSS chunks working regardless of the native app's origin/path.
-    base: './',
+    // Root-absolute asset URLs: Capacitor serves the bundle from https://localhost/ and the web app is deployed at the site root.
+    // Relative URLs (./assets/x.js) resolve against the CURRENT page path, so a stray navigation to /api/auth/... left a blank screen.
+    base: '/',
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
