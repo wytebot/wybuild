@@ -1,4 +1,4 @@
-# wybuild-twa-workflow-version: 46
+# wybuild-twa-workflow-version: 47
 # v43: native survival configuration, compatibility analyzer/report, optional HTTPS/Chromium smoke test and custom-scheme handoff support.
 # v41: Bundled index.html uses root-absolute asset URLs (a stray in-app navigation to /some/path no longer breaks JS/CSS loading), startup self-recovery, warning when the app needs a same-origin server /api.
 # v40: Verify the packaged AND built-APK capacitor config (catches capacitor-patch.sh server.url), fix meta-refresh regex, allow explicit TWA shell.
@@ -330,7 +330,9 @@ jobs:
           const derivedScheme = ownWyBuildPackages.includes(appId) ? 'wybuild' : String(appId).replaceAll('.', '-');
           const requestedScheme = String(cfg.returnScheme || derivedScheme).toLowerCase();
           const returnScheme = /^[a-z][a-z0-9+.-]{1,30}$/.test(requestedScheme) && !['http','https','javascript','file','content','intent','data'].includes(requestedScheme) ? requestedScheme : derivedScheme;
-          const runtimeConfig = { apiBaseUrl: cfg.apiBaseUrl || '', apiPrefixes: Array.isArray(cfg.apiPrefixes) ? cfg.apiPrefixes : ['/api'], authMode: cfg.authMode || 'none', returnScheme, webFallbackUrl: cfg.webFallbackUrl || cfg.webUrl };
+          const runtimeConfig = { apiBaseUrl: cfg.apiBaseUrl || '', apiPrefixes: Array.isArray(cfg.apiPrefixes) ? cfg.apiPrefixes : ['/api'], authMode: cfg.authMode || 'none', returnScheme, webFallbackUrl: cfg.webFallbackUrl || cfg.webUrl,
+            // Android PushNotifications.register() throws a native, uncatchable IllegalStateException (app crash) when no Firebase config is packaged.
+            firebaseConfigured: ['google-services.json','config/android/google-services.json','android/app/google-services.json','app/google-services.json'].some((f) => fs.existsSync(f)) || !!String(process.env.GOOGLE_SERVICES_JSON_BASE64 || '').trim() };
           fs.writeFileSync(path.join(webDir, 'wybuild-runtime-config.json'), JSON.stringify(runtimeConfig, null, 2));
           fs.writeFileSync(path.join(webDir, 'wybuild-runtime-config.js'), 'window.__WYBUILD_RUNTIME_CONFIG__=' + JSON.stringify(runtimeConfig).replace(/</g, '\\u003c') + ';');
           const entryPath = path.join(webDir, 'index.html');
@@ -699,6 +701,20 @@ jobs:
           cfg = json.loads(z.read('assets/capacitor.config.json'))
           if (cfg.get('server') or {}).get('url'):
               sys.exit('::error::Built APK has server.url=' + cfg['server']['url'] + ' (live-website WebView).')
+          # Every local asset the page references must be root-absolute and actually packaged. A relative URL breaks on any non-root path,
+          # and a missing file is answered with index.html by Capacitor, which silently produces a blank screen.
+          refs = re.findall(r'\b(?:src|href)\s*=\s*["\']([^"\'#?]+)', html, flags=re.I)
+          for ref in refs:
+              if re.match(r'^(?:[a-z][a-z0-9+.-]*:|//)', ref, flags=re.I) or ref.startswith('mailto:'): continue
+              if not ref.startswith('/'):
+                  sys.exit('::error::Packaged index.html references a relative asset (' + ref + '); it would break when the WebView is not at the app root.')
+              entry = 'assets/public' + ref
+              if entry not in names:
+                  sys.exit('::error::Packaged index.html references ' + ref + ' but the APK does not contain it (it would render a blank screen).')
+              if ref.endswith(('.js', '.mjs', '.css')) and z.read(entry)[:64].lstrip().lower().startswith((b'<!doctype', b'<html')):
+                  sys.exit('::error::Packaged asset ' + ref + ' is an HTML page, not a script or stylesheet.')
+          if not any(r.endswith(('.js', '.mjs')) for r in refs):
+              sys.exit('::error::Packaged index.html loads no JavaScript; the app UI would never render.')
           print('APK verified: bundled UI, early Android startup diagnostics, native bridge present, and no server.url.')
           PYAPK
           fi

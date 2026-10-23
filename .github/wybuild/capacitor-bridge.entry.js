@@ -179,7 +179,7 @@ const native = {
   push: {
     permissions: () => safe(() => PushNotifications.requestPermissions()),
     channel: () => safe(() => PushNotifications.createChannel({ id: 'wybuild-builds', name: 'Build updates', description: 'Successful and failed WyBuild jobs', importance: 5, visibility: 1 })),
-    register: async () => safe(async () => { const p = await PushNotifications.requestPermissions(); if (p.receive !== 'granted') throw new Error('Notification permission was not granted'); await PushNotifications.register(); return p; }),
+    register: async () => safe(async () => { if (runtimeConfig.firebaseConfigured !== true) throw new Error('Push notifications are not configured for this build (no google-services.json was packaged).'); const p = await PushNotifications.requestPermissions(); if (p.receive !== 'granted') throw new Error('Notification permission was not granted'); await PushNotifications.register(); return p; }),
     onToken: (callback) => PushNotifications.addListener('registration', callback),
     onNotification: (callback) => PushNotifications.addListener('pushNotificationReceived', callback),
     onAction: (callback) => PushNotifications.addListener('pushNotificationActionPerformed', callback),

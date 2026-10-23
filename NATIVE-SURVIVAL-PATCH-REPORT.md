@@ -77,3 +77,9 @@ Changes:
 6. Added a regression test that executes the diagnostics script against /api, /apiary and / paths in both copies.
 
 Verified: node --test (10/10), node --check on API, bridge and diagnostics, both copies identical, live workflow matches template. Not verified (no network, no Android toolchain): npm install, tsc, vite build, Gradle, and device testing.
+
+7. **APK asset gate (v46):** the final APK verification now fails the build if the packaged index.html references a relative asset, a file that is not in the APK, an asset that is actually an HTML page, or no JavaScript at all. Exercised against synthetic APKs (good, relative, missing, HTML-as-JS); test count is now 11/11.
+
+## v47 post-login crash fix
+
+Symptom: app shows "keeps stopping" right after a successful native GitHub sign-in. Likely cause: once signed in, the app calls PushNotifications.register(). On Android that throws a native IllegalStateException (Firebase not initialised) when no google-services.json is packaged; a JS try/catch cannot catch it, so the process dies. Fix: the workflow records firebaseConfigured in the runtime config and the bridge refuses push.register() unless it is true. Workflow/server version is now 47. This is inferred from source, not from a device crash log; confirm with logcat (adb logcat -b crash).

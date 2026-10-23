@@ -41,14 +41,14 @@ test('Capacitor finalizer keeps a working MainActivity matcher and share-target 
   assert.match(patched, /android\.intent\.action\.SEND/);
 });
 
-test('workflow templates and server version marker are aligned at v46', async () => {
+test('workflow templates and server version marker are aligned at v47', async () => {
   const fs = await import('node:fs');
   const api = fs.readFileSync(new URL('../api/index.js', import.meta.url), 'utf8');
   const live = fs.readFileSync(new URL('../.github/workflows/wybuild-twa.yml', import.meta.url), 'utf8');
   const template = fs.readFileSync(new URL('../workflow/wybuild-twa.yml', import.meta.url), 'utf8');
-  assert.match(api, /const TWA_WORKFLOW_VERSION = 46;/);
-  assert.match(live, /wybuild-twa-workflow-version: 46/);
-  assert.match(template, /wybuild-twa-workflow-version: 46/);
+  assert.match(api, /const TWA_WORKFLOW_VERSION = 47;/);
+  assert.match(live, /wybuild-twa-workflow-version: 47/);
+  assert.match(template, /wybuild-twa-workflow-version: 47/);
   assert.equal(live.replaceAll('https://wybuild-black.vercel.app', '__WYBUILD_APP_URL__'), template);
 });
 
@@ -103,4 +103,20 @@ test('bundled WebView cannot be stranded on a same-origin /api path', async () =
   const bridge = read('.github/wybuild/capacitor-bridge.entry.js');
   assert.equal(bridge, read('workflow/wybuild/capacitor-bridge.entry.js'));
   assert.match(bridge, /isApiPath\(u\.pathname\)/);
+});
+
+test('APK verification gate rejects relative or missing packaged assets', async () => {
+  const fs = await import('node:fs');
+  const wf = fs.readFileSync(new URL('../.github/workflows/wybuild-twa.yml', import.meta.url), 'utf8');
+  assert.match(wf, /references a relative asset/);
+  assert.match(wf, /does not contain it/);
+  assert.match(wf, /loads no JavaScript/);
+});
+
+test('push registration is refused (not crashed) when no Firebase config was packaged', async () => {
+  const fs = await import('node:fs');
+  const bridge = fs.readFileSync(new URL('../.github/wybuild/capacitor-bridge.entry.js', import.meta.url), 'utf8');
+  const gate = bridge.indexOf('runtimeConfig.firebaseConfigured !== true');
+  assert.ok(gate > 0 && gate < bridge.indexOf('PushNotifications.register()'), 'gate must precede the native register call');
+  for (const f of ['.github/workflows/wybuild-twa.yml', 'workflow/wybuild-twa.yml']) assert.match(fs.readFileSync(new URL('../' + f, import.meta.url), 'utf8'), /firebaseConfigured:/);
 });
