@@ -1,0 +1,205 @@
+import { AuthUser, BillingCycle, BuildConfiguration, BuildKind, BuildRecord, Keystore, RepoInfo, SubscriptionInfo, TwaConfig } from '../types';
+
+export class ApiError extends Error {
+  status: number;
+  code?: string;
+  hint?: string;
+  details?: Record<string, unknown>;
+  /** the bare cause, without the hint appended */
+  reason: string;
+  constructor(message: string, status: number, code?: string, hint?: string, details?: Record<string, unknown>) {
+    super(hint ? `${message} Fix: ${hint}` : message);
+    this.reason = message;
+    this.status = status;
+    this.code = code;
+    this.hint = hint;
+    this.details = details;
+  }
+}
+
+// Identical GETs that are already in flight share one network call (several components ask for the same data at once).
+const inflightGets = new Map<string, Promise<unknown>>();
+function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const method = (init.method || 'GET').toUpperCase();
+  if (method !== 'GET' || init.body || init.signal) return requestNow<T>(path, init);
+  const existing = inflightGets.get(path);
+  if (existing) return existing as Promise<T>;
+  const p = requestNow<T>(path, init).finally(() => { if (inflightGets.get(path) === p) inflightGets.delete(path); });
+  inflightGets.set(path, p);
+  return p;
+}
+
+async function requestNow<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const method = init.method || 'GET';
+  const where = `${method} /api/${path.split('?')[0]}`;
+  let res: Response;
+  try {
+    res = await fetch(`/api/${path}`, {
+      credentials: 'same-origin',
+      ...init,
+      headers: init.body ? { 'Content-Type': 'application/json' } : undefined,
+    });
+  } catch {
+    throw new ApiError(`Could not reach the WyBuild server (${where}).`, 0, 'NETWORK', navigator.onLine ? 'The server may be redeploying or blocked by an extension/VPN. Retry in a few seconds.' : 'You appear to be offline.');
+  }
+  const raw = await res.text();
+  let data: any = {};
+  try { data = raw ? JSON.parse(raw) : {}; } catch { data = null; }
+  if (!res.ok) {
+    if (data === null) {
+      // the response was not our JSON error: a platform page (Vercel 404/500/timeout) rather than the app
+      const platform = res.status === 404 ? 'The API route does not exist on this deployment (the serverless function was not deployed or vercel.json rewrites are missing).'
+        : (res.status === 504 || res.status === 408) && path.split('?')[0] === 'twa-build'
+          ? 'WyBuild took too long to confirm the build request. Open Builds and refresh before retrying: GitHub may already have accepted the run. If no run appears after a minute, retry. If credits were reserved, refresh your balance; dispatch/setup failures are refunded automatically when the server can complete cleanup.'
+        : res.status === 504 || res.status === 408 ? 'The server function timed out. Retry shortly; if this action may have completed, check its status before submitting it again.'
+        : res.status >= 500 ? 'The server function crashed before it could respond; check the Vercel function logs.' : '';
+      throw new ApiError(`${where} returned HTTP ${res.status} ${res.statusText} with a non-JSON body.`, res.status, 'NON_JSON_RESPONSE', platform || undefined);
+    }
+    throw new ApiError(data.error || `${where} failed with HTTP ${res.status} ${res.statusText}.`, res.status, data.code, data.hint, data.details);
+  }
+  return (data ?? {}) as T;
+}
+
+const post = <T,>(path: string, body: unknown) => request<T>(path, { method: 'POST', body: JSON.stringify(body) });
+const enc = encodeURIComponent;
+
+export interface TwaInspection {
+  detected: Partial<Pick<TwaConfig, 'webUrl' | 'webManifestUrl' | 'name' | 'launcherName' | 'themeColor' | 'backgroundColor' | 'startUrl' | 'display' | 'orientation' | 'iconUrl' | 'maskableIconUrl' | 'monochromeIconUrl' | 'packageId' | 'additionalTrustedOrigins' | 'shortcuts'>>;
+  /** native features the live site's code appears to use (suggestions) */
+  featureHints?: ('notifications' | 'location' | 'camera' | 'microphone' | 'vibration')[];
+  checks: { id: string; ok: boolean; level: 'ok' | 'warn' | 'error'; msg: string }[];
+  assetlinks: { present: boolean; packages: string[] };
+  pwa: {
+    ready: boolean;
+    manifest: { url: string; id: string; scope: string; startUrl: string; display: string; orientation: string; name: string; shortName: string };
+    serviceWorker: { present: boolean; url: string; source: string; reachable: boolean };
+    icons: { primary: string; primarySize: number | null; maskable: string; monochrome: string };
+    checks: { id: string; ok: boolean; level: 'ok' | 'warn' | 'error'; msg: string }[];
+  };
+}
+
+
+export interface RepoInspection {
+  repo: string;
+  name: string;
+  defaultBranch: string;
+  framework: 'flutter' | 'expo' | 'react-native' | 'web' | 'unknown';
+  flutterVersion: string;
+  packageId?: string;
+  workflowInstalled: boolean;
+  workflowUpToDate: boolean;
+  workflows?: { flutter: { installed: boolean; upToDate: boolean }; twa: { installed: boolean; upToDate: boolean } };
+  /** repo = repo has its own key, default = server default key will be copied in automatically, none = needs an upload */
+  signing?: 'repo' | 'default' | 'none';
+  /** why the Vercel default key cannot be used (only set when signing is 'none') */
+  signingProblem?: string;
+  homepage?: string;
+  /** values read from a web manifest / package.json inside the repo; used only to fill blanks the live site does not publish */
+  web?: { source: string; name: string; launcherName: string; themeColor: string; backgroundColor: string; display: string; orientation: string; startUrl: string; manifestUrl?: string; id?: string; scope?: string; iconCount?: number; hasMaskableIcon?: boolean; hasMonochromeIcon?: boolean; serviceWorker?: string };
+  pwa?: { manifestFound: boolean; manifestPath: string; serviceWorkerFound: boolean; serviceWorkerPath: string; maskableIcon: boolean; monochromeIcon: boolean };
+  canPush?: boolean;
+  private?: boolean;
+  latestCommitSha?: string;
+  nativeBuild?: { hasPackageJson: boolean; hasBuildScript: boolean; buildScript: string; capacitorDeclared: boolean; capacitorMajor: number; firebaseConfigFound: boolean; sourceBuildCandidate: boolean; sourceBuildReason?: string };
+}
+
+export interface UsageInfo {
+  monthlyBuildsUsed: number;
+  monthlyLimit: number;
+  concurrentLimit: number;
+  resetsAt: string;
+}
+
+export interface ReleasePrep {
+  files: { name: string; size: number; kind: 'apk' | 'aab'; sha256: string }[];
+  packageId: string;
+  versionName: string;
+  versionCode: string;
+  tag: string;
+  name: string;
+  notes: string;
+  notesSource: 'github' | 'fallback';
+  previousTag?: string;
+  target: { sha: string; branch: string };
+  tagExists: boolean;
+  releaseExists: boolean;
+  existingReleaseUrl?: string;
+  canPush: boolean;
+}
+
+export interface ReleaseResult { ok: true; url: string; draft: boolean; tag: string; assets: { name: string; url: string; size: number }[] }
+
+export const api = {
+  me: () => request<{ user: AuthUser; subscription: SubscriptionInfo | null; usage: UsageInfo; lifetimeFree?: boolean; pricing?: Record<BillingCycle, number>; pricingNgn?: Record<BillingCycle, number>; defaultKeystore?: boolean; defaultKeystoreProblem?: string }>('me'),
+  creditsBalance: () => request<{ wallet: { balance: number; updatedAt?: string | null }; packs: Record<string, { credits: number; amount: number; currency: string; ngn: number }>; currency: string; engine: string; freeForever?: boolean }>('credits/balance'),
+  chargeAction: (action: string, operationId: string) => post<{ ok: true; charged: number; balance: number; freeForever?: boolean }>('credits/action', { action, operationId }),
+  automationDiagnose: (body: { repo: string; runId: string | number }) => post<{ diagnosis: { title: string; category: string; summary: string; rootCause: string; suggestions: string[]; canAutoFix: boolean; filesToInspect?: string[]; manualSteps?: string[] }; engine: string; creditsCharged: number; creditsRemaining: number; usage?: { inputTokens: number; outputTokens: number } }>('automation/diagnose', body),
+  automationFix: (body: { repo: string; runId: string | number; branch: string }) => post<{ applied: boolean; summary: string; fixes: { path: string; reason: string; commit: string }[]; settingsChanges: { key: string; value: string; where: string }[]; manualSteps: string[]; creditsCharged: number; creditsRemaining: number; engine: string }>('automation/fix', body),
+  automationIntegrateApi: (body: { repo: string; branch: string; integrationId: string; goal?: string; shell?: 'twa' | 'standalone' }) => post<{ applied: boolean; upToDate?: boolean; integration: string; summary: string; fixes: { path: string; reason: string; commit: string }[]; manualSteps: string[]; requiresSecrets: boolean; detectedCapabilities?: string[]; verificationChecks?: string[]; status?: string; actualCostUsd?: number; engine: string; creditsCharged: number; creditsRemaining: number; usage?: { inputTokens: number; outputTokens: number }; buildVerified?: boolean; verificationMessage?: string }>('automation/integrate-api', body),
+  logout: () => post<{ ok: true }>('auth/logout', {}),
+  loginWithToken: (token: string) => post<{ ok: true; login: string; tokenType: 'classic' | 'fine-grained' }>('auth/token', { token }),
+  repos: () => request<{ repos: RepoInfo[] }>('repos').then((r) => r.repos),
+  inspectRepo: (repo: string, kind: BuildKind = 'twa') => request<RepoInspection>(`inspect-repo?repo=${enc(repo)}&kind=${kind}`),
+  workflow: (repo: string, branch: string, kind: BuildKind = 'twa') =>
+    request<{ installed: boolean; upToDate: boolean }>(`workflow?repo=${enc(repo)}&branch=${enc(branch)}&kind=${kind}`),
+  resetSigning: (repo: string) => post<{ ok: true; signing: 'default' }>('signing/reset', { repo }),
+  installWorkflow: (repo: string, branch: string, kind: BuildKind = 'twa') => post<{ ok: true }>('install-workflow', { repo, branch, kind }),
+  twaBuild: (repo: string, branch: string, twa: TwaConfig) => {
+    const { output, storeReady, useKeystore, ...rest } = twa;
+    const clean = Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== '' && v !== undefined && !(Array.isArray(v) && !v.length)));
+    return post<{ ok: true }>('twa-build', { repo, branch, output, storeReady, useKeystore, twa: clean });
+  },
+  releasePrepare: (repo: string, artifactId: number) => request<ReleasePrep>(`release/prepare?repo=${enc(repo)}&artifactId=${artifactId}`),
+  releasePublish: (body: { repo: string; artifactId: number; tag: string; name: string; body: string; files: string[]; prerelease: boolean; draft: boolean }) =>
+    post<ReleaseResult>('release/publish', body),
+  twaInspect: (url: string) => post<TwaInspection>('twa/inspect', { url }),
+  twaAssetlinks: (url: string, packageId: string, fingerprint?: string) =>
+    post<{ published: boolean; fingerprintMatches: boolean | null; fingerprints: string[] }>('twa/assetlinks', { url, packageId, fingerprint }),
+  build: (repo: string, branch: string, config: BuildConfiguration) =>
+    post<{ ok: true }>('build', { repo, branch, config: { ...config, useKeystore: !!config.keystoreId } }),
+  runs: (repos: string[]) => request<{ builds: BuildRecord[] }>(`runs?repos=${enc(repos.join(','))}`).then((r) => r.builds),
+  run: (repo: string, id: string) => request<{ build: BuildRecord }>(`run?repo=${enc(repo)}&id=${enc(id)}`).then((r) => r.build),
+  cancel: (repo: string, runId: number) => post<{ ok: true }>('cancel', { repo, runId }),
+  keystores: (repos: string[]) => request<{ keystores: Keystore[] }>(`keystore?repos=${enc(repos.join(','))}`).then((r) => r.keystores),
+  saveKeystore: (body: { repo: string; name: string; alias: string; storePassword: string; keyPassword: string; fileBase64: string }) =>
+    post<{ ok: true }>('keystore', body),
+  deleteKeystore: (repo: string) => request<{ ok: true }>(`keystore?repo=${enc(repo)}`, { method: 'DELETE' }),
+  billingConfig: () => request<{ encryptionKey: string; currency: string; pricing: Record<BillingCycle, number>; pricingNgn?: Record<BillingCycle, number> }>('billing/config'),
+  creditCheckout: (body: {
+    pack: string;
+    card: { nonce: string; encrypted_card_number: string; encrypted_expiry_month: string; encrypted_expiry_year: string; encrypted_cvv: string };
+  }) => post<{ chargeId: string; reference: string; status: string; nextAction: any; redirectUrl?: string | null; pack: string; credits: number }>('billing/checkout', body),
+  checkout: (body: {
+    cycle: BillingCycle;
+    card: {
+      nonce: string;
+      encrypted_card_number: string;
+      encrypted_expiry_month: string;
+      encrypted_expiry_year: string;
+      encrypted_cvv: string;
+    };
+  }) => post<{
+    chargeId: string;
+    reference: string;
+    status: string;
+    nextAction: any;
+    redirectUrl?: string | null;
+  }>('billing/checkout', body),
+  authorizeBilling: (body: {
+    chargeId: string;
+    type: 'pin' | 'otp';
+    pin?: { nonce: string; encrypted_pin: string };
+    otp?: string;
+  }) => post<{ chargeId: string; status: string; nextAction: any; redirectUrl?: string | null }>('billing/authorize', body),
+  cancelSubscription: () => post<{ ok: true; activeUntil: string }>('billing/cancel', {}),
+  billingStatus: (chargeId: string) =>
+    request<{ id: string; reference: string; status: string; nextAction: any; redirectUrl?: string | null }>(
+      `billing/status?chargeId=${enc(chargeId)}`
+    ),
+};
+
+/** "https://github.com/owner/repo(.git)" or "owner/repo" -> "owner/repo" */
+export function repoFromUrl(input: string): string | null {
+  const m = /^(?:https?:\/\/github\.com\/)?([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/.exec(input.trim());
+  return m ? `${m[1]}/${m[2]}` : null;
+}

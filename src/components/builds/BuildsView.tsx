@@ -1,0 +1,585 @@
+import React, { useEffect, useState } from 'react';
+import { api } from '../../services/api';
+import { useApp } from '../../context/AppContext';
+import { TerminalViewer } from './TerminalViewer';
+import { TwaBuildPanel } from '../twa/TwaBuildPanel';
+import { setReleaseHandoff } from '../../services/releaseHandoff';
+import type { BuildArtifact } from '../../types';
+import {
+  CheckCircle2,
+  XCircle,
+  Clock,
+  Play,
+  GitBranch,
+  Github,
+  Download,
+  QrCode,
+  AlertTriangle,
+  RotateCw,
+  StopCircle,
+  FileCode,
+  ShieldCheck,
+  Sparkles,
+  Rocket,
+} from 'lucide-react';
+
+export const BuildsView: React.FC = () => {
+  const { builds, activeBuildId, setActiveBuildId, cancelBuild, applyAutoFix, triggerBuild, awaitingNewBuild, setCurrentTab, lifetimeFree } = useApp();
+  const [filterProject, setFilterProject] = useState<string>('all');
+  const [showQrModal, setShowQrModal] = useState<boolean>(false);
+  const [aiBusy, setAiBusy] = useState<'diagnose' | 'fix' | null>(null);
+  const [aiResult, setAiResult] = useState<any>(null);
+  const [aiError, setAiError] = useState('');
+  const [aiDone, setAiDone] = useState(false);
+  const [downloadingArtifact, setDownloadingArtifact] = useState<number | string | null>(null);
+  const [downloadError, setDownloadError] = useState('');
+  const [downloadPct, setDownloadPct] = useState<number | null>(null);
+
+  // while a new run is being created the old build (and its logs) must not stay on screen
+  const selectedBuild = awaitingNewBuild ? undefined : builds.find((b) => b.id === activeBuildId) || builds[0];
+
+  const allLogs = selectedBuild
+    ? selectedBuild.steps.flatMap((s) => s.logs)
+    : [];
+
+  const isRunning = selectedBuild?.status === 'running';
+
+  useEffect(() => {
+    let tab = '';
+    try { tab = localStorage.getItem('wybuild_notify_tab') || ''; } catch {}
+    if (!tab || !selectedBuild) return;
+    const timer = window.setTimeout(() => {
+      const target = document.querySelector(`[data-build-notify-target="${tab}"]`);
+      if (target) { target.scrollIntoView({ behavior: 'smooth', block: 'start' }); try { localStorage.removeItem('wybuild_notify_tab'); } catch {} }
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [selectedBuild?.id, selectedBuild?.artifacts?.length, allLogs.length]);
+
+  const downloadArtifact = async (art: BuildArtifact) => {
+    if (!selectedBuild) return;
+    setDownloadError('');
+    setDownloadPct(null);
+    setDownloadingArtifact(art.id ?? art.name);
+    const capacitor = (window as any).Capacitor;
+    const isNative = !!capacitor?.isNativePlatform?.();
+    // The Capacitor APK loads the live site, so location.origin is normally right; fall back for a bundled copy.
+    const appOrigin = /^https?:$/.test(window.location.protocol) && window.location.hostname !== 'localhost'
+      ? window.location.origin
+      : 'https://wybuild-black.vercel.app';
+    const proxyUrl = new URL(art.downloadUrl, appOrigin).href;
+    const safeName = String(art.name || 'wybuild-artifact').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 140) || 'wybuild-artifact';
+    const fileName = /\.zip$/i.test(safeName) ? safeName : `${safeName}.zip`;
+    let progressHandle: { remove: () => Promise<void> } | null = null;
+    try {
+      // 1) Ask WyBuild (authenticated, small JSON, ~1 call) for GitHub's short-lived signed storage URL.
+      //    The big file then comes straight from GitHub: no Vercel hop, no 60 s function limit, and no
+      //    session cookie needed by the native downloader.
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 20000);
+      let direct = '';
+      try {
+        const linkUrl = proxyUrl + (proxyUrl.includes('?') ? '&' : '?') + 'mode=link';
+        const r = await fetch(linkUrl, { credentials: 'include', cache: 'no-store', signal: ctrl.signal });
+        if (r.status === 401 || r.status === 403) throw new Error('Your WyBuild session expired or lacks access. Sign in again and retry.');
+        const data = await r.json().catch(() => ({} as any));
+        if (!r.ok) throw new Error(data?.error || `Artifact download failed (HTTP ${r.status}).`);
+        direct = String(data?.url || '');
+        if (!/^https:\/\//i.test(direct)) throw new Error('The server did not return a download address. Retry or rebuild.');
+      } finally { clearTimeout(timer); }
+
+      if (!isNative) {
+        // Browser / TWA: navigating to the signed URL triggers the normal download (Content-Disposition: attachment).
+        window.location.assign(direct);
+        return;
+      }
+
+      // 2) Capacitor APK: native streaming download straight to app storage (no fetch -> Blob -> base64 through
+      //    the JS bridge, which runs out of memory / times out on large ZIPs).
+      const { Filesystem, Directory } = await import('@capacitor/filesystem');
+      const { Share } = await import('@capacitor/share');
+      try {
+        progressHandle = await (Filesystem as any).addListener('progress', (p: { bytes?: number; contentLength?: number }) => {
+          if (p?.contentLength && p.contentLength > 0) setDownloadPct(Math.min(99, Math.round(((p.bytes || 0) / p.contentLength) * 100)));
+        });
+        await Filesystem.downloadFile({ url: direct, path: fileName, directory: Directory.Cache, recursive: true, progress: true } as any);
+        const { uri } = await Filesystem.getUri({ path: fileName, directory: Directory.Cache });
+        if (!uri) throw new Error('The artifact was downloaded but Android did not return its saved location.');
+        // Android's share/save sheet lets the user save it to Files/Downloads or send it to another app.
+        await Share.share({ title: fileName, text: 'WyBuild build artifact', url: uri, dialogTitle: 'Save or share build artifact' });
+      } catch (nativeErr) {
+        const msg = String((nativeErr as any)?.message || nativeErr || '');
+        if (/cancel|dismiss/i.test(msg)) return; // user closed the share sheet
+        // Last resort: hand the signed URL to the system browser, whose download manager needs no app permissions.
+        const { Browser } = await import('@capacitor/browser');
+        await Browser.open({ url: direct });
+      }
+    } catch (e) {
+      const aborted = (e as any)?.name === 'AbortError';
+      if (!isNative && !aborted && !/session expired/i.test(String((e as any)?.message || ''))) {
+        // Fast path unavailable: fall back to the streaming proxy, which still downloads in a browser/TWA.
+        window.location.assign(proxyUrl);
+      } else {
+        setDownloadError(aborted ? 'The server took too long to prepare the download. Check your connection and try again.' : e instanceof Error ? e.message : 'Could not download this artifact. Check your connection and try again.');
+      }
+    } finally {
+      try { await progressHandle?.remove(); } catch { /* listener already gone */ }
+      setDownloadPct(null);
+      setDownloadingArtifact(null);
+    }
+  };
+
+  const runAiDiagnosis = async () => {
+    if (!selectedBuild?.repo || !selectedBuild.runId) { setAiError('This build is missing its GitHub repository/run reference. Refresh build history and try again.'); return; }
+    setAiBusy('diagnose'); setAiError(''); setAiResult(null); setAiDone(false);
+    try { const result = await api.automationDiagnose({ repo: selectedBuild.repo, runId: selectedBuild.runId }); setAiResult(result); }
+    catch (e) { setAiError(e instanceof Error ? e.message : 'WyBuild diagnosis failed.'); }
+    finally { setAiBusy(null); }
+  };
+  const applyAiFix = async () => {
+    if (!selectedBuild?.repo || !selectedBuild.runId) return;
+    setAiBusy('fix'); setAiError('');
+    try {
+      const result = await api.automationFix({ repo: selectedBuild.repo, runId: selectedBuild.runId, branch: selectedBuild.branch });
+      setAiResult((prev: any) => ({ ...prev, fixResult: result }));
+      setAiDone(result.applied);
+    } catch (e) { setAiError(e instanceof Error ? e.message : 'WyBuild repair analysis failed.'); }
+    finally { setAiBusy(null); }
+  };
+
+  return (
+    <div className="w-full min-w-0 flex flex-col md:flex-row overflow-visible">
+      {/* Left List Pane: Builds Queue & History */}
+      <div className="w-full md:w-80 lg:w-96 border-b md:border-b-0 md:border-r border-slate-800 bg-slate-950 flex flex-col shrink-0 overflow-visible">
+        <div className="p-4 border-b border-slate-800 bg-slate-900/50 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-bold text-white">Build Pipeline History</h2>
+            <span className="text-xs font-mono text-slate-400 tabular-nums">({builds.length})</span>
+          </div>
+        </div>
+
+        <div className="wybuild-build-history-list divide-y divide-slate-800/80">
+          {builds.map((build) => {
+            const isSelected = !awaitingNewBuild && build.id === selectedBuild?.id;
+            return (
+              <button
+                key={build.id}
+                onClick={() => setActiveBuildId(build.id)}
+                className={`w-full text-left p-4 transition cursor-pointer ${
+                  isSelected ? 'bg-slate-900 border-l-4 border-emerald-400' : 'hover:bg-slate-900/50'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="font-mono text-xs font-semibold text-white">
+                    #{build.id.replace('build-', '')}
+                  </span>
+                  {build.status === 'success' && (
+                    <span className="flex items-center gap-1 text-[11px] font-medium text-emerald-400">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>Success</span>
+                    </span>
+                  )}
+                  {build.status === 'failed' && (
+                    <span className="flex items-center gap-1 text-[11px] font-medium text-rose-400">
+                      <XCircle className="w-3.5 h-3.5" />
+                      <span>Failed</span>
+                    </span>
+                  )}
+                  {build.status === 'running' && (
+                    <span className="flex items-center gap-1 text-[11px] font-medium text-amber-400">
+                      <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                      <span>Building</span>
+                    </span>
+                  )}
+                  {build.status === 'cancelled' && (
+                    <span className="text-[11px] text-slate-500">Cancelled</span>
+                  )}
+                </div>
+
+                <p className="text-xs font-semibold text-slate-200 break-words">{build.projectName}</p>
+
+                <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-1">
+                  <span className="flex items-center gap-1 font-mono text-emerald-400">
+                    <GitBranch className="w-3 h-3" />
+                    {build.branch}
+                  </span>
+                  <span>·</span>
+                  <span className="font-mono text-slate-400">{build.commitHash}</span>
+                </div>
+
+                <div className="flex items-center justify-between text-[11px] text-slate-400 mt-2 font-mono">
+                  <span>{build.target.toUpperCase()} ({build.mode})</span>
+                  <span>{build.durationSeconds > 0 ? `${build.durationSeconds}s` : 'running...'}</span>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Right Detail Pane: Pipeline Execution Details */}
+      <div className="flex-1 min-w-0 bg-slate-900 p-3 sm:p-6 space-y-4 sm:space-y-6 overflow-visible">
+        {selectedBuild ? (
+          <>
+            {/* Header info */}
+            <div className="p-5 rounded-lg bg-slate-950 border border-slate-800 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div>
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <h1 className="text-lg font-bold text-white">{selectedBuild.projectName}</h1>
+                  <span className="text-xs font-mono text-emerald-400 bg-slate-900 border border-slate-800 px-2 py-0.5 rounded">
+                    Build #{selectedBuild.id.replace('build-', '')}
+                  </span>
+                  <span className="text-xs font-mono uppercase text-slate-400 bg-slate-900 border border-slate-800 px-2 py-0.5 rounded">
+                    {selectedBuild.kind === 'twa' ? `TWA · ${selectedBuild.twa?.packageId || ''}` : `${selectedBuild.target} · ${selectedBuild.mode}`}
+                  </span>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400 mt-2 font-mono">
+                  <span className="flex items-center gap-1 text-emerald-300">
+                    <GitBranch className="w-3.5 h-3.5" />
+                    {selectedBuild.branch}
+                  </span>
+                  <span>·</span>
+                  <span>{selectedBuild.commitHash}</span>
+                  <span>·</span>
+                  <span className="text-slate-300 italic font-sans break-words">"{selectedBuild.commitMessage}"</span>
+                  <span>·</span>
+                  <span>Runner: {selectedBuild.runnerType}</span>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                {selectedBuild.repo && selectedBuild.runId && (
+                  <a
+                    href={`https://github.com/${selectedBuild.repo}/actions/runs/${selectedBuild.runId}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title="Open this exact GitHub Actions run, logs and available artifacts"
+                    className="px-3.5 py-2 text-xs font-semibold rounded border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-200 transition flex items-center gap-1.5"
+                  >
+                    <Github className="w-4 h-4" /> GitHub logs & artifacts
+                  </a>
+                )}
+                {isRunning ? (
+                  <button
+                    onClick={() => cancelBuild(selectedBuild.id)}
+                    className="px-3.5 py-2 text-xs font-semibold rounded bg-rose-950 hover:bg-rose-900 border border-rose-800 text-rose-300 transition flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <StopCircle className="w-4 h-4" />
+                    <span>Cancel Pipeline</span>
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => triggerBuild(selectedBuild.projectId, selectedBuild.branch)}
+                    className="px-3.5 py-2 text-xs font-semibold rounded bg-emerald-600 hover:bg-emerald-500 text-white transition flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <RotateCw className="w-3.5 h-3.5" />
+                    <span>Re-run Build</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* WyBuild deterministic build diagnosis and repair guidance. */}
+            {selectedBuild.status === 'failed' && (
+              <section className="p-5 rounded-lg bg-indigo-950/30 border border-indigo-500/30 space-y-3">
+                <div className="flex items-start gap-3">
+                  <Sparkles className="w-5 h-5 text-indigo-300 shrink-0 mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-sm font-bold text-white">WyBuild Build Doctor</h3>
+                      <span className="text-[10px] uppercase tracking-wider rounded-full px-2 py-1 bg-indigo-400/10 text-indigo-200 border border-indigo-300/20">Credit based · no subscription</span>
+                    </div>
+                    <p className="text-xs text-slate-300 mt-1">Reads failed GitHub Actions logs with a local rule catalog, shows the evidence, explains likely root causes, and gives specific repair steps. WyBuild does not send logs or source code to an AI provider.</p>
+                    <div className="flex flex-wrap gap-2 mt-3">
+                      <button onClick={runAiDiagnosis} disabled={!!aiBusy} className="px-3.5 py-2 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-white text-xs font-bold disabled:opacity-50 flex items-center gap-2">
+                        <Sparkles className="w-4 h-4" />{aiBusy === 'diagnose' ? 'Reading logs…' : 'Analyze build logs'}
+                      </button>
+                      {aiResult?.diagnosis && !aiDone && <button onClick={applyAiFix} disabled={!!aiBusy} className="px-3.5 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold disabled:opacity-50 flex items-center gap-2"><FileCode className="w-4 h-4" />{aiBusy === 'fix' ? 'Building repair plan…' : 'Get detailed repair plan'}</button>}
+                      {aiDone && <span className="px-3 py-2 rounded-lg bg-emerald-500/10 border border-emerald-400/30 text-emerald-200 text-xs font-bold">✓ Fix committed — ready to rebuild</span>}
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-2">{lifetimeFree ? 'Free Forever account: unlimited WyBuild automation. ' : 'Uses 2 credits for diagnosis and 6 for repair analysis. '}WyBuild will not invent Firebase files, credentials or signing secrets; those require real configuration.</p>
+                    {aiError && <div className="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-200">{aiError}</div>}
+                    {aiResult?.diagnosis && <div className="mt-4 space-y-3">
+                      <div className="rounded-lg bg-slate-950/80 border border-slate-700 p-4">
+                        <div className="text-[10px] uppercase tracking-wider text-indigo-300">{aiResult.diagnosis.category} · {aiResult.engine || 'WyBuild Rules Engine'}</div>
+                        <h4 className="mt-1 text-sm font-bold text-white">{aiResult.diagnosis.title}</h4>
+                        <p className="mt-2 text-xs text-slate-300 leading-relaxed">{aiResult.diagnosis.summary}</p>
+                        {aiResult.diagnosis.rootCause && <p className="mt-2 text-xs text-amber-200">Evidence: {aiResult.diagnosis.rootCause}</p>}
+                        {Array.isArray(aiResult.diagnosis.suggestions) && <ul className="mt-3 list-disc pl-5 space-y-1 text-xs text-slate-300">{aiResult.diagnosis.suggestions.map((item: string, i: number) => <li key={i}>{item}</li>)}</ul>}
+                        {Array.isArray(aiResult.diagnosis.manualSteps) && aiResult.diagnosis.manualSteps.length > 0 && <div className="mt-3 p-3 rounded border border-amber-400/20 bg-amber-500/5"><div className="text-xs font-bold text-amber-200 mb-1">Manual configuration needed</div><ul className="list-disc pl-5 space-y-1 text-xs text-slate-300">{aiResult.diagnosis.manualSteps.map((item: string, i: number) => <li key={i}>{item}</li>)}</ul></div>}
+                        <div className="mt-3 text-[10px] text-slate-500">{lifetimeFree ? 'Free Forever · no credits used' : `Charged ${aiResult.creditsCharged} credits · Balance ${aiResult.creditsRemaining}`}</div>
+                      </div>
+                    </div>}
+                    {aiResult?.fixResult && <div className="rounded-lg bg-slate-950/80 border border-emerald-500/20 p-4"><div className="text-xs font-bold text-emerald-200">{aiResult.fixResult.applied ? (aiResult.fixResult.fixes?.length ? 'Code changes committed to GitHub' : 'Build settings updated') : 'No safe automatic change'}</div><p className="text-xs text-slate-300 mt-1">{aiResult.fixResult.summary}</p>{aiResult.fixResult.fixes?.map((f: any) => <a key={f.path} className="block mt-2 text-xs text-emerald-300 underline break-all" href={f.commit || '#'} target="_blank" rel="noreferrer">{f.path} — {f.reason}</a>)}{aiResult.fixResult.settingsChanges?.map((item: any) => <div key={item.key} className="mt-2 text-xs text-emerald-200">{item.key}: {item.status}</div>)}{aiResult.fixResult.manualSteps?.length > 0 && <ul className="list-disc pl-5 mt-2 space-y-1 text-xs text-slate-300">{aiResult.fixResult.manualSteps.map((item: string, i: number) => <li key={i}>{item}</li>)}</ul>}<div className="mt-2 text-[10px] text-slate-500">Charged {aiResult.fixResult.creditsCharged} credits · Balance {aiResult.fixResult.creditsRemaining}</div></div>}
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {/* Error Diagnostics Banner if failed */}
+            {selectedBuild.errorDiagnosis && (
+              <div className="p-5 rounded-lg bg-rose-950/40 border border-rose-800/60 space-y-3">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-mono uppercase tracking-wider text-rose-400 font-bold">
+                        Build diagnosis
+                      </span>
+                      <span className="text-slate-500">·</span>
+                      <span className="text-xs text-slate-300 font-medium">{selectedBuild.errorDiagnosis.category}</span>
+                    </div>
+                    <h3 className="text-sm font-bold text-white mt-1">
+                      {selectedBuild.errorDiagnosis.title}
+                    </h3>
+                    <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                      {selectedBuild.errorDiagnosis.description}
+                    </p>
+
+                    <div className="mt-3 grid sm:grid-cols-2 gap-2">
+                      <div className="p-3 bg-slate-950/80 rounded border border-rose-900/40">
+                        <span className="text-slate-500 block mb-1">What went wrong</span>
+                        <span className="text-rose-200">{selectedBuild.errorDiagnosis.description}</span>
+                      </div>
+                      <div className="p-3 bg-slate-950/80 rounded border border-emerald-900/40">
+                        <span className="text-slate-500 block mb-1">What is needed</span>
+                        <span className="text-emerald-200">{selectedBuild.errorDiagnosis.suggestedFix}</span>
+                      </div>
+                    </div>
+                    {selectedBuild.errorDiagnosis.matchedPattern && <div className="p-2.5 bg-black/30 rounded border border-white/[.05] text-[11px] font-mono text-slate-400 mt-2 break-words"><span className="text-slate-600">Build reported: </span>{selectedBuild.errorDiagnosis.matchedPattern}</div>}
+
+                    {selectedBuild.errorDiagnosis.autoFixAvailable && selectedBuild.errorDiagnosis.autoFixAction && (
+                      <div className="mt-3">
+                        <button
+                          onClick={() => applyAutoFix(selectedBuild.id, selectedBuild.errorDiagnosis!.autoFixAction!)}
+                          className="px-3.5 py-1.5 text-xs font-semibold rounded bg-emerald-600 hover:bg-emerald-500 text-white transition flex items-center gap-1.5 cursor-pointer shadow-sm"
+                        >
+                          <Sparkles className="w-3.5 h-3.5" />
+                          <span>Apply 1-Click Fix ({selectedBuild.errorDiagnosis.autoFixAction})</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Pipeline Step Timeline */}
+            <div className="p-5 rounded-lg bg-slate-950 border border-slate-800">
+              <h3 className="text-xs font-mono uppercase tracking-wider text-slate-400 mb-4">
+                Pipeline Stages Execution
+              </h3>
+
+              {!!selectedBuild.detailWarnings?.length && (
+                <div className="mb-3 space-y-2">
+                  {selectedBuild.detailWarnings.map((warning, index) => (
+                    <div key={`${selectedBuild.id}-detail-warning-${index}`} className="flex items-start gap-2 rounded-md border border-amber-500/20 bg-amber-500/5 p-2.5 text-[11px] leading-relaxed text-amber-200">
+                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      <span className="break-words">{warning}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {!selectedBuild.steps.length && (
+                <p className="mb-3 rounded-md border border-slate-800 bg-slate-900/60 p-3 text-xs text-slate-400">
+                  {isRunning ? 'Waiting for GitHub Actions to publish the pipeline steps…' : 'Pipeline steps have not loaded yet. WyBuild will retry automatically; you can also open the run in GitHub Actions to verify its job details.'}
+                  {selectedBuild.htmlUrl && <> <a className="text-emerald-300 underline underline-offset-2" href={selectedBuild.htmlUrl} target="_blank" rel="noopener noreferrer">Open GitHub run</a>.</>}
+                </p>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {selectedBuild.steps.map((step, idx) => {
+                  return (
+                    <div
+                      key={step.id}
+                      className="p-3 rounded bg-slate-900 border border-slate-800 flex items-center justify-between text-xs"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        {step.status === 'success' && <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />}
+                        {step.status === 'failed' && <XCircle className="w-4 h-4 text-rose-400 shrink-0" />}
+                        {step.status === 'running' && (
+                          <span className="w-4 h-4 rounded-full border-2 border-amber-400 border-t-transparent animate-spin shrink-0" />
+                        )}
+                        {step.status === 'pending' && <Clock className="w-4 h-4 text-slate-600 shrink-0" />}
+                        {step.status === 'skipped' && <Clock className="w-4 h-4 text-slate-500 shrink-0" />}
+
+                        <div className="min-w-0">
+                          <p className="text-slate-200 font-medium break-words">{step.name}</p>
+                          <span className="text-[10px] text-slate-500 font-mono">
+                            {step.status === 'success' || step.status === 'failed' ? `${step.status} · ${Math.round(step.durationMs / 100) / 10}s` : step.status}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {selectedBuild.status === 'success' && <TwaBuildPanel build={selectedBuild} />}
+
+            {/* Generated Artifacts Section */}
+            {selectedBuild.artifacts.length > 0 && (
+              <div data-build-notify-target="artifacts" className="p-5 rounded-lg bg-slate-950 border border-slate-800 space-y-3 scroll-mt-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xs font-mono uppercase tracking-wider text-slate-400">
+                    Compiled Binary Artifacts
+                  </h3>
+                  <button
+                    onClick={() => setShowQrModal(true)}
+                    className="text-xs text-emerald-400 hover:text-emerald-300 flex items-center gap-1 cursor-pointer font-medium"
+                  >
+                    <QrCode className="w-3.5 h-3.5" />
+                    <span>Scan with Android Device</span>
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {selectedBuild.artifacts.map((art, idx) => (
+                    <div
+                      key={idx}
+                      className="p-3 rounded bg-slate-900 border border-slate-800 flex items-center justify-between text-xs"
+                    >
+                      <div className="min-w-0 mr-3">
+                        <div className="flex items-center gap-1.5">
+                          <FileCode className="w-4 h-4 text-emerald-400 shrink-0" />
+                          <span className="font-semibold text-white break-words font-mono">{art.name}</span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 font-mono mt-0.5">
+                          {art.sizeFormatted} · SHA-256: {art.sha256.substring(0, 16)}...
+                        </p>
+                      </div>
+
+                      <div className="flex flex-col sm:flex-row gap-1.5 shrink-0">
+                        <a
+                          href={art.downloadUrl}
+                          target="_self"
+                          rel="noopener"
+                          aria-label={`Download build artifact ${art.name}`}
+                          title="Download the artifact ZIP. It comes straight from GitHub; in the Android app the save/share sheet opens when it finishes."
+                          onClick={(event) => {
+                            event.preventDefault();
+                            if (downloadingArtifact === null) void downloadArtifact(art);
+                          }}
+                          className={`px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-semibold flex items-center gap-1 transition cursor-pointer text-xs ${downloadingArtifact === (art.id ?? art.name) ? 'opacity-60 pointer-events-none' : ''}`}
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          <span>{downloadingArtifact === (art.id ?? art.name) ? (downloadPct !== null ? `Downloading ${downloadPct}%` : 'Preparing…') : 'Download artifact'}</span>
+                        </a>
+                        {selectedBuild.repo && selectedBuild.kind === 'twa' && art.id && (
+                          <button
+                            onClick={() => { setReleaseHandoff({ repo: selectedBuild.repo!, buildId: selectedBuild.id, artifactId: art.id }); setCurrentTab('releases'); }}
+                            className="px-3 py-1.5 rounded border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10 font-semibold flex items-center gap-1 transition cursor-pointer text-xs"
+                          >
+                            <Rocket className="w-3.5 h-3.5" />
+                            <span>Release</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {downloadError && <div role="alert" className="text-xs text-rose-300 rounded border border-rose-500/30 bg-rose-500/10 p-3">Download failed: {downloadError}</div>}
+              </div>
+            )}
+
+            {selectedBuild.status === 'success' && selectedBuild.artifacts.length === 0 && (
+              <div data-build-notify-target="artifacts" className="rounded-lg border border-slate-800 bg-slate-950 p-4 text-xs text-slate-400 scroll-mt-4">
+                <div className="flex items-center gap-2 text-slate-200 font-semibold"><FileCode className="h-4 w-4 text-emerald-400" /> Generated artifacts</div>
+                <p className="mt-2">No downloadable artifact has been returned by GitHub for this run yet. WyBuild is retrying the run details in the background.</p>
+              </div>
+            )}
+
+            {/* Live Terminal Console Viewer */}
+            <div data-build-notify-target="logs" className="scroll-mt-4">
+            <TerminalViewer
+              logs={allLogs}
+              isRunning={isRunning}
+              buildId={selectedBuild.id}
+            />
+            </div>
+
+            {selectedBuild.status === 'failed' && (
+              <div className="flex justify-center -mt-2">
+                <a
+                  href="https://wyte.name.ng"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold shadow-lg shadow-emerald-950/30 transition"
+                  title="Open Wyte to edit your code and fix the failed build"
+                >
+                  <FileCode className="w-4 h-4" />
+                  Edit Your Code
+                </a>
+              </div>
+            )}
+          </>
+        ) : awaitingNewBuild ? (
+          <div className="text-center py-20 text-slate-400 space-y-3">
+            <div className="mx-auto w-8 h-8 rounded-full border-2 border-emerald-400/30 border-t-emerald-400 animate-spin" />
+            <div className="text-sm font-semibold text-white">Starting a new build…</div>
+            <p className="text-xs text-slate-500">Previous logs cleared. The new run's logs appear here as soon as GitHub starts it.</p>
+          </div>
+        ) : (
+          <div className="text-center py-20 text-slate-500">No builds selected.</div>
+        )}
+      </div>
+
+      {/* QR Code Modal */}
+      {showQrModal && selectedBuild && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-800 rounded-t-2xl sm:rounded-xl p-4 sm:p-6 max-w-sm w-full max-h-[92dvh] overflow-y-auto overscroll-contain space-y-4 shadow-2xl text-center">
+            <h3 className="text-base font-bold text-white">Install APK on Physical Device</h3>
+            <p className="text-xs text-slate-400">
+              Scan this QR code with Google Lens or Camera on your Android phone to download and sideload the APK.
+            </p>
+
+            <div className="p-4 bg-white rounded-lg inline-block mx-auto shadow-inner">
+              <svg className="w-48 h-48" viewBox="0 0 100 100">
+                <rect width="100" height="100" fill="#ffffff" />
+                <rect x="5" y="5" width="25" height="25" fill="#0f172a" />
+                <rect x="8" y="8" width="19" height="19" fill="#ffffff" />
+                <rect x="11" y="11" width="13" height="13" fill="#0f172a" />
+
+                <rect x="70" y="5" width="25" height="25" fill="#0f172a" />
+                <rect x="73" y="8" width="19" height="19" fill="#ffffff" />
+                <rect x="76" y="11" width="13" height="13" fill="#0f172a" />
+
+                <rect x="5" y="70" width="25" height="25" fill="#0f172a" />
+                <rect x="8" y="73" width="19" height="19" fill="#ffffff" />
+                <rect x="11" y="76" width="13" height="13" fill="#0f172a" />
+
+                <rect x="35" y="8" width="5" height="5" fill="#0f172a" />
+                <rect x="45" y="8" width="8" height="5" fill="#0f172a" />
+                <rect x="35" y="18" width="12" height="6" fill="#0f172a" />
+                <rect x="52" y="18" width="6" height="6" fill="#0f172a" />
+                <rect x="8" y="38" width="6" height="12" fill="#0f172a" />
+                <rect x="18" y="42" width="10" height="6" fill="#0f172a" />
+                <rect x="34" y="34" width="8" height="8" fill="#0f172a" />
+                <rect x="46" y="34" width="18" height="6" fill="#0f172a" />
+                <rect x="70" y="34" width="6" height="16" fill="#0f172a" />
+                <rect x="80" y="44" width="12" height="6" fill="#0f172a" />
+                <rect x="35" y="50" width="16" height="8" fill="#0f172a" />
+                <rect x="55" y="45" width="8" height="16" fill="#0f172a" />
+                <rect x="35" y="65" width="8" height="10" fill="#0f172a" />
+                <rect x="48" y="65" width="18" height="6" fill="#0f172a" />
+              </svg>
+            </div>
+
+            <div className="text-xs font-mono text-slate-400">
+              Artifact: <span className="text-emerald-400">{selectedBuild.artifacts[0]?.name || 'app-release.apk'}</span>
+            </div>
+
+            <button
+              onClick={() => setShowQrModal(false)}
+              className="w-full py-2 text-xs font-semibold rounded bg-slate-800 text-white hover:bg-slate-700 transition cursor-pointer"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};

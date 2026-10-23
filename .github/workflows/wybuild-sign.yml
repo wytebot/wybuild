@@ -1,0 +1,88 @@
+# WyBuild signing service. Install in the PRIVATE WyBuild repository (or a private signer repo named in WB_SIGNER_REPO).
+# It is started only by the WyBuild server (workflow_dispatch with WB_SIGNER_TOKEN) after a build run was verified.
+# The release keystore is stored as this repository's Actions secrets and never travels to a user's repository.
+name: WyBuild signing service
+run-name: "Sign ${{ inputs.repo }} #${{ inputs.run_id }}"
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: owner/name of the repository whose unsigned build is signed
+        type: string
+        required: true
+      run_id:
+        description: GitHub Actions run id of that build
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wybuild-sign-${{ inputs.repo }}-${{ inputs.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      WB_APP_URL: ${{ secrets.WB_APP_URL }}
+      WB_SIGNER_SECRET: ${{ secrets.WB_SIGNER_SECRET }}
+      WB_KEYSTORE_B64: ${{ secrets.WB_KEYSTORE_BASE64 }}
+      WB_KEYSTORE_PASSWORD: ${{ secrets.WB_KEYSTORE_PASSWORD }}
+      WB_KEY_ALIAS: ${{ secrets.WB_KEY_ALIAS }}
+      WB_KEY_PASSWORD: ${{ secrets.WB_KEY_PASSWORD }}
+      SIGN_REPO: ${{ inputs.repo }}
+      SIGN_RUN_ID: ${{ inputs.run_id }}
+      SIGN_OUT: ${{ github.workspace }}/.signed-out
+    steps:
+      - name: Checkout signing scripts
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK (jarsigner, keytool)
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Sign and verify
+        id: sign
+        run: bash .github/signer/sign.sh
+
+      - name: Name the signed artifact
+        id: name
+        run: |
+          SAFE="$(printf '%s' "$SIGN_REPO" | tr '/' '_' | tr -c 'A-Za-z0-9_.-\n' '-')"
+          echo "artifact=wb-signed-${SAFE}-${SIGN_RUN_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload signed files
+        id: upload
+        uses: actions/upload-artifact@v5
+        with:
+          name: ${{ steps.name.outputs.artifact }}
+          path: .signed-out/**
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Tell WyBuild the signed build is ready
+        run: |
+          set -euo pipefail
+          jq -n --arg repo "$SIGN_REPO" --arg run "$SIGN_RUN_ID" --arg id "${{ steps.upload.outputs.artifact-id }}" --arg name "${{ steps.name.outputs.artifact }}" --arg fp "${SIGN_FINGERPRINT:-}" \
+            '{repo:$repo, runId:$run, ok:true, artifactId:$id, artifactName:$name, fingerprint:$fp}' > "$RUNNER_TEMP/done.json"
+          CODE="$(curl -sS --retry 3 --retry-delay 3 --retry-all-errors -m 60 -o "$RUNNER_TEMP/done-resp.json" -w '%{http_code}' \
+            -H 'Content-Type: application/json' -H "Authorization: Bearer $WB_SIGNER_SECRET" \
+            --data @"$RUNNER_TEMP/done.json" "${WB_APP_URL%/}/api/sign/done" || echo 000)"
+          [ "$CODE" = "200" ] || { echo "::error::WyBuild did not accept the signed build (HTTP $CODE): $(cat "$RUNNER_TEMP/done-resp.json" 2>/dev/null | head -c 300)"; exit 1; }
+
+      - name: Tell WyBuild the signing failed
+        if: ${{ failure() }}
+        run: |
+          MSG="$(cat "$RUNNER_TEMP/sign-error.txt" 2>/dev/null | head -c 600 || true)"
+          [ -n "$MSG" ] || MSG="The signing job failed before it could report a reason. Open the run in the WyBuild signing repository for details."
+          jq -n --arg repo "$SIGN_REPO" --arg run "$SIGN_RUN_ID" --arg err "$MSG" '{repo:$repo, runId:$run, ok:false, error:$err}' > "$RUNNER_TEMP/done.json"
+          curl -sS --retry 3 --retry-delay 3 --retry-all-errors -m 60 -o /dev/null \
+            -H 'Content-Type: application/json' -H "Authorization: Bearer $WB_SIGNER_SECRET" \
+            --data @"$RUNNER_TEMP/done.json" "${WB_APP_URL%/}/api/sign/done" || true

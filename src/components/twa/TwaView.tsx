@@ -1,0 +1,543 @@
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useApp } from '../../context/AppContext';
+import { api, ApiError, repoFromUrl, RepoInspection, TwaInspection } from '../../services/api';
+import { KeystoreForm } from '../KeystoreForm';
+import { LinkMode, LinkRule, Project, TwaConfig } from '../../types';
+import { checkLinkRule, LINK_MODES, LINK_PRESETS } from '../../services/links';
+import { AlertTriangle, Check, CheckCircle2, Github, Globe2, KeyRound, Link2, Loader2, Package, Play, RefreshCw, Search, Smartphone, Wrench, XCircle, Sparkles } from 'lucide-react';
+
+const EMPTY: TwaConfig = {
+  webUrl: '', packageId: '', name: '', launcherName: '', versionName: '1.0.0', versionCode: undefined,
+  themeColor: '#0f172a', backgroundColor: '#ffffff', startUrl: '/', iconUrl: '', maskableIconUrl: '', monochromeIconUrl: '',
+  display: 'standalone', orientation: 'default', fallbackType: 'customtabs', shell: 'standalone', enableNotifications: false,
+  enableSiteSettingsShortcut: true, locationDelegation: false, playBilling: false, additionalTrustedOrigins: [], linkRules: [],
+  androidPermissions: [], shortcuts: [], minSdkVersion: 24, expectedFingerprint: '', predictiveBack: false, nativeFeatures: [], playSigningFingerprint: '', output: 'both', storeReady: true, useKeystore: true,
+};
+
+const FEATURES = [
+  { id: 'notifications', label: 'Notifications', hint: 'Allow the app to post Android notifications from supported WyBuild native calls', permission: 'POST_NOTIFICATIONS' },
+  { id: 'location', label: 'Location', hint: 'Use Android location permission for the site', permission: 'ACCESS_FINE_LOCATION' },
+  { id: 'camera', label: 'Camera', hint: 'Site can use the camera (declared as optional so Play still lists the app on every phone)', permission: 'CAMERA' },
+  { id: 'microphone', label: 'Microphone', hint: 'Allow the site to request the microphone', permission: 'RECORD_AUDIO' },
+  { id: 'contacts', label: 'Contacts access', hint: 'Declare READ_CONTACTS for apps that read the address book. Prefer WyBuild.contacts.pick() when selecting one contact; the Android picker avoids broad address-book access.', permission: 'READ_CONTACTS' },
+  { id: 'vibration', label: 'Vibration', hint: 'Allow vibration from supported web APIs', permission: 'VIBRATE' },
+  { id: 'bluetooth', label: 'Bluetooth', hint: 'Connect to nearby Bluetooth devices when the app genuinely needs it (Android 12+ runtime prompts are handled by the native plugin)', permission: 'BLUETOOTH_CONNECT' },
+  { id: 'nearbywifi', label: 'Nearby Wi-Fi devices', hint: 'Discover/connect to nearby Wi-Fi devices when supported by your implementation', permission: 'NEARBY_WIFI_DEVICES' },
+  { id: 'audiomodify', label: 'Audio settings', hint: 'Change audio routing/settings only for apps that provide audio tools', permission: 'MODIFY_AUDIO_SETTINGS' },
+  { id: 'biometricpermission', label: 'Biometric hardware', hint: 'Declare biometric hardware support for a real biometric feature', permission: 'USE_BIOMETRIC' },
+] as const;
+
+// Native bridge (standalone app shell). ALWAYS = in every build, no permission needed. OPT_IN = adds a permission or manifest entry, so it is off until ticked.
+const NATIVE_ALWAYS = [
+  { id: 'clipboard', label: 'Clipboard', hint: 'Copy and paste through Android' },
+  { id: 'haptics', label: 'Haptic feedback', hint: 'Tick, click, success and error vibrations (no permission)' },
+  { id: 'deviceinfo', label: 'Device & network info', hint: 'Model, Android version, dark mode, live online/offline events' },
+  { id: 'lifecycle', label: 'App lifecycle events', hint: 'Know when the app goes to the background or returns' },
+  { id: 'keepawake', label: 'Keep screen awake', hint: 'For timers, readers and navigation screens' },
+  { id: 'orientation', label: 'Orientation lock', hint: 'Lock portrait or landscape from a page' },
+  { id: 'securescreen', label: 'Secure screen', hint: 'Block screenshots and the recents preview on private pages' },
+  { id: 'savefile', label: 'Save files', hint: 'Write generated files and blobs into Downloads' },
+  { id: 'speech', label: 'Voice input & read aloud', hint: 'System speech recognition and text-to-speech' },
+  { id: 'contacts', label: 'Contact picker', hint: 'The user taps one contact; no contacts permission' },
+  { id: 'calendar', label: 'Add to calendar', hint: "Opens the phone's calendar with the event filled in" },
+  { id: 'shortcuts', label: 'Launcher shortcuts', hint: 'Long-press the app icon to jump to pages you choose' },
+  { id: 'rate', label: 'Rate app & settings', hint: 'Open the store listing or Android app settings' },
+] as const;
+
+const CAPACITOR_NATIVE = [
+  'Camera/photo picker', 'Geolocation', 'Local notifications', 'Firebase sign-in (provider setup required)',
+  'Remote push registration (FCM setup required)', 'Biometric authentication', 'Clipboard', 'Device and battery info',
+  'Filesystem and downloads (app-private Documents by default)', 'Haptics', 'Network status/events', 'Share out',
+  'Pull to refresh and edge swipe back (opt-in; your site enables them)', 'Open browser', 'Status bar', 'Screen orientation', 'Preferences storage', 'Keyboard control', 'Action sheets and alerts',
+] as const;
+
+const NATIVE_OPT_IN = [
+  { id: 'biometric', label: 'Biometric unlock', hint: 'Fingerprint / face / device PIN gate for private areas (adds USE_BIOMETRIC). Local unlock only.' },
+  { id: 'sharetarget', label: 'Incoming Share Target', hint: 'Receive shared text, links and supported files from Android apps (standalone/Capacitor)' },
+  { id: 'reminders', label: 'Local reminders', hint: 'Schedule notifications from your site, even when the app is closed (adds POST_NOTIFICATIONS)' },
+  { id: 'googleauth', label: 'Native Firebase sign-in', hint: 'Capacitor source builds only. Google needs Firebase Android configuration; Apple provider support depends on provider/plugin setup.' },
+  { id: 'push', label: 'Remote push notifications', hint: 'Capacitor source builds only. Requires matching google-services.json, Firebase Messaging, and server-side token delivery.' },
+  { id: 'pulltorefresh', label: 'Pull to refresh', hint: 'Capacitor source builds only. Adds WyBuildNative.pullToRefresh. You must implement it in your site: call enable({ onRefresh }) and decide what refreshing does.' },
+  { id: 'swipeback', label: 'Edge swipe to go back', hint: 'Capacitor source builds only. Adds WyBuildNative.swipeBack. You must implement it in your site: call enable({ onBack }) or use the default history back.' },
+  { id: 'shareout', label: 'Native Share Sheet', hint: 'Share text, URLs and supported files through Android’s system share chooser.' },
+  { id: 'fileaccess', label: 'Native File Access', hint: 'Use the Capacitor filesystem bridge to read and write app files.' },
+  { id: 'downloads', label: 'Native Downloads', hint: 'Download files in Capacitor APKs to app Documents and optionally open the Android share/save sheet.' },
+  { id: 'networkstatus', label: 'Network Status Events', hint: 'Detect online/offline transitions and current connection status.' },
+  { id: 'deviceinfo', label: 'Device Information', hint: 'Read platform, device model, OS version and battery information.' },
+  { id: 'haptics', label: 'Haptic Feedback', hint: 'Trigger selection, impact and notification feedback on supported devices.' },
+  { id: 'deeplinks', label: 'Deep Link Handling', hint: 'Handle supported app URLs through the Capacitor App URL-open event.' },
+  { id: 'localnotifications', label: 'Scheduled Local Notifications', hint: 'Schedule and cancel local notifications; Android notification permission may be required.' },
+] as const;
+
+const CAPACITOR_ONLY_NATIVE_FEATURES = new Set(['downloads','googleauth','push','pulltorefresh','swipeback','shareout','fileaccess','networkstatus','deviceinfo','haptics','deeplinks','localnotifications']);
+const CAPACITOR_ONLY_INTEGRATIONS = new Set(['contacts','native_downloads','native_camera','native_share','notifications_local','push_notifications','device_info','network_status','haptics','clipboard']);
+function nativeFeatureCompatibility(id: string, shell: string, nativeBuild?: RepoInspection['nativeBuild']) {
+  if (shell === 'twa') return { ok: false, label: 'INCOMPATIBLE WITH TWA', reason: 'Trusted Web Activity does not expose the WyBuild native bridge. Switch to Standard / standalone.' };
+  if (CAPACITOR_ONLY_NATIVE_FEATURES.has(id)) {
+    if (!nativeBuild?.hasBuildScript || !nativeBuild.sourceBuildCandidate) return { ok: false, label: 'INCOMPATIBLE — NO SOURCE BUILD', reason: `WyBuild cannot verify a compatible static source build (${nativeBuild?.sourceBuildReason || 'repository inspection pending'}). Add a supported static build script that outputs index.html.` };
+    if (['googleauth','push'].includes(id) && !nativeBuild.firebaseConfigFound) return { ok: false, label: 'MISSING FIREBASE CONFIG', reason: 'Add google-services.json for the exact Android package ID before enabling this feature.' };
+    return { ok: true, label: 'CAPACITOR SOURCE BUILD', reason: `Compatible with a source-build candidate (${nativeBuild.buildScript}); the workflow still verifies that the script produces index.html.` };
+  }
+  return { ok: true, label: 'COMPATIBLE', reason: 'Supported by the selected Standard / standalone workflow.' };
+}
+function integrationCompatibility(id: string, shell: string, nativeBuild?: RepoInspection['nativeBuild']) {
+  if (shell === 'twa' && CAPACITOR_ONLY_INTEGRATIONS.has(id)) return { ok: false, label: 'INCOMPATIBLE WITH TWA', reason: 'This integration uses native Capacitor APIs. Select Standard / standalone.' };
+  if (id === 'firebase_auth' && !nativeBuild?.hasPackageJson) return { ok: false, label: 'MISSING PACKAGE MANIFEST', reason: 'Firebase Authentication needs a root package.json so WyBuild can declare the firebase dependency.' };
+  if (id === 'push_notifications' && !nativeBuild?.firebaseConfigFound) return { ok: false, label: 'MISSING FIREBASE CONFIG', reason: 'Remote push needs google-services.json for the exact Android package ID before WyBuild can prepare the integration.' };
+  if (CAPACITOR_ONLY_INTEGRATIONS.has(id)) {
+    if (!nativeBuild?.hasBuildScript || !nativeBuild.sourceBuildCandidate) return { ok: false, label: 'INCOMPATIBLE — NO SOURCE BUILD', reason: `WyBuild cannot verify a compatible static source build (${nativeBuild?.sourceBuildReason || 'repository inspection pending'}). Add a supported static build script that outputs index.html.` };
+    return { ok: true, label: 'SOURCE BUILD CANDIDATE', reason: `Uses ${nativeBuild.buildScript}; the actual build must still produce a static index.html.` };
+  }
+  return { ok: true, label: 'COMPATIBLE', reason: 'This integration can be added as a web helper in the selected workflow; provider configuration may still be required.' };
+}
+
+const SCREEN_MODES = [
+  { id: 'standalone', label: 'Standard', hint: 'Status and navigation bars stay visible' },
+  { id: 'fullscreen', label: 'Fullscreen', hint: 'Hides the status and navigation bars; swipe from an edge to peek at them' },
+  { id: 'fullscreen-sticky', label: 'Sticky fullscreen', hint: 'Bars stay hidden and re-hide on their own after a peek (games, readers, video)' },
+] as const;
+
+const SHELLS = [
+  { id: 'standalone', label: 'Capacitor / native app (recommended)', hint: 'Buildable source repositories use Capacitor + Android Gradle and bundled native plugins. URL-only sites use WyBuild’s native WebView shell.' },
+  { id: 'twa', label: 'Trusted Web Activity', hint: "Use the Chrome-rendered site shell. Requires assetlinks.json for a fullscreen experience; native Capacitor plugins are not bundled into this mode." },
+] as const;
+
+const input = 'w-full h-11 bg-[#050707] border border-white/[.08] rounded-lg px-3 text-white focus:border-emerald-400/50 focus:outline-none';
+const card = 'rounded-2xl bg-[#070a09] border border-white/[.06] p-4 sm:p-5';
+
+function featureState(cfg: TwaConfig, id: string) {
+  if (id === 'notifications') return cfg.enableNotifications;
+  if (id === 'location') return cfg.locationDelegation;
+  return cfg.androidPermissions.includes(FEATURES.find(f => f.id === id)?.permission || '');
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+export const TwaView: React.FC = () => {
+  const { projects, builds, repos, addProject, updateProject, setCurrentTab, subscription, selectedRepo, selectRepo, inspections, discoverRepo, notifyBuildStarted, expectNewBuild, cancelExpectNewBuild, openFlutterwaveCheckout, defaultKeystore } = useApp();
+  const saved = projects.filter(p => p.kind === 'twa' && p.twa);
+  const [cfg, setCfg] = useState<TwaConfig>(EMPTY);
+  const repo = selectedRepo;
+  const repoInspection: RepoInspection | null = repo ? inspections[repo] ?? null : null;
+  const [apiIntegrationId, setApiIntegrationId] = useState('rest_api');
+  const [apiIntegrationGoal, setApiIntegrationGoal] = useState('');
+  const [apiIntegrationBusy, setApiIntegrationBusy] = useState(false);
+  const [apiIntegrationStatus, setApiIntegrationStatus] = useState<'needs-update' | 'current' | 'unknown'>('needs-update');
+  const [apiIntegrationError, setApiIntegrationError] = useState('');
+  const [apiIntegrationResult, setApiIntegrationResult] = useState<any>(null);
+  useEffect(() => { setApiIntegrationStatus('needs-update'); setApiIntegrationResult(null); setApiIntegrationError(''); }, [repo]);
+  const [inspection, setInspection] = useState<TwaInspection | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [stage, setStage] = useState('');
+  const [error, setError] = useState('');
+  const [needKey, setNeedKey] = useState(false);
+  const inspectedUrl = useRef('');
+  const cfgRef = useRef(cfg);
+  const chargedIdentityValues = useRef<Record<string, string>>({});
+  cfgRef.current = cfg;
+  // replace the whole form and make the new values visible to discover() in the same tick
+  const replaceCfg = (next: TwaConfig) => { cfgRef.current = next; setCfg(next); };
+
+  const signing = repoInspection?.signing;
+  const signingReady = signing === 'repo' || signing === 'default' || (signing === undefined && defaultKeystore);
+  const latestBuild = useMemo(() => [...builds].filter(b => b.kind === 'twa' && b.repo === repo).sort((a,b) => Date.parse(b.startedAt) - Date.parse(a.startedAt))[0], [builds, repo]);
+  const savedProject = editingId ? projects.find(p => p.id === editingId) : undefined;
+  // key-order independent, and projects saved before a setting existed (e.g. linkRules) compare equal to its default
+  const stable = (v: unknown): string => JSON.stringify(v, (_k, val) => val && typeof val === 'object' && !Array.isArray(val) ? Object.fromEntries(Object.entries(val).sort(([a], [b]) => a.localeCompare(b))) : val);
+  const withDefaults = (t: TwaConfig) => ({ ...EMPTY, ...t, fallbackType: 'customtabs' });
+  const settingsChanged = !!savedProject?.twa && stable(withDefaults(savedProject.twa)) !== stable(withDefaults(cfg));
+  const sourceChanged = !!latestBuild?.commitHash && !!repoInspection?.latestCommitSha && !repoInspection.latestCommitSha.startsWith(latestBuild.commitHash);
+  const buildCurrent = !!latestBuild && latestBuild.status === 'success' && !settingsChanged && !sourceChanged;
+  const workflow = repoInspection?.workflows?.twa ?? { installed: repoInspection?.workflowInstalled ?? false, upToDate: repoInspection?.workflowUpToDate ?? false };
+
+  const set = <K extends keyof TwaConfig>(key: K, value: TwaConfig[K]) => setCfg(c => ({ ...c, [key]: value }));
+  const paidAction = async (action: string) => {
+    const operationId = (typeof crypto !== 'undefined' && 'randomUUID' in crypto) ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}-wybuild`;
+    try {
+      const result = await api.chargeAction(action, operationId);
+      window.dispatchEvent(new CustomEvent('wybuild:credits-updated', { detail: { balance: result.balance } }));
+      return true;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Could not charge credits for this action.';
+      window.alert(message);
+      return false;
+    }
+  };
+  const chargeIdentityEdit = async (field: 'package_id_edit' | 'version_edit', key: 'packageId' | 'versionName', value: string) => {
+    const oldValue = String(savedProject?.twa?.[key] ?? (key === 'versionName' ? '1.0.0' : ''));
+    if (!editingId || !savedProject?.twa || value === oldValue || chargedIdentityValues.current[field] === value) return;
+    const ok = await paidAction(field);
+    if (!ok) set(key, oldValue as TwaConfig[typeof key]);
+    else chargedIdentityValues.current[field] = value;
+  };
+
+  const applyInspection = (r: TwaInspection, url: string) => {
+    setInspection(r);
+    const fresh = inspectedUrl.current !== url; // a different site replaces old detections; the same site only fills blanks
+    inspectedUrl.current = url;
+    const detected = Object.fromEntries(Object.entries(r.detected).filter(([, v]) => v !== undefined && v !== ''));
+    setCfg(c => {
+      const next: Record<string, unknown> = { ...c };
+      for (const [k, v] of Object.entries(detected)) {
+        const cur = (c as unknown as Record<string, unknown>)[k];
+        if (fresh || cur === '' || cur === undefined || (Array.isArray(cur) && !cur.length)) next[k] = v;
+      }
+      next.fallbackType = 'customtabs';
+      return next as unknown as TwaConfig;
+    });
+  };
+
+  /** fill only the blanks from the manifest/package.json that lives in the repo */
+  const fillFromRepo = (ri: RepoInspection) => {
+    const w = ri.web;
+    if (!w) return;
+    setCfg(c => {
+      const next: TwaConfig = { ...c };
+      const blank = (v: unknown) => v === '' || v === undefined;
+      if (blank(c.name) && w.name) next.name = w.name;
+      if (blank(c.launcherName) && (w.launcherName || w.name)) next.launcherName = w.launcherName || w.name;
+      if (blank(c.themeColor) || (editingId == null && c.themeColor === EMPTY.themeColor && w.themeColor)) next.themeColor = w.themeColor || c.themeColor;
+      if (editingId == null && c.backgroundColor === EMPTY.backgroundColor && w.backgroundColor) next.backgroundColor = w.backgroundColor;
+      if (editingId == null && c.display === EMPTY.display && (w.display === 'fullscreen' || w.display === 'minimal-ui')) next.display = w.display;
+      if (editingId == null && c.orientation === 'default' && (w.orientation === 'portrait' || w.orientation === 'landscape')) next.orientation = w.orientation;
+      if (editingId == null && c.startUrl === '/' && w.startUrl) next.startUrl = w.startUrl;
+      return next;
+    });
+  };
+
+  /** THE discover: repository + web app together, one button, one click */
+  const discover = async () => {
+    const r = repoFromUrl(repo);
+    if (!r) return setError('Choose a GitHub repository first.');
+    setBusy(true); setError(''); setStage('Discovering…');
+    try {
+      const ri = await discoverRepo(r, true);
+      const url = cfgRef.current.webUrl || ri.homepage || '';
+      if (url) {
+        if (!cfgRef.current.webUrl) setCfg(c => ({ ...c, webUrl: url }));
+        try { applyInspection(await api.twaInspect(url), url); }
+        catch (e: any) { setError(`Repository found, but the live site could not be read (${e?.message || 'unreachable'}). Check the address and tap Discover again.`); }
+      }
+      fillFromRepo(ri);
+      if (!url) setError('Repository found, but no live address was found (GitHub website field, package.json homepage, CNAME or Pages). Enter the address of your live web app (for example https://yourapp.com) and tap Discover again.');
+    } catch (e: any) { setError(e?.message || 'Could not discover this repository.'); }
+    finally { setBusy(false); setStage(''); }
+  };
+
+  const loadProject = (p: Project) => {
+    if (!p.twa) return;
+    const r = repoFromUrl(p.repoUrl) || '';
+    inspectedUrl.current = p.twa.webUrl;
+    replaceCfg({ ...EMPTY, ...p.twa, fallbackType: 'customtabs' });
+    if (r) selectRepo(r);
+    setEditingId(p.id);
+    setInspection(null);
+    setError(''); setNeedKey(false);
+  };
+
+  // Choosing a repo (here or anywhere else) discovers it automatically, and restores its saved app if there is one
+  const lastAuto = useRef('');
+  useEffect(() => {
+    if (!repo || lastAuto.current === repo) return;
+    lastAuto.current = repo;
+    const existing = projects.find(p => p.kind === 'twa' && p.twa && repoFromUrl(p.repoUrl)?.toLowerCase() === repo.toLowerCase());
+    if (existing) loadProject(existing);
+    else { setEditingId(null); replaceCfg(EMPTY); setInspection(null); inspectedUrl.current = ''; }
+    void discover();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repo]);
+
+  const toggleFeature = async (id: string) => {
+    const on = !featureState(cfg, id);
+    if (on && (cfg.shell || 'standalone') === 'twa' && ['push', 'googleauth', 'pulltorefresh', 'swipeback'].includes(id)) {
+      window.alert('This native feature is not available in pure Trusted Web Activity mode. Switch to Capacitor / standalone before enabling it.');
+      return;
+    }
+    if (on) {
+      const price: Record<string, string> = { notifications: 'reminders', location: 'native_location', camera: 'native_camera', microphone: 'native_camera', vibration: 'vibration', biometric: 'biometric', push: 'push', googleauth: 'googleauth', pulltorefresh: 'pulltorefresh', swipeback: 'swipeback', sharetarget: 'sharetarget' };
+      const action = price[id];
+      if (action && !(await paidAction(action))) return;
+    }
+    if (id === 'notifications') return set('enableNotifications', on);
+    if (id === 'location') return set('locationDelegation', on);
+    const permission = FEATURES.find(f => f.id === id)?.permission;
+    if (!permission) return;
+    set('androidPermissions', on ? [...cfg.androidPermissions, permission] : cfg.androidPermissions.filter(p => p !== permission));
+  };
+
+  const linkRules: LinkRule[] = cfg.linkRules || [];
+  const setRules = (next: LinkRule[]) => set('linkRules', next);
+  const addRule = (pattern = '', mode: LinkMode = 'internal') => {
+    if (pattern && linkRules.some(r => r.pattern.toLowerCase() === pattern)) return;
+    setRules([...linkRules, { pattern, mode }]);
+  };
+  const changeRule = (i: number, patch: Partial<LinkRule>) => setRules(linkRules.map((r, j) => j === i ? { ...r, ...patch } : r));
+  const hasMode = (m: LinkMode) => linkRules.some(r => r.pattern.trim() && r.mode === m);
+
+  /** Explicit action: overwrite this repo's signing secrets with the WyBuild (Vercel) default key. */
+  const useDefaultKey = async () => {
+    const r = repoFromUrl(repo);
+    if (!r) return;
+    if (!window.confirm(`Replace the signing key stored in ${r} with the WyBuild default key?\n\nApps already published with the old key can only be updated with that old key.`)) return;
+    setBusy(true); setError('');
+    try { await api.resetSigning(r); await discoverRepo(r, true); }
+    catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  };
+
+  /** One button: discover anything missing, install the workflow, make sure signing exists, dispatch. */
+  const build = async () => {
+    setError(''); setNeedKey(false);
+    const r = repoFromUrl(repo);
+    if (!r) return setError('Choose the GitHub repository for this Android build.');
+    if (!cfg.webUrl) return setError('Enter the address of your live web app first (https://…).');
+    if (!cfg.webUrl.startsWith('https://')) return setError('Your web app must use HTTPS.');
+    const badLink = (cfg.linkRules || []).map(x => ({ x, e: checkLinkRule(x) })).find(v => v.e);
+    if (badLink) return setError(`Link handling: "${badLink.x.pattern || 'empty rule'}" - ${badLink.e}`);
+    const selectedIncompatible = (cfg.nativeFeatures || []).map(id => ({ id, compatibility: nativeFeatureCompatibility(id, cfg.shell || 'standalone', repoInspection?.nativeBuild) })).find(item => !item.compatibility.ok);
+    if (selectedIncompatible) return setError(`Native feature “${selectedIncompatible.id}” is incompatible with this workflow: ${selectedIncompatible.compatibility.reason}`);
+    setBusy(true);
+    try {
+      if (cfg.packageId && !/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/.test(cfg.packageId)) throw new Error('Package ID must look like com.yourbrand.app (lowercase letters, digits, underscores, at least two parts).');
+      let twaCfg = cfg;
+      if (!cfg.packageId) {
+        setStage('Reading your web app…');
+        const wi = await api.twaInspect(cfg.webUrl);
+        applyInspection(wi, cfg.webUrl);
+        twaCfg = { ...cfg, ...Object.fromEntries(Object.entries(wi.detected).filter(([, v]) => v !== undefined && v !== '' )) } as TwaConfig;
+        if (!twaCfg.packageId) throw new Error('A package ID could not be generated from this web address.');
+      }
+      setStage('Checking repository…');
+      const ri = await discoverRepo(r, true);
+      if (ri.canPush === false) throw new Error('Your GitHub account cannot push to this repository, so WyBuild cannot install its workflow. Sign in as the owner, get write access, or pick a fork.');
+      if (ri.signing === 'none') { setNeedKey(true); setBusy(false); setStage(''); return; }
+      const wf = ri.workflows?.twa ?? { installed: ri.workflowInstalled, upToDate: ri.workflowUpToDate };
+      const installedNow = !wf.installed || !wf.upToDate;
+      if (installedNow) { setStage('Installing the WyBuild workflow…'); await api.installWorkflow(r, ri.defaultBranch, 'twa'); }
+      const branch = ri.defaultBranch;
+      const project = { name: twaCfg.name || new URL(twaCfg.webUrl).hostname, description: 'Capacitor / Android web app build', repoUrl: `https://github.com/${r}`, branch, kind: 'twa' as const, twa: { ...twaCfg, shortcuts: twaCfg.shortcuts.filter(x => x.name && x.url), fallbackType: 'customtabs' as const, useKeystore: true, storeReady: true }, config: { target: 'apk' as const, mode: 'release' as const, flutterVersion: 'stable', dartDefines: [], obfuscate: false, splitDebugInfo: false, runTests: false, customArgs: '' } };
+      let id = editingId;
+      if (id) updateProject(id, project);
+      else { const res = addProject(project); if (!res.success || !res.id) throw new Error(res.error || 'Could not save the project.'); id = res.id; setEditingId(id); }
+      setStage('Starting the build…');
+      const transient = ['NO_WORKFLOW', 'MISSING_HELPER_FILES', 'WORKFLOW_OUTDATED', 'WORKFLOW_NOT_DISPATCHABLE', 'GITHUB_NOT_FOUND', 'GITHUB_VALIDATION', 'GITHUB_ERROR'];
+      expectNewBuild(r);
+      for (let attempt = 0; ; attempt++) {
+        try { await api.twaBuild(r, branch, project.twa); break; }
+        catch (e) {
+          // GitHub needs a few seconds to register a workflow we just committed
+          if (!(installedNow && attempt < 4 && e instanceof ApiError && !!e.code && transient.includes(e.code))) throw e;
+          await sleep(attempt === 0 ? 2500 : 4000);
+        }
+      }
+      void discoverRepo(r, true);
+      notifyBuildStarted();
+      setCurrentTab('builds');
+    } catch (e: any) {
+      cancelExpectNewBuild();
+      if (e instanceof ApiError && e.code === 'LIMIT') openFlutterwaveCheckout('monthly');
+      setError(e?.message || 'Build could not be started.');
+    } finally { setBusy(false); setStage(''); }
+  };
+
+  const runApiIntegration = async () => {
+    if (!repo) { setApiIntegrationError('Select a GitHub repository first.'); return; }
+    const branch = repoInspection?.defaultBranch;
+    if (!branch) { setApiIntegrationError('WyBuild could not determine the default branch. Refresh repository inspection and try again.'); return; }
+    const compatibility = integrationCompatibility(apiIntegrationId, cfg.shell || 'standalone', repoInspection?.nativeBuild);
+    if (!compatibility.ok) { setApiIntegrationError(`${compatibility.label}: ${compatibility.reason}`); return; }
+    setApiIntegrationBusy(true); setApiIntegrationStatus('unknown'); setApiIntegrationError(''); setApiIntegrationResult(null);
+    try {
+      const result = await api.automationIntegrateApi({ repo, branch, integrationId: apiIntegrationId, goal: apiIntegrationGoal.trim(), shell: cfg.shell === 'twa' ? 'twa' : 'standalone' });
+      setApiIntegrationResult(result);
+      setApiIntegrationStatus(result.applied || result.upToDate || result.status === 'up_to_date' ? 'current' : 'needs-update');
+      window.dispatchEvent(new CustomEvent('wybuild:credits-updated', { detail: { balance: result.creditsRemaining } }));
+    } catch (e) { setApiIntegrationStatus('needs-update'); setApiIntegrationError(e instanceof Error ? e.message : 'API integration automation failed.'); }
+    finally { setApiIntegrationBusy(false); }
+  };
+
+  const reset = () => { replaceCfg(EMPTY); setInspection(null); setEditingId(null); setError(''); setNeedKey(false); inspectedUrl.current = ''; };
+
+  const chip = (ok: boolean, good: string, todo: string) => <span className={`px-2.5 py-1 rounded-full border ${ok ? 'border-emerald-400/20 text-emerald-300' : 'border-amber-400/20 text-amber-300'}`}>{ok ? good : todo}</span>;
+  const pushable = repos.filter(r => r.canPush);
+  const readOnlyRepo = repoInspection?.canPush === false;
+  const missing = !repo ? 'Choose a repository' : !cfg.webUrl ? 'Enter your web app address' : '';
+
+  return <div className="max-w-4xl mx-auto p-3 sm:p-6 space-y-4 text-xs">
+    <header>
+      <div className="flex items-center gap-2"><Smartphone className="w-5 h-5 text-emerald-300"/><h1 className="text-xl font-bold text-white">Web → Android</h1></div>
+      <p className="text-slate-500 mt-1">Pick the repo, tap Discover once, press Build. Buildable web source uses Capacitor + Android Gradle; URL-only sites keep the native-shell fallback. WyBuild installs the workflow and signs the app for you.</p>
+    </header>
+
+    {saved.length > 0 && <div className="flex gap-2 overflow-x-auto pb-1">{saved.map(p => <button key={p.id} onClick={() => loadProject(p)} className={`px-3 py-2 rounded-lg border whitespace-nowrap ${editingId === p.id ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200' : 'border-white/[.07] text-slate-400'}`}>{p.name}</button>)}<button onClick={reset} className="px-3 py-2 text-slate-500">+ New</button></div>}
+
+    <section className={card}>
+      <div className="flex items-center gap-2 text-white font-semibold"><Github className="w-4 h-4 text-emerald-300"/>Repository &amp; web app</div>
+      <div className="grid sm:grid-cols-2 gap-3 mt-3">
+        <div>
+          <label className="text-slate-500">GitHub repository</label>
+          <select className={input} value={repo} onChange={e => selectRepo(e.target.value)}>
+            <option value="">{repos.length ? 'Choose a repository…' : 'Loading repositories…'}</option>
+            {repo && !repos.some(r => r.fullName === repo) && <option value={repo}>{repo}</option>}
+            {pushable.map(r => <option key={r.fullName} value={r.fullName}>{r.fullName}</option>)}
+            {repos.filter(r => !r.canPush).map(r => <option key={r.fullName} value={r.fullName}>{r.fullName} (read-only)</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="text-slate-500">Live web app address</label>
+          <input className={input} placeholder="https://yourapp.com" value={cfg.webUrl} onChange={e => set('webUrl', e.target.value)} onKeyDown={e => { if (e.key === 'Enter') void discover(); }}/>
+        </div>
+      </div>
+      <button onClick={discover} disabled={busy || !repo} className="mt-3 w-full sm:w-auto h-11 px-5 rounded-lg bg-emerald-400 text-black font-bold flex items-center justify-center gap-2 disabled:opacity-40">{busy && stage === 'Discovering…' ? <Loader2 className="w-4 h-4 animate-spin"/> : <Search className="w-4 h-4"/>}Discover</button>
+      {readOnlyRepo && <div className="mt-3 p-3 rounded-lg border border-amber-400/20 bg-amber-400/[.05] text-amber-200">Read-only: your GitHub account cannot push to this repo, so the workflow cannot be installed. Sign in as the owner, get write access, or pick a fork.</div>}
+      {repoInspection && <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3">
+        <div className="p-2 rounded-lg bg-black/20"><span className="text-slate-600">Branch</span><b className="block text-white font-mono break-all">{repoInspection.defaultBranch}</b></div>
+        <div className="p-2 rounded-lg bg-black/20"><span className="text-slate-600">Commit</span><b className="block text-white font-mono">{repoInspection.latestCommitSha?.slice(0,7) || '—'}</b></div>
+        <div className="p-2 rounded-lg bg-black/20"><span className="text-slate-600">Workflow</span><b className={`block ${workflow.installed && workflow.upToDate ? 'text-emerald-300' : 'text-amber-300'}`}>{workflow.installed && workflow.upToDate ? 'Installed' : workflow.installed ? 'Updates on build' : 'Installs on build'}</b></div>
+        <div className="p-2 rounded-lg bg-black/20"><span className="text-slate-600">Signing</span><b className={`block ${signingReady ? 'text-emerald-300' : 'text-amber-300'}`}>{signing === 'repo' ? 'Repo key' : signingReady ? 'Default key' : 'Key needed'}</b></div>
+      </div>}
+      {repoInspection && defaultKeystore && signing === 'repo' && <button type="button" disabled={busy} onClick={useDefaultKey} className="mt-2 text-xs text-emerald-300 underline disabled:opacity-40">Replace this repo's key with the WyBuild default key</button>}
+      {inspection && <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">{inspection.checks.map(c => <div key={c.id} className={`rounded-lg px-3 py-2 border ${c.level === 'error' ? 'border-rose-500/20 text-rose-300' : c.level === 'warn' ? 'border-amber-500/20 text-amber-200' : 'border-emerald-400/15 text-emerald-200'}`}><div className="flex gap-2 items-center">{c.level === 'ok' ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0"/> : <AlertTriangle className="w-3.5 h-3.5 shrink-0"/>}{c.msg}</div></div>)}</div>}
+      {inspection?.pwa && <div className="mt-3 rounded-xl border border-white/[.06] bg-black/20 p-3">
+        <div className="flex items-center justify-between gap-2"><div><b className="text-white">PWA credentials discovered</b><p className="text-[11px] text-slate-500 mt-0.5">WyBuild uses the live manifest as the primary source, then fills missing values from the repository.</p></div><span className={`px-2 py-1 rounded-full border text-[10px] ${inspection.pwa.ready ? 'border-emerald-400/20 text-emerald-300' : 'border-amber-400/20 text-amber-300'}`}>{inspection.pwa.ready ? 'PWA READY' : 'PWA NEEDS ATTENTION'}</span></div>
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-2 mt-3">
+          <div><span className="text-slate-600">Manifest</span><b className="block text-slate-200 truncate">{inspection.pwa.manifest.url ? new URL(inspection.pwa.manifest.url).pathname : 'Not found'}</b></div>
+          <div><span className="text-slate-600">Start URL</span><b className="block text-slate-200 font-mono truncate">{inspection.pwa.manifest.startUrl || '—'}</b></div>
+          <div><span className="text-slate-600">Scope</span><b className="block text-slate-200 font-mono truncate">{inspection.pwa.manifest.scope || '—'}</b></div>
+          <div><span className="text-slate-600">Service worker</span><b className={`block truncate ${inspection.pwa.serviceWorker.present ? 'text-emerald-300' : 'text-amber-300'}`}>{inspection.pwa.serviceWorker.present ? new URL(inspection.pwa.serviceWorker.url).pathname : 'Not detected'}</b></div>
+        </div>
+        <div className="flex flex-wrap gap-2 mt-2 text-[10px]">
+          <span className="px-2 py-1 rounded border border-white/[.06] text-slate-400">{inspection.pwa.manifest.display}</span>
+          <span className="px-2 py-1 rounded border border-white/[.06] text-slate-400">{inspection.pwa.manifest.orientation}</span>
+          <span className="px-2 py-1 rounded border border-white/[.06] text-slate-400">Icon {inspection.pwa.icons.primarySize ? `${inspection.pwa.icons.primarySize}px` : 'detected'}</span>
+          {inspection.pwa.icons.maskable && <span className="px-2 py-1 rounded border border-emerald-400/15 text-emerald-300">Maskable icon</span>}
+          {inspection.pwa.icons.monochrome && <span className="px-2 py-1 rounded border border-emerald-400/15 text-emerald-300">Monochrome icon</span>}
+          <span className={`px-2 py-1 rounded border ${inspection.assetlinks.present ? 'border-emerald-400/15 text-emerald-300' : 'border-white/[.06] text-slate-500'}`}>{inspection.assetlinks.present ? `Asset Links: ${inspection.assetlinks.packages.length} package${inspection.assetlinks.packages.length === 1 ? '' : 's'}` : 'Asset Links: not published'}</span>
+        </div>
+      </div>}
+    </section>
+
+    <section className={card}>
+      <div className="flex items-center justify-between gap-2"><div className="flex items-center gap-2 text-white font-semibold"><Package className="w-4 h-4 text-emerald-300"/>Automatic app identity</div><span className="text-[10px] text-emerald-300">{editingId ? `EDITING ${(savedProject?.name || cfg.name || 'APP').toUpperCase()}` : 'PACKAGE ID IS FREE'}</span></div>
+      <div className="grid sm:grid-cols-2 gap-3 mt-3">
+        <div><label className="text-slate-500">App name</label><input className={input} value={cfg.name} onChange={e => set('name', e.target.value)} placeholder="Detected automatically"/></div>
+        <div><label className="text-slate-500 flex items-center justify-between gap-2"><span>Package ID</span><span className="text-[10px] font-bold text-amber-200">Edit · 2 credits</span></label><input onBlur={e => { void chargeIdentityEdit('package_id_edit', 'packageId', e.currentTarget.value); }} className={`${input} font-mono text-emerald-200`} value={cfg.packageId} onChange={e => set('packageId', e.target.value.toLowerCase().replace(/[^a-z0-9_.]/g, ''))} placeholder="Generated from your domain" autoCapitalize="none" spellCheck={false}/></div>
+        <div><label className="text-slate-500 flex items-center justify-between gap-2"><span>Version</span><span className="text-[10px] font-bold text-amber-200">Edit · 2 credits</span></label><input onBlur={e => { void chargeIdentityEdit('version_edit', 'versionName', e.currentTarget.value); }} className={input} value={cfg.versionName} onChange={e => set('versionName', e.target.value)}/></div>
+        <div><label className="text-slate-500">Minimum version code <span className="text-slate-600">(optional)</span></label><input className={`${input} font-mono`} inputMode="numeric" value={cfg.versionCode ?? ''} onChange={e => { const n = Number(e.target.value.replace(/\D/g, '')); set('versionCode', n > 0 ? n : undefined); }} placeholder="Auto: always higher than before"/></div>
+        <div><label className="text-slate-500">Launcher name <span className="text-slate-600">(under the icon)</span></label><input className={input} value={cfg.launcherName} onChange={e => set('launcherName', e.target.value)} placeholder="Same as app name"/></div>
+        <div><label className="text-slate-500">Icon</label><div className="flex gap-2">{cfg.iconUrl && /^https:\/\//.test(cfg.iconUrl) && <img src={cfg.iconUrl} alt="" className="h-11 w-11 rounded-lg bg-black/40 object-contain shrink-0" onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}/>}<input className={input} value={cfg.iconUrl} onChange={e => set('iconUrl', e.target.value)} placeholder="Detected from manifest"/></div></div>
+      </div>
+      <p className="text-slate-600 mt-2">The package ID is generated from the domain and reused on future builds so updates keep the same Android identity. You can set your own (like com.yourbrand.app), but changing it on a published app makes Android treat the new build as a different app, so users cannot update to it. The version code rises automatically with each workflow run, so Google Play is less likely to reject an upload as "version code already used". Set a minimum only if Play reports a higher one.</p>
+    </section>
+
+    <section className={card}>
+      <div className="flex items-center gap-2 text-white font-semibold"><Wrench className="w-4 h-4 text-emerald-300"/>Native features</div>
+      <p className="text-slate-500 mt-1">Choose only what your app really uses. WyBuild adds the matching Android declarations; Android still asks users at runtime for sensitive access. Extra permissions that are never used can cause store-review problems.</p>
+      <details className="mt-3"><summary className="cursor-pointer text-sm font-semibold text-emerald-200">MORE permissions (contacts, camera, location, audio and nearby devices)</summary><div className="grid sm:grid-cols-2 gap-2 mt-3">{FEATURES.map(f => { const checked = featureState(cfg, f.id); return <button key={f.id} type="button" onClick={() => toggleFeature(f.id)} className={`text-left rounded-xl border p-3 flex gap-3 ${checked ? 'border-emerald-400/30 bg-emerald-400/[.06]' : 'border-white/[.06] bg-black/20'}`}><span className={`w-5 h-5 rounded border flex items-center justify-center shrink-0 ${checked ? 'bg-emerald-400 border-emerald-400 text-black' : 'border-slate-600'}`}>{checked && <Check className="w-3.5 h-3.5"/>}</span><span><b className="text-slate-200 block">{f.label}<span className="ml-2 inline-flex rounded border border-amber-300/20 bg-amber-300/[.06] px-1.5 py-0.5 align-middle text-[9px] font-bold text-amber-200">{({notifications:2,location:2,camera:2,microphone:2,vibration:1,biometric:3,push:3,googleauth:3,pulltorefresh:2,swipeback:2,sharetarget:1,reminders:2} as Record<string,number>)[f.id] ?? 1} credits</span></b><span className="text-[11px] text-slate-500">{f.hint}</span></span></button>; })}</div></details>
+      {(() => { const hints = (inspection?.featureHints || []).filter(id => !featureState(cfg, id)); return hints.length > 0 && <div className="mt-3 p-3 rounded-xl border border-emerald-400/20 bg-emerald-400/[.04] text-emerald-200 flex flex-wrap items-center gap-2"><span>Your site's code appears to use:</span>{hints.map(id => <button key={id} type="button" onClick={() => toggleFeature(id)} className="px-2.5 py-1 rounded-full border border-emerald-400/30 hover:bg-emerald-400/10">+ {FEATURES.find(f => f.id === id)?.label}</button>)}</div>; })()}
+    </section>
+
+    <section className={card}>
+      <div className="flex items-center justify-between gap-2"><div className="flex items-center gap-2 text-white font-semibold"><Smartphone className="w-4 h-4 text-emerald-300"/>Native app features</div><span className="text-[10px] text-slate-500">{(cfg.shell || 'standalone') === 'twa' ? 'TWA MODE' : 'ENGINE-DEPENDENT'}</span></div>
+      <p className="text-slate-500 mt-1">Native capabilities depend on the selected engine. Capacitor source builds bundle <span className="font-mono text-slate-400">window.WyBuildNative</span>; the URL-based native shell uses its own bridge. Google Play reviews the app's behaviour, so request only permissions and features the app genuinely uses.</p>
+      <>{(cfg.shell || 'standalone') === 'twa' && <p className="text-rose-300 mt-3">INCOMPATIBLE WORKFLOW: Trusted Web Activity cannot expose the WyBuild native bridge. Native options below are marked red and disabled until you switch to Standard / standalone.</p>}
+        <p className="mt-2 text-[11px] text-slate-500">WyBuild auto-selects Capacitor + Gradle only when the repository has a package.json build script and produces index.html. URL-only projects use the separate native WebView shell. WyBuild checks engine requirements before packaging and applies Android manifest entries for selected native integrations.</p>
+        <details className="mt-3 rounded-xl border border-white/[.06] bg-black/10 p-3"><summary className="cursor-pointer text-sm font-semibold text-emerald-200">MORE native features and integrations</summary><p className="text-[11px] text-slate-500 mt-2">Expand only the capabilities your app actually uses. WyBuild checks engine compatibility before building.</p><div className="grid sm:grid-cols-2 gap-2 mt-3">{NATIVE_OPT_IN.map(f => { const on = (cfg.nativeFeatures || []).includes(f.id); const compat = nativeFeatureCompatibility(f.id, cfg.shell || 'standalone', repoInspection?.nativeBuild); return <button key={f.id} type="button" aria-disabled={!compat.ok} title={compat.reason} onClick={async () => { if (!compat.ok && !on) { window.alert(`${compat.label}: ${compat.reason}`); return; } if (!on && !(await paidAction(({biometric:'biometric',sharetarget:'sharetarget',reminders:'reminders',googleauth:'googleauth',push:'push',pulltorefresh:'pulltorefresh',swipeback:'swipeback'} as Record<string,string>)[f.id] || 'sharetarget'))) return; set('nativeFeatures', on ? (cfg.nativeFeatures || []).filter(x => x !== f.id) : [...(cfg.nativeFeatures || []), f.id]); }} className={`text-left rounded-xl border p-3 flex gap-3 ${!compat.ok ? 'border-rose-500/40 bg-rose-500/[.06]' : on ? 'border-emerald-400/40 bg-emerald-400/[.06]' : 'border-emerald-400/20 bg-emerald-400/[.025]'}`}><span className={`w-5 h-5 rounded border flex items-center justify-center shrink-0 ${!compat.ok ? 'border-rose-400 text-rose-300' : on ? 'bg-emerald-400 border-emerald-400 text-black' : 'border-emerald-400/50 text-emerald-300'}`}>{!compat.ok ? <XCircle className="w-3.5 h-3.5"/> : on ? <Check className="w-3.5 h-3.5"/> : <CheckCircle2 className="w-3.5 h-3.5"/>}</span><span className="min-w-0"><b className="text-slate-200 block">{f.label}<span className={`ml-2 inline-flex rounded border px-1.5 py-0.5 align-middle text-[9px] font-bold ${compat.ok ? 'border-emerald-300/20 bg-emerald-300/[.06] text-emerald-200' : 'border-rose-300/20 bg-rose-300/[.06] text-rose-200'}`}>{compat.ok ? 'COMPATIBLE' : 'INCOMPATIBLE'}</span><span className="ml-2 inline-flex rounded border border-amber-300/20 bg-amber-300/[.06] px-1.5 py-0.5 align-middle text-[9px] font-bold text-amber-200">{({notifications:2,location:2,camera:2,microphone:2,vibration:1,biometric:3,push:3,googleauth:3,pulltorefresh:2,swipeback:2,sharetarget:1,reminders:2} as Record<string,number>)[f.id] ?? 1} credits</span></b><span className="text-[11px] text-slate-500 block mt-1">{f.hint}</span><span className={`text-[10px] block mt-1 ${compat.ok ? 'text-emerald-300' : 'text-rose-300'}`}>{compat.reason}</span></span></button>; })}</div>
+        <p className="text-[11px] text-slate-500 mt-3 mb-1">Capacitor source-build bridge (when the source build succeeds)</p>
+        <div className="grid sm:grid-cols-2 gap-2">{CAPACITOR_NATIVE.map(label => <div key={label} className="rounded-xl border border-white/[.06] bg-black/20 p-3 flex gap-3"><span className="w-5 h-5 rounded border border-emerald-400/40 bg-emerald-400/10 text-emerald-300 flex items-center justify-center shrink-0"><Check className="w-3.5 h-3.5"/></span><span className="text-[11px] text-slate-400">{label}</span></div>)}</div>
+        <details className="mt-3"><summary className="cursor-pointer text-[11px] text-slate-500">URL-only native shell features</summary><div className="grid sm:grid-cols-2 gap-2 mt-2">{NATIVE_ALWAYS.map(f => <div key={f.id} className="rounded-xl border border-white/[.06] bg-black/20 p-3 flex gap-3"><span className="w-5 h-5 rounded border border-emerald-400/40 bg-emerald-400/10 text-emerald-300 flex items-center justify-center shrink-0"><Check className="w-3.5 h-3.5"/></span><span><b className="text-slate-300 block">{f.label}</b><span className="text-[11px] text-slate-500">{f.hint}</span></span></div>)}</div></details>
+        <p className="text-slate-600 mt-3">Google Play judges whether the app is more than a website and whether each declared permission is used. Add the script to your site and use these features in real screens; do not enable features you will not use.</p></details>
+      </>
+    </section>
+
+    <section className={card}>
+      <div className="flex items-center justify-between gap-2"><div className="flex items-center gap-2 text-white font-semibold"><Sparkles className="w-4 h-4 text-emerald-300"/>WyBuild Integration Engine</div><span className="text-[10px] font-bold text-amber-200">8+ CREDITS</span></div>
+      <p className="text-slate-500 mt-1">WyBuild uses deterministic, version-aware integration templates and repository checks; no AI provider is called. Supported native plugins are added only when the project version can be detected. Provider credentials and server-side services must be configured securely. Review the atomic commit, rebuild, and test on a device; a source commit is not proof the APK works.</p>
+      <div className="grid sm:grid-cols-2 gap-3 mt-3"><div><label className="text-slate-400 text-xs block mb-1">Integration to add</label><select className={input} value={apiIntegrationId} onChange={e => { setApiIntegrationId(e.target.value); setApiIntegrationStatus('needs-update'); setApiIntegrationResult(null); setApiIntegrationError(''); }}><option value="rest_api">REST API client</option><option value="firebase_auth">Firebase Authentication</option><option value="analytics">Privacy-conscious analytics</option><option value="payments">Payment provider checkout (safe client layer)</option><option value="push_notifications">Push notifications</option><option value="contacts">Contacts / contact picker</option><option value="native_downloads">Native downloads / save files</option><option value="native_camera">Native camera / photo picker</option><option value="native_share">Native share sheet</option><option value="file_uploads">File picker / uploads</option><option value="geolocation">Geolocation</option><option value="offline_cache">Offline cache</option><option value="notifications_local">Local notifications</option><option value="device_info">Device information</option><option value="network_status">Network status events</option><option value="haptics">Haptic feedback</option><option value="clipboard">Clipboard</option></select></div><div><label className="text-slate-400 text-xs block mb-1">Optional requirements</label><input className={input} value={apiIntegrationGoal} onChange={e => setApiIntegrationGoal(e.target.value)} maxLength={1200} placeholder="e.g. add to profile screen, use existing backend" /></div></div>
+      {(() => { const c = integrationCompatibility(apiIntegrationId, cfg.shell || 'standalone', repoInspection?.nativeBuild); return <div className={`mt-3 rounded-lg border p-3 ${c.ok ? 'border-emerald-400/30 bg-emerald-400/[.04]' : 'border-rose-500/40 bg-rose-500/[.06]'}`}><b className={`text-[11px] ${c.ok ? 'text-emerald-200' : 'text-rose-200'}`}>{c.ok ? '✓ ' : '✕ '}{c.label}</b><p className={`text-[11px] mt-1 ${c.ok ? 'text-emerald-100/70' : 'text-rose-100/80'}`}>{c.reason}</p></div>; })()}
+      <div className="mt-3 flex flex-wrap items-center gap-3"><button type="button" disabled={apiIntegrationBusy || apiIntegrationStatus === 'current' || !repo || !integrationCompatibility(apiIntegrationId, cfg.shell || 'standalone', repoInspection?.nativeBuild).ok} onClick={() => void runApiIntegration()} className={`rounded-lg px-4 py-2.5 text-sm font-bold disabled:opacity-50 flex items-center gap-2 ${apiIntegrationStatus === 'current' ? 'bg-emerald-400/10 border border-emerald-400/30 text-emerald-200 cursor-not-allowed' : 'bg-emerald-400 text-slate-950'}`}>{apiIntegrationBusy ? <Loader2 className="w-4 h-4 animate-spin"/> : apiIntegrationStatus === 'current' ? <CheckCircle2 className="w-4 h-4"/> : <Sparkles className="w-4 h-4"/>}{apiIntegrationBusy ? 'Checking integration…' : apiIntegrationStatus === 'current' ? 'Integration current' : 'Install / update integration · 8 credits'}</button><span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-bold ${apiIntegrationBusy || apiIntegrationStatus === 'unknown' ? 'border-slate-500/30 bg-slate-500/10 text-slate-300' : apiIntegrationStatus === 'current' ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200' : 'border-amber-400/30 bg-amber-400/10 text-amber-200'}`}>{apiIntegrationBusy || apiIntegrationStatus === 'unknown' ? 'CHECKING' : apiIntegrationStatus === 'current' ? 'CURRENT' : 'OUTDATED / UPDATE NEEDED'}</span><span className="text-[11px] text-slate-500">Target: {repo || 'select a repository'}{repoInspection?.defaultBranch ? ` · ${repoInspection.defaultBranch}` : ''}</span></div>
+      {apiIntegrationError && <div className="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-200">{apiIntegrationError}</div>}
+      {apiIntegrationResult && <div className="mt-3 rounded-lg border border-emerald-400/20 bg-emerald-400/[.04] p-3 space-y-2"><b className="text-sm text-emerald-200">{apiIntegrationResult.applied ? 'Integration committed to GitHub' : 'No code changes committed'}</b><p className="text-xs text-slate-300">{apiIntegrationResult.summary}</p>{apiIntegrationResult.fixes?.map((f: any) => <a key={f.path} className="block text-xs text-emerald-300 underline break-all" href={f.commit || '#'} target="_blank" rel="noreferrer">{f.path} — {f.reason}</a>)}{apiIntegrationResult.requiresSecrets && <p className="text-xs text-amber-200">This integration may require provider credentials or environment configuration. Never put private API keys in frontend source code.</p>}{apiIntegrationResult.manualSteps?.length > 0 && <ul className="list-disc pl-5 text-xs text-slate-300 space-y-1">{apiIntegrationResult.manualSteps.map((step: string, i: number) => <li key={i}>{step}</li>)}</ul>}{apiIntegrationResult.detectedCapabilities?.length > 0 && <div className="text-xs text-slate-300"><b>Detected capabilities</b><ul className="list-disc pl-5 mt-1">{apiIntegrationResult.detectedCapabilities.map((note: string, i: number) => <li key={i}>{note}</li>)}</ul></div>}{apiIntegrationResult.verificationChecks?.length > 0 && <div className="text-xs text-slate-300"><b>Verification checklist</b><ul className="list-disc pl-5 mt-1">{apiIntegrationResult.verificationChecks.map((note: string, i: number) => <li key={i}>{note}</li>)}</ul></div>}<p className="text-[11px] text-amber-200">{apiIntegrationResult.verificationMessage || 'Source changes are not yet build-verified. Run a new build and test the feature on a device.'}</p><div className="text-[10px] text-slate-500">Engine: {apiIntegrationResult.engine || 'WyBuild Deterministic Engine'} · Charged {apiIntegrationResult.creditsCharged} credits · Balance {apiIntegrationResult.creditsRemaining}</div></div>}
+    </section>
+
+    <section className={card}>
+      <div className="flex items-center justify-between gap-2"><div className="flex items-center gap-2 text-white font-semibold"><Link2 className="w-4 h-4 text-emerald-300"/>Link handling</div><span className="text-[10px] text-slate-500">{linkRules.length ? `${linkRules.length} RULE${linkRules.length === 1 ? '' : 'S'}` : 'DEFAULT'}</span></div>
+      <p className="text-slate-500 mt-1">Choose what happens when someone taps a link in the app. Links on your own site always stay inside the app. Add a domain, a custom domain, or a link type such as <span className="font-mono text-slate-400">tel:</span>. The first matching rule wins.</p>
+      <div className="grid sm:grid-cols-3 gap-2 mt-3">{LINK_MODES.map(m => <div key={m.id} className="rounded-xl border border-white/[.06] bg-black/20 p-3"><b className="text-slate-200 block">{m.label}</b><span className="text-[11px] text-slate-500">{m.hint}</span></div>)}</div>
+      {linkRules.map((rule, i) => { const err = rule.pattern.trim() ? checkLinkRule(rule) : ''; return <div key={i} className={`mt-2 rounded-xl border p-3 ${err ? 'border-rose-500/30' : 'border-white/[.06]'} bg-black/20`}>
+        <div className="flex gap-2">
+          <input className={`${input} font-mono`} value={rule.pattern} onChange={e => changeRule(i, { pattern: e.target.value })} placeholder="shop.example.com  ·  *.example.com/docs  ·  tel:" autoCapitalize="none" autoCorrect="off" spellCheck={false} aria-label="Domain or link type"/>
+          <button type="button" onClick={() => setRules(linkRules.filter((_, j) => j !== i))} className="px-2 text-slate-500 hover:text-rose-400 shrink-0" aria-label="Remove rule"><XCircle className="w-4 h-4"/></button>
+        </div>
+        <div className="grid grid-cols-3 gap-2 mt-2">{LINK_MODES.map(m => { const on = rule.mode === m.id; return <button key={m.id} type="button" onClick={() => changeRule(i, { mode: m.id })} className={`h-10 rounded-lg border font-semibold ${on ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-200' : 'border-white/[.08] text-slate-400'}`}>{m.label}</button>; })}</div>
+        {err && <p className="text-rose-300 mt-2">{err}</p>}
+      </div>; })}
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <button type="button" onClick={() => addRule()} disabled={linkRules.length >= 30} className="h-10 px-4 rounded-lg border border-emerald-400/30 text-emerald-300 disabled:opacity-40">+ Add link</button>
+        {LINK_PRESETS.filter(pr => !linkRules.some(r => r.pattern.toLowerCase() === pr.pattern)).map(pr => <button key={pr.pattern} type="button" onClick={() => addRule(pr.pattern, pr.mode)} className="h-10 px-3 rounded-full border border-white/[.08] text-slate-400 hover:text-slate-200">+ {pr.label}</button>)}
+      </div>
+      {(cfg.shell || 'standalone') !== 'twa' && <p className="text-slate-600 mt-3">The standalone app enforces these rules inside the app: internal links stay in the app with no bar, external links open in the phone's browser, other links go to Android. No script is needed on your website. Sign-in pages (for example accounts.google.com) must be added as internal to stay in the app.</p>}
+      {(cfg.shell || 'standalone') === 'twa' && hasMode('internal') && <p className="text-slate-600 mt-3">Internal domains are added as trusted domains and verified app links, so tapping a link to them anywhere on the phone opens this app. Publish the build's assetlinks.json on <b className="text-slate-500">each</b> internal domain (the post-build check lists any that are missing).</p>}
+      {(cfg.shell || 'standalone') === 'twa' && (hasMode('external') || hasMode('other')) && <p className="text-slate-600 mt-2">External and Other rules are applied by <span className="font-mono text-slate-500">wybuild-links.js</span>, which the build produces for you: add it to your website with <span className="font-mono text-slate-500">&lt;script src="/wybuild-links.js" defer&gt;</span>. Android's Trusted Web Activity cannot intercept those taps by itself.</p>}
+      {!linkRules.length && <p className="text-slate-600 mt-3">{(cfg.shell || 'standalone') === 'twa' ? 'No rules: your site stays in the app and other sites open in an in-app browser tab.' : "No rules: your site stays in the app and other websites open in the phone's browser."}</p>}
+    </section>
+
+    <section className={card}>
+      <div className="flex items-center gap-2 text-white font-semibold"><Smartphone className="w-4 h-4 text-emerald-300"/>Screen &amp; gestures</div>
+      <p className="text-slate-500 mt-1">Built into the APK and AAB at build time. Successful builds cost <b className="text-amber-200">5 credits</b>; failed builds are refunded.</p>
+      <div className="grid sm:grid-cols-2 gap-2 mt-3">{SHELLS.map(m => { const on = (cfg.shell || 'standalone') === m.id; return <button key={m.id} type="button" onClick={() => { set('shell', m.id); if (m.id === 'twa') set('nativeFeatures', []); }} className={`text-left rounded-xl border p-3 ${on ? 'border-emerald-400/30 bg-emerald-400/[.06]' : 'border-white/[.06] bg-black/20'}`}><b className="text-slate-200 block">{m.label}</b><span className="text-[11px] text-slate-500">{m.hint}</span></button>; })}</div>
+      <div className="grid sm:grid-cols-3 gap-2 mt-3">{SCREEN_MODES.map(m => { const on = (cfg.display === 'minimal-ui' ? 'standalone' : cfg.display) === m.id; return <button key={m.id} type="button" onClick={async () => { if (m.id !== 'standalone' && cfg.display !== m.id && !(await paidAction(m.id === 'fullscreen' ? 'fullscreen' : 'fullscreen-sticky'))) return; set('display', m.id); }} className={`text-left rounded-xl border p-3 ${on ? 'border-emerald-400/30 bg-emerald-400/[.06]' : 'border-white/[.06] bg-black/20'}`}><b className="text-slate-200 block">{m.label}</b><span className="text-[11px] text-slate-500">{m.hint}</span></button>; })}</div>
+      <button type="button" onClick={async () => { if (!cfg.predictiveBack && !(await paidAction('predictive_back'))) return; set('predictiveBack', !cfg.predictiveBack); }} className={`mt-2 w-full text-left rounded-xl border p-3 flex gap-3 ${cfg.predictiveBack ? 'border-emerald-400/30 bg-emerald-400/[.06]' : 'border-white/[.06] bg-black/20'}`}><span className={`w-5 h-5 rounded border flex items-center justify-center shrink-0 ${cfg.predictiveBack ? 'bg-emerald-400 border-emerald-400 text-black' : 'border-slate-600'}`}>{cfg.predictiveBack && <Check className="w-3.5 h-3.5"/>}</span><span><b className="text-slate-200 block">Predictive back gesture</b><span className="text-[11px] text-slate-500">Android 13+ shows the back-swipe preview animation. Older phones ignore it.</span></span></button>
+      <div className="mt-3"><label className="text-slate-500">Google Play app-signing SHA-256 <span className="text-slate-600">(optional)</span></label><input className={`${input} font-mono`} value={cfg.playSigningFingerprint || ''} onChange={e => set('playSigningFingerprint', e.target.value.trim())} placeholder="Play Console → Setup → App signing → SHA-256"/></div>
+      {(cfg.shell || 'standalone') === 'twa'
+        ? <p className="text-slate-600 mt-2">Fullscreen hides the status bar, navigation bar and address bar like a native app, but only while Android can verify your site. WyBuild checks this after every build and reports it in the run summary. Publish the build's assetlinks.json at /.well-known/assetlinks.json; if the app is installed from Google Play, add the Play app-signing fingerprint above, otherwise the browser address bar comes back. Switch to the Standalone app to remove this dependency.</p>
+        : <p className="text-slate-600 mt-2">The standalone app never shows an address bar. Fullscreen also hides the status and navigation bars (swipe from an edge to peek). File upload, downloads, camera, microphone, location, fullscreen video, an offline screen and the back button are handled natively. Browser Web Push and Play Billing need the Trusted Web Activity shell; the standalone app offers app-triggered notifications through <span className="font-mono text-slate-500">WyBuildPush.notify()</span>.</p>}
+    </section>
+
+    <section className={card}>
+      <div className="flex items-center gap-2 text-white font-semibold"><Wrench className="w-4 h-4 text-emerald-300"/>More app info</div>
+      <p className="text-slate-500 mt-1">Colors, start page, orientation, Android version support, extra trusted domains and shortcuts. Change anything, then rebuild.</p>
+      <div className="grid sm:grid-cols-2 gap-3 mt-3">
+        <div><label className="text-slate-500">Theme color</label><div className="flex gap-2"><input type="color" className="h-11 w-12 bg-[#050707] border border-white/[.08] rounded-lg p-1" value={/^#[0-9a-fA-F]{6}$/.test(cfg.themeColor) ? cfg.themeColor : '#0f172a'} onChange={e => set('themeColor', e.target.value)}/><input className={`${input} font-mono`} value={cfg.themeColor} onChange={e => set('themeColor', e.target.value)}/></div></div>
+        <div><label className="text-slate-500">Background (splash) color</label><div className="flex gap-2"><input type="color" className="h-11 w-12 bg-[#050707] border border-white/[.08] rounded-lg p-1" value={/^#[0-9a-fA-F]{6}$/.test(cfg.backgroundColor) ? cfg.backgroundColor : '#ffffff'} onChange={e => set('backgroundColor', e.target.value)}/><input className={`${input} font-mono`} value={cfg.backgroundColor} onChange={e => set('backgroundColor', e.target.value)}/></div></div>
+        <div><label className="text-slate-500">Start URL</label><input className={`${input} font-mono`} value={cfg.startUrl} onChange={e => set('startUrl', e.target.value)} placeholder="/"/></div>
+        <div><label className="text-slate-500">Orientation</label><select className={input} value={cfg.orientation} onChange={e => set('orientation', e.target.value as TwaConfig['orientation'])}><option value="default">Any (follow the phone)</option><option value="portrait">Portrait</option><option value="landscape">Landscape</option></select></div>
+        <div><label className="text-slate-500">Minimum Android version</label><select className={input} value={cfg.minSdkVersion} onChange={e => set('minSdkVersion', Number(e.target.value))}>{[[24, 'Android 7.0 (API 24)'], [26, 'Android 8.0 (API 26)'], [29, 'Android 10 (API 29)'], [31, 'Android 12 (API 31)']].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
+        <div><label className="text-slate-500">Output</label><select className={input} value={cfg.output} onChange={e => set('output', e.target.value as TwaConfig['output'])}><option value="both">APK + AAB</option><option value="apk">APK only</option><option value="aab">AAB only (Google Play)</option></select></div>
+      </div>
+      <div className="mt-3"><label className="text-slate-500">Extra trusted domains <span className="text-slate-600">(one per line, https://…)</span></label><textarea rows={2} className="w-full bg-[#050707] border border-white/[.08] rounded-lg px-3 py-2 text-white font-mono focus:border-emerald-400/50 focus:outline-none" value={cfg.additionalTrustedOrigins.join('\n')} onChange={e => set('additionalTrustedOrigins', e.target.value.split('\n').map(x => x.trim()).filter(Boolean))} placeholder="https://auth.yourapp.com"/></div>
+      <div className="mt-3">
+        <div className="flex items-center justify-between"><label className="text-slate-500">App shortcuts <span className="text-slate-600">(long-press the icon)</span></label>{cfg.shortcuts.length < 4 && <button type="button" onClick={() => set('shortcuts', [...cfg.shortcuts, { name: '', shortName: '', url: '/' }])} className="text-emerald-300">+ Add</button>}</div>
+        {cfg.shortcuts.map((sc, i) => <div key={i} className="grid grid-cols-[1fr_1fr_1fr_auto] gap-2 mt-2">
+          <input className={input} placeholder="Name" value={sc.name} onChange={e => set('shortcuts', cfg.shortcuts.map((x, j) => j === i ? { ...x, name: e.target.value } : x))}/>
+          <input className={input} placeholder="Short name" value={sc.shortName} onChange={e => set('shortcuts', cfg.shortcuts.map((x, j) => j === i ? { ...x, shortName: e.target.value } : x))}/>
+          <input className={`${input} font-mono`} placeholder="/path" value={sc.url} onChange={e => set('shortcuts', cfg.shortcuts.map((x, j) => j === i ? { ...x, url: e.target.value } : x))}/>
+          <button type="button" onClick={() => set('shortcuts', cfg.shortcuts.filter((_, j) => j !== i))} className="px-2 text-slate-500 hover:text-rose-400"><XCircle className="w-4 h-4"/></button>
+        </div>)}
+      </div>
+    </section>
+
+    {repoInspection && latestBuild && <section className={card}>
+      <div className="flex items-center gap-2 text-white font-semibold"><RefreshCw className="w-4 h-4 text-emerald-300"/>Build status</div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {chip(!sourceChanged, 'Repo build source current', 'APK outdated: repo changed')}
+        {chip(!settingsChanged, 'Build settings current', 'APK outdated: settings changed')}
+        {chip(buildCurrent, 'APK current', 'Build required')}
+      </div>
+    </section>}
+
+    {needKey && <section className="rounded-2xl border border-amber-400/25 bg-amber-400/[.04] p-4 sm:p-5 space-y-3">
+      <div className="flex items-center gap-2 text-amber-200 font-semibold"><KeyRound className="w-4 h-4"/>One-time signing key for {repo}</div>
+      <p className="text-slate-400">No usable release keystore is available for this repo. {repoInspection?.signingProblem ? <span className="text-amber-200">The WyBuild default key was not used: {repoInspection.signingProblem} Fix it in Vercel and redeploy, and no repo will ask again. </span> : defaultKeystore ? '' : 'To skip this for every repo, set WB_KEYSTORE_* in the WyBuild Vercel environment. '}Or upload a key for this repo only; the build then starts automatically.</p>
+      <KeystoreForm repos={[repo]} defaultRepo={repo} onCancel={() => setNeedKey(false)} onDone={() => { setNeedKey(false); void discoverRepo(repo, true).then(() => build()); }}/>
+    </section>}
+
+    {error && <div className="p-3 rounded-xl border border-rose-500/20 bg-rose-500/[.05] text-rose-300 flex gap-2"><XCircle className="w-4 h-4 shrink-0"/><span className="break-words min-w-0">{error}</span></div>}
+    <div className="sticky bottom-0 -mx-3 sm:mx-0 px-3 sm:px-0 py-3 bg-gradient-to-t from-[#030505] via-[#030505]/95 to-transparent flex flex-col sm:flex-row sm:items-center sm:justify-end gap-2">
+      {!busy && missing && <span className="text-slate-500 sm:mr-2">{missing} to build.</span>}
+      {busy && stage && <span className="text-emerald-300 sm:mr-2 flex items-center gap-2"><Loader2 className="w-3.5 h-3.5 animate-spin"/>{stage}</span>}
+      <button onClick={build} disabled={busy || !!missing} className="px-5 h-12 rounded-lg bg-emerald-400 text-black font-bold flex items-center justify-center gap-2 disabled:opacity-40">{busy ? <Loader2 className="w-4 h-4 animate-spin"/> : <Play className="w-4 h-4 fill-current"/>}Build {cfg.output === 'aab' ? 'AAB' : cfg.output === 'apk' ? 'APK' : 'APK + AAB'}</button>
+    </div>
+  </div>;
+};
