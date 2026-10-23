@@ -1,79 +1,45 @@
-/* WyBuild service worker.
- * Goals: installable app, offline shell, and NEVER a stale deploy.
- *  - pages (navigations): network first, cached copy only when offline
- *  - /assets/* (Vite content-hashed files): cache first, they never change under the same name
- *  - icons / manifest: stale-while-revalidate
- *  - /api/* and anything cross-origin: not touched at all (sign-in redirects, builds and billing must hit the network)
- * Bump VERSION to drop every cache on the next visit. */
-const VERSION = 'wybuild-pwa-v1';
+/* WyBuild offline-first application shell. Network-only actions (auth, billing, builds, APIs) remain network-only. */
+const VERSION = 'wybuild-pwa-v3';
 const SHELL = VERSION + '-shell';
 const ASSETS = VERSION + '-assets';
-const PRECACHE = ['/', '/offline.html', '/manifest.webmanifest', '/favicon.svg', '/icon-192.png', '/icon-512.png'];
-
-self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(SHELL)
-      .then((cache) => Promise.all(PRECACHE.map((url) => cache.add(new Request(url, { cache: 'reload' })).catch(() => {}))))
-      .then(() => self.skipWaiting())
-  );
-});
-
-self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => !k.startsWith(VERSION)).map((k) => caches.delete(k))))
-      .then(() => self.clients.claim())
-  );
-});
-
-self.addEventListener('message', (event) => {
-  if (event.data === 'SKIP_WAITING') self.skipWaiting();
-});
-
-const timeout = (ms) => new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms));
-
-async function pageRequest(request) {
-  try {
-    const response = await Promise.race([fetch(request), timeout(8000)]);
-    // a redirected response cannot be replayed for a navigation, so it is never stored
-    if (response && response.ok && !response.redirected) {
-      const copy = response.clone();
-      caches.open(SHELL).then((c) => c.put(request, copy)).catch(() => {});
-    }
-    return response;
-  } catch (e) {
-    return (await caches.match(request)) || (await caches.match('/')) || (await caches.match('/offline.html')) || Response.error();
-  }
-}
-
-async function assetRequest(request) {
-  const cached = await caches.match(request);
-  if (cached) return cached;
-  const response = await fetch(request);
-  if (response && response.ok) {
-    const copy = response.clone();
-    caches.open(ASSETS).then((c) => c.put(request, copy)).catch(() => {});
-  }
-  return response;
-}
-
-async function staleWhileRevalidate(request) {
+const PRECACHE = ['/', '/manifest.webmanifest', '/favicon.svg', '/icon-192.png', '/icon-512.png'];
+self.addEventListener('install', event => event.waitUntil((async () => {
   const cache = await caches.open(SHELL);
-  const cached = await cache.match(request);
-  const network = fetch(request).then((response) => {
-    if (response && response.ok) cache.put(request, response.clone()).catch(() => {});
-    return response;
-  }).catch(() => cached);
-  return cached || network;
+  await Promise.all(PRECACHE.map(async path => { try { const r = await fetch(new Request(path, {cache:'reload'})); if (r.ok && !r.redirected) await cache.put(path, r); } catch (_) {} }));
+  await self.skipWaiting();
+})()));
+self.addEventListener('activate', event => event.waitUntil((async () => {
+  const keys = await caches.keys(); await Promise.all(keys.filter(k => !k.startsWith(VERSION)).map(k => caches.delete(k))); await self.clients.claim();
+})()));
+self.addEventListener('message', event => { if (event.data === 'SKIP_WAITING') self.skipWaiting(); });
+const timeout = ms => new Promise((_, reject) => setTimeout(() => reject(new Error('network timeout')), ms));
+async function navigation(request) {
+  const cache = await caches.open(SHELL);
+  try {
+    const response = await Promise.race([fetch(request), timeout(3500)]);
+    if (response && response.ok && !response.redirected) { cache.put(request, response.clone()).catch(() => {}); }
+    if (response && response.ok) return response;
+    return (await cache.match(request)) || (await cache.match('/')) || response;
+  } catch (_) {
+    // Use the cached app shell for deep links too, so the app UI stays open offline.
+    return (await cache.match(request)) || (await cache.match('/')) || new Response('WyBuild is starting offline. Reopen the app after it has loaded once online.', {status: 503, headers:{'Content-Type':'text/plain; charset=utf-8'}});
+  }
 }
-
-self.addEventListener('fetch', (event) => {
-  const request = event.request;
-  if (request.method !== 'GET') return;
-  const url = new URL(request.url);
-  if (url.origin !== self.location.origin) return;
+async function staticAsset(request) {
+  const cached = await caches.match(request); if (cached) return cached;
+  try { const response = await fetch(request); if (response && response.ok) (await caches.open(ASSETS)).put(request, response.clone()).catch(() => {}); return response && response.ok ? response : (cached || response || Response.error()); }
+  catch (e) { return cached || Response.error(); }
+}
+async function revalidate(request) {
+  const cache = await caches.open(SHELL), cached = await cache.match(request);
+  const fresh = fetch(request).then(r => { if (r && r.ok) cache.put(request, r.clone()).catch(() => {}); return r; }).catch(() => cached);
+  return cached || fresh;
+}
+self.addEventListener('fetch', event => {
+  const req = event.request; if (req.method !== 'GET') return;
+  const url = new URL(req.url); if (url.origin !== self.location.origin) return;
   if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/.well-known/')) return;
-  if (request.mode === 'navigate') return void event.respondWith(pageRequest(request));
-  if (url.pathname.startsWith('/assets/')) return void event.respondWith(assetRequest(request));
-  if (/\.(?:png|svg|ico|webmanifest|woff2?)$/.test(url.pathname)) return void event.respondWith(staleWhileRevalidate(request));
+  if (req.mode === 'navigate') { event.respondWith(navigation(req)); return; }
+  // Cache Vite bundles and same-origin app scripts/styles/fonts so the UI can boot offline.
+  if (/\.(?:js|mjs|css|html|json|png|jpe?g|svg|ico|webmanifest|woff2?|ttf|wasm)$/.test(url.pathname)) { event.respondWith(staticAsset(req)); return; }
 });

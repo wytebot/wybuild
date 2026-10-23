@@ -207,3 +207,12 @@ WyBuild now evaluates native feature compatibility against the selected shell an
 - **Integrations:** native Capacitor integrations are marked red for TWA or repositories without a source-build candidate. The backend repeats the compatibility checks; UI state is not treated as a security or build guarantee.
 
 Green **source-build candidate** means the repository has a supported build script; it is not a claim that the build output has already been tested. A real build is still required to verify that the script emits static web assets and that the native feature runs on a device.
+
+
+## Contacts integration
+
+For the privacy-preserving single-contact flow in standalone native builds, use `WyBuild.contacts.pick()`. It opens Android's system contact picker and returns only the contact the user selects; it does not need `READ_CONTACTS`. If an app genuinely reads the full address book, enable **MORE → Contacts access** to declare `android.permission.READ_CONTACTS` and implement the Android runtime permission request and data handling in that app. Declaring a manifest permission alone does not grant runtime access.
+
+## Offline app shell and connection banners
+
+WyBuild's service worker caches the app shell and same-origin JS/CSS/static bundles. After the app has loaded successfully once, it can reopen to the cached interface without a connection; API calls for authentication, billing, builds and remote data still require internet. A top banner displays “You're offline” and then “You're back online” when connectivity returns.

@@ -19,6 +19,8 @@ import { FirebaseAuthentication } from '@capacitor-firebase/authentication';
 import { BiometricAuth } from '@aparajita/capacitor-biometric-auth';
 import { ActionSheet } from '@capacitor/action-sheet';
 import { Dialog } from '@capacitor/dialog';
+import { registerPlugin } from '@capacitor/core';
+const WyBuildContactsPlugin = registerPlugin<any>('WyBuildContacts');
 
 const safe = async (fn) => { try { return await fn(); } catch (e) { return { ok: false, error: String(e?.message || e) }; } };
 // Shared scroll-quality layer: smooth page scroll, resilient nested scrollers and horizontal rails.
@@ -272,6 +274,13 @@ const native = {
     };
     return { enable, disable };
   })(),
+  contacts: {
+    // Opens Android's system picker; returns only the contact the user selects.
+    pick: async () => safe(async () => {
+      if (!window.Capacitor?.isNativePlatform?.()) throw new Error('Contact picker is available in the native Android app only.');
+      return await WyBuildContactsPlugin.pick();
+    }),
+  },
   share: (title, text, url) => safe(() => Share.share({ title, text, url })),
   shareTarget: {
     // Android SEND/SEND_MULTIPLE intents are registered by the build finalizer when selected.

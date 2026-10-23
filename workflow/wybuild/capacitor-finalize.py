@@ -56,6 +56,67 @@ if 'haptics' in _selected_features: names.append('android.permission.VIBRATE')
 if 'networkstatus' in _selected_features: names.append('android.permission.ACCESS_NETWORK_STATE')
 if manifest.exists(): add_permissions(manifest, sorted(set(names)))
 
+# Native one-contact picker for Capacitor builds. ACTION_PICK returns only the chosen
+# contact and does not require broad READ_CONTACTS access.
+java_root = project / 'app/src/main/java'
+if java_root.exists():
+    main_activities = list(java_root.rglob('MainActivity.java'))
+    if main_activities:
+        main_activity = main_activities[0]
+        source = main_activity.read_text(encoding='utf-8')
+        package_match = re.search(r'^package\s+([\w.]+)\s*;', source, re.M)
+        if package_match:
+            package_name = package_match.group(1)
+            plugin_dir = java_root / Path(*package_name.split('.')) / 'wybuild'
+            plugin_dir.mkdir(parents=True, exist_ok=True)
+            plugin_file = plugin_dir / 'WyBuildContactsPlugin.java'
+            plugin_source = """package __PACKAGE__.wybuild;
+
+import android.app.Activity;
+import android.content.Intent;
+import android.database.Cursor;
+import android.net.Uri;
+import android.provider.ContactsContract;
+import com.getcapacitor.ActivityResult;
+import com.getcapacitor.JSObject;
+import com.getcapacitor.Plugin;
+import com.getcapacitor.PluginCall;
+import com.getcapacitor.PluginMethod;
+import com.getcapacitor.annotation.ActivityCallback;
+import com.getcapacitor.annotation.CapacitorPlugin;
+
+@CapacitorPlugin(name = \"WyBuildContacts\")
+public class WyBuildContactsPlugin extends Plugin {
+  @PluginMethod public void pick(PluginCall call) {
+    Intent intent = new Intent(Intent.ACTION_PICK, ContactsContract.CommonDataKinds.Phone.CONTENT_URI);
+    startActivityForResult(call, intent, \"contactPicked\");
+  }
+  @ActivityCallback private void contactPicked(PluginCall call, ActivityResult result) {
+    if (call == null) return;
+    if (result.getResultCode() != Activity.RESULT_OK || result.getData() == null || result.getData().getData() == null) {
+      call.reject(\"Contact selection cancelled\", \"CANCELLED\"); return;
+    }
+    Uri uri = result.getData().getData(); Cursor cursor = null;
+    try {
+      cursor = getContext().getContentResolver().query(uri, new String[]{ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME, ContactsContract.CommonDataKinds.Phone.NUMBER}, null, null, null);
+      if (cursor == null || !cursor.moveToFirst()) { call.reject(\"Selected contact has no phone number\", \"EMPTY_CONTACT\"); return; }
+      JSObject out = new JSObject(); out.put(\"name\", cursor.getString(0)); out.put(\"phone\", cursor.getString(1)); call.resolve(out);
+    } catch (Exception e) { call.reject(\"Could not read the selected contact\", \"CONTACT_READ_FAILED\", e); }
+    finally { if (cursor != null) cursor.close(); }
+  }
+}
+""".replace('__PACKAGE__', package_name)
+            plugin_file.write_text(plugin_source, encoding='utf-8')
+            import_line = 'import ' + package_name + '.wybuild.WyBuildContactsPlugin;'
+            if import_line not in source:
+                source = source.replace('import com.getcapacitor.BridgeActivity;', 'import com.getcapacitor.BridgeActivity;\n' + import_line)
+            if 'registerPlugin(WyBuildContactsPlugin.class)' not in source:
+                if re.search(r'public void onCreate\(android\.os\.Bundle savedInstanceState\)', source):
+                    source = re.sub(r'(public void onCreate\(android\.os\.Bundle savedInstanceState\)\s*\{)', r'\1\n        registerPlugin(WyBuildContactsPlugin.class);', source, count=1)
+                else:
+                    source = re.sub(r'(public class MainActivity extends BridgeActivity\s*\{)', r'\1\n    @Override\n    public void onCreate(android.os.Bundle savedInstanceState) {\n        registerPlugin(WyBuildContactsPlugin.class);\n        super.onCreate(savedInstanceState);\n    }', source, count=1)
+            main_activity.write_text(source, encoding='utf-8')
+
 # Use the existing signing identity so updates remain installable over earlier WyBuild releases.
 if not gradle.exists(): raise SystemExit(f'Expected Capacitor Gradle file is missing: {gradle}')
 # Keep package/version metadata aligned with the WyBuild UI settings and ensure each default build is unique.

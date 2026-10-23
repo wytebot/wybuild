@@ -615,13 +615,15 @@ public class WyBuildActivity extends Activity {
 
         @Override
         public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-            if (request.isForMainFrame()) showOffline(request.getUrl().toString());
+            // Keep the current app document alive; cached service-worker navigation should serve the shell.
+            // Do not replace the app with a separate offline page.
+            if (request.isForMainFrame()) emit("network", obj("online", false));
         }
 
         @Override
         @SuppressWarnings("deprecation")
         public void onReceivedError(WebView view, int code, String description, String failingUrl) {
-            if (Build.VERSION.SDK_INT < 23 && failingUrl != null) showOffline(failingUrl);
+            if (Build.VERSION.SDK_INT < 23) emit("network", obj("online", false));
         }
 
         @Override
@@ -635,18 +637,6 @@ public class WyBuildActivity extends Activity {
             recreate();
             return true;
         }
-    }
-
-    private void showOffline(String failedUrl) {
-        String safe = TextUtils.htmlEncode(failedUrl);
-        String html = "<html><head><meta name='viewport' content='width=device-width,initial-scale=1'/><style>"
-                + "body{margin:0;height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:sans-serif;"
-                + "background:" + hex(backgroundColor) + ";color:" + (isLight(backgroundColor) ? "#222" : "#eee") + ";text-align:center;padding:24px;box-sizing:border-box}"
-                + "button{margin-top:20px;padding:12px 28px;border:0;border-radius:24px;font-size:16px;background:" + hex(themeColor) + ";color:"
-                + (isLight(themeColor) ? "#111" : "#fff") + "}</style></head><body><h2>You're offline</h2>"
-                + "<p>Check your connection and try again.</p><button onclick='location.replace(" + JSONObject.quote(failedUrl) + ")'>Retry</button>"
-                + "<small style='opacity:.5;margin-top:24px;word-break:break-all'>" + safe + "</small></body></html>";
-        web.loadDataWithBaseURL(failedUrl, html, "text/html", "UTF-8", failedUrl);
     }
 
     private static String hex(int c) {
@@ -1044,7 +1034,14 @@ public class WyBuildActivity extends Activity {
             if (cm == null) return;
             ConnectivityManager.NetworkCallback cb = new ConnectivityManager.NetworkCallback() {
                 @Override
-                public void onAvailable(Network n) { emit("network", obj("online", true)); }
+                public void onAvailable(Network n) { emit("network", obj("online", isOnline())); }
+
+                @Override
+                public void onCapabilitiesChanged(Network n, NetworkCapabilities caps) {
+                    boolean online = caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
+                    if (Build.VERSION.SDK_INT >= 23) online = online && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
+                    emit("network", obj("online", online));
+                }
 
                 @Override
                 public void onLost(Network n) { emit("network", obj("online", false)); }
