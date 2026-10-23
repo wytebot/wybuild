@@ -77,7 +77,7 @@ import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
 import android.provider.ContactsContract;
-import com.getcapacitor.ActivityResult;
+import androidx.activity.result.ActivityResult;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -110,11 +110,6 @@ public class WyBuildContactsPlugin extends Plugin {
             import_line = 'import ' + package_name + '.wybuild.WyBuildContactsPlugin;'
             if import_line not in source:
                 source = source.replace('import com.getcapacitor.BridgeActivity;', 'import com.getcapacitor.BridgeActivity;\n' + import_line)
-            if 'registerPlugin(WyBuildContactsPlugin.class)' not in source:
-                if re.search(r'public void onCreate\(android\.os\.Bundle savedInstanceState\)', source):
-                    source = re.sub(r'(public void onCreate\(android\.os\.Bundle savedInstanceState\)\s*\{)', r'\1\n        registerPlugin(WyBuildContactsPlugin.class);', source, count=1)
-                else:
-                    source = re.sub(r'(public class MainActivity extends BridgeActivity\s*\{)', r'\1\n    @Override\n    public void onCreate(android.os.Bundle savedInstanceState) {\n        registerPlugin(WyBuildContactsPlugin.class);\n        super.onCreate(savedInstanceState);\n    }', source, count=1)
             main_activity.write_text(source, encoding='utf-8')
 
 # Use the existing signing identity so updates remain installable over earlier WyBuild releases.
@@ -271,11 +266,45 @@ public class WyBuildShareTargetPlugin extends Plugin {
 ''', encoding='utf-8')
     for main_activity in java_root.rglob('MainActivity.java'):
         source = main_activity.read_text(encoding='utf-8')
-        if 'WyBuildShareTargetPlugin' not in source:
+        import_line = 'import com.wybuild.sharetarget.WyBuildShareTargetPlugin;'
+        if import_line not in source:
+            source = source.replace('import com.getcapacitor.BridgeActivity;', 'import com.getcapacitor.BridgeActivity;\n' + import_line)
+        main_activity.write_text(source, encoding='utf-8')
+
+# Register all generated custom plugins in one MainActivity.onCreate method. Keeping this
+# in one place prevents duplicate onCreate methods when contacts and share-target are both enabled.
+for main_activity in (project / 'app/src/main/java').rglob('MainActivity.java'):
+    source = main_activity.read_text(encoding='utf-8')
+    plugin_registrations = []
+    contacts_plugin = main_activity.parent / 'wybuild' / 'WyBuildContactsPlugin.java'
+    share_plugin = project / 'app/src/main/java/com/wybuild/sharetarget/WyBuildShareTargetPlugin.java'
+    if contacts_plugin.exists():
+        import_line = 'import ' + '.'.join(contacts_plugin.relative_to(project / 'app/src/main/java').with_suffix('').parts) + ';'
+        if import_line not in source:
+            source = source.replace('import com.getcapacitor.BridgeActivity;', 'import com.getcapacitor.BridgeActivity;\n' + import_line)
+        plugin_registrations.append('        registerPlugin(WyBuildContactsPlugin.class);')
+    if share_plugin.exists():
+        if 'import com.wybuild.sharetarget.WyBuildShareTargetPlugin;' not in source:
             source = source.replace('import com.getcapacitor.BridgeActivity;', 'import com.getcapacitor.BridgeActivity;\nimport com.wybuild.sharetarget.WyBuildShareTargetPlugin;')
-            if 'import com.wybuild.sharetarget.WyBuildShareTargetPlugin;' in source and 'registerPlugin(WyBuildShareTargetPlugin.class)' not in source:
-                source = re.sub(r'(public class MainActivity extends BridgeActivity\s*\{)', r'\1\n    @Override\n    public void onCreate(android.os.Bundle savedInstanceState) {\n        registerPlugin(WyBuildShareTargetPlugin.class);\n        super.onCreate(savedInstanceState);\n    }\n    @Override\n    protected void onNewIntent(android.content.Intent intent) {\n        super.onNewIntent(intent);\n        setIntent(intent);\n    }', source, count=1)
-            main_activity.write_text(source, encoding='utf-8')
+        plugin_registrations.append('        registerPlugin(WyBuildShareTargetPlugin.class);')
+    if plugin_registrations:
+        on_create = re.search(r'public void onCreate\(android\.os\.Bundle savedInstanceState\)\s*\{', source)
+        if on_create:
+            body_start = on_create.end()
+            missing = []
+            for registration in plugin_registrations:
+                if registration.strip() not in source:
+                    missing.append(registration)
+            if missing:
+                source = source[:body_start] + '\n' + '\n'.join(missing) + source[body_start:]
+        else:
+            class_match = re.search(r'public class MainActivity extends BridgeActivity\s*\{', source)
+            if class_match:
+                block = '\n    @Override\n    public void onCreate(android.os.Bundle savedInstanceState) {\n' + '\n'.join(plugin_registrations) + '\n        super.onCreate(savedInstanceState);\n    }\n'
+                if share_plugin.exists() and 'protected void onNewIntent(' not in source:
+                    block += '    @Override\n    protected void onNewIntent(android.content.Intent intent) {\n        super.onNewIntent(intent);\n        setIntent(intent);\n    }\n'
+                source = source[:class_match.end()] + block + source[class_match.end():]
+    main_activity.write_text(source, encoding='utf-8')
 
 if any(f in (config.get('nativeFeatures') or []) for f in ('googleauth', 'push')) and not source_google.exists():
     raise SystemExit('Native Google/Apple sign-in or remote push was selected, but google-services.json is missing at the repository root. Add the Firebase Android config for the exact package ID and rebuild.')
