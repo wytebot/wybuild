@@ -333,7 +333,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const account = { login: me.user.login, name: me.user.name || me.user.login, avatar: me.user.avatar || '' };
         if (account.login) localStorage.setItem(key, JSON.stringify([account, ...old.filter((a: any) => a?.login?.toLowerCase() !== account.login.toLowerCase())].slice(0, 5)));
       } catch { /* account chooser is optional when local storage is unavailable */ }
-      setUsage(me.usage);
+      // Older API deployments or partial /me responses may omit usage.
+      // Never let an absent payload crash the entire dashboard at render time.
+      const incomingUsage = me?.usage;
+      setUsage({
+        monthlyBuildsUsed: Number.isFinite(Number(incomingUsage?.monthlyBuildsUsed)) ? Number(incomingUsage.monthlyBuildsUsed) : 0,
+        monthlyLimit: Number.isFinite(Number(incomingUsage?.monthlyLimit)) ? Number(incomingUsage.monthlyLimit) : 5,
+        concurrentLimit: Number.isFinite(Number(incomingUsage?.concurrentLimit)) ? Number(incomingUsage.concurrentLimit) : 1,
+        resetsAt: typeof incomingUsage?.resetsAt === 'string' ? incomingUsage.resetsAt : '',
+      });
       setSubscription(me.subscription ?? { ...EMPTY_SUB, customerEmail: me.user.email });
       setLifetimeFree(!!me.lifetimeFree || ['wytebot', 'wytzbot'].includes(me.user.login.toLowerCase()));
       setDefaultKeystore(!!me.defaultKeystore);
@@ -493,13 +501,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Derived rate limit state
   const isPro = subscription.plan === 'pro';
   const activeConcurrent = builds.filter((b) => b.status === 'running' || b.status === 'queued').length;
-  const resetMs = usage.resetsAt ? Math.max(0, Date.parse(usage.resetsAt) - Date.now()) : 0;
+  const safeUsage = usage ?? { monthlyBuildsUsed: 0, monthlyLimit: 5, concurrentLimit: 1, resetsAt: '' };
+  const resetMs = safeUsage.resetsAt ? Math.max(0, (Date.parse(safeUsage.resetsAt) || Date.now()) - Date.now()) : 0;
   const rateLimits: RateLimitState = {
-    monthlyBuildsUsed: usage.monthlyBuildsUsed,
-    monthlyLimit: usage.monthlyLimit,
+    monthlyBuildsUsed: safeUsage.monthlyBuildsUsed,
+    monthlyLimit: safeUsage.monthlyLimit,
     resetsAt: `00:00 UTC (in ${Math.floor(resetMs / 3600000)}h ${Math.floor((resetMs % 3600000) / 60000)}m)`,
     activeConcurrentBuilds: activeConcurrent,
-    concurrentLimit: usage.concurrentLimit,
+    concurrentLimit: safeUsage.concurrentLimit,
   };
 
   const addProject = (newProj: Omit<Project, 'id' | 'createdAt' | 'updatedAt' | 'buildCount'>) => {
