@@ -235,8 +235,25 @@ jobs:
           fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
           NODEPKG
           npm install --legacy-peer-deps --no-audit --no-fund
+          # Validate the source before bundling. The bridge entry is JavaScript, never TypeScript.
+          # Keep the legacy helper copy aligned so older/alternate workflow paths cannot reintroduce the bug.
+          if grep -nE 'registerPlugin[[:space:]]*<[[:space:]]*[^>]+>' .github/wybuild/capacitor-bridge.entry.js; then
+            echo '::error::TypeScript generic syntax found in the native bridge source; use registerPlugin("Name") in JavaScript.'
+            exit 1
+          fi
+          if [ -f workflow/wybuild/capacitor-bridge.entry.js ] && ! cmp -s .github/wybuild/capacitor-bridge.entry.js workflow/wybuild/capacitor-bridge.entry.js; then
+            echo '::error::Duplicate native bridge sources differ. Sync workflow/wybuild/capacitor-bridge.entry.js with .github/wybuild/capacitor-bridge.entry.js.'
+            exit 1
+          fi
           cp .github/wybuild/capacitor-bridge.entry.js ./wybuild-native-bridge.entry.js
           npx esbuild ./wybuild-native-bridge.entry.js --bundle --format=esm --target=es2020 --outfile="$WYBUILD_WEB_DIR/wybuild-native-bridge.js"
+          # Validate the exact generated JavaScript before it can be copied into Android assets.
+          if grep -nE 'registerPlugin[[:space:]]*<[[:space:]]*[^>]+>' "$WYBUILD_WEB_DIR/wybuild-native-bridge.js"; then
+            echo '::error::TypeScript generic syntax leaked into the generated Android bridge bundle.'
+            exit 1
+          fi
+          node --check "$WYBUILD_WEB_DIR/wybuild-native-bridge.js"
+          echo 'Native bridge source and generated bundle passed TypeScript-leak and JavaScript syntax checks.' 
           python3 - <<'PYHTML'
           import os
           from pathlib import Path
@@ -317,6 +334,16 @@ jobs:
           }
           if (!fs.existsSync(path.join(packaged, 'wybuild-native-bridge.js'))) {
             throw new Error(`Capacitor did not copy wybuild-native-bridge.js into ${packaged}.`);
+          }
+          const bridgePath = path.join(packaged, 'wybuild-native-bridge.js');
+          const bridgeText = fs.readFileSync(bridgePath, 'utf8');
+          if (/registerPlugin\s*<\s*[^>]+>/.test(bridgeText)) {
+            throw new Error('Packaged Android bridge contains TypeScript generic syntax (for example registerPlugin<any>); refusing to build a black-screen APK.');
+          }
+          const { spawnSync } = await import('node:child_process');
+          const syntax = spawnSync(process.execPath, ['--check', bridgePath], { encoding: 'utf8' });
+          if (syntax.status !== 0) {
+            throw new Error('Packaged Android bridge failed JavaScript syntax validation: ' + (syntax.stderr || syntax.stdout || `exit ${syntax.status}`));
           }
           const packagedCfgPath = path.join('android', 'app', 'src', 'main', 'assets', 'capacitor.config.json');
           if (!fs.existsSync(packagedCfgPath)) throw new Error('Packaged capacitor.config.json is missing from Android assets.');
@@ -600,6 +627,18 @@ jobs:
           z = zipfile.ZipFile(sys.argv[1]); names = set(z.namelist())
           for need in ('assets/public/index.html', 'assets/capacitor.config.json', 'assets/public/wybuild-native-bridge.js'):
               if need not in names: sys.exit('::error::APK is missing ' + need + ' - it would not ship the expected local UI/native bridge.')
+          bridge = z.read('assets/public/wybuild-native-bridge.js').decode('utf-8', errors='replace')
+          import re, tempfile, subprocess, os
+          if re.search(r'registerPlugin\s*<\s*[^>]+>', bridge):
+              sys.exit('::error::Final APK contains TypeScript generic syntax in wybuild-native-bridge.js; refusing to publish a black-screen-prone artifact.')
+          with tempfile.NamedTemporaryFile('w', suffix='.mjs', encoding='utf-8', delete=False) as tmp:
+              tmp.write(bridge); bridge_tmp = tmp.name
+          try:
+              check = subprocess.run(['node', '--check', bridge_tmp], text=True, capture_output=True)
+              if check.returncode:
+                  sys.exit('::error::Final APK native bridge failed JavaScript syntax validation: ' + (check.stderr or check.stdout))
+          finally:
+              os.unlink(bridge_tmp)
           html = z.read('assets/public/index.html').decode('utf-8', errors='replace')
           if 'WYBUILD_ANDROID_STARTUP_DIAGNOSTICS_BOOTSTRAP' not in html:
               sys.exit('::error::APK is missing early Android startup diagnostics; refusing to publish an undiagnosable build.')

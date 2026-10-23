@@ -20,7 +20,7 @@ import { BiometricAuth } from '@aparajita/capacitor-biometric-auth';
 import { ActionSheet } from '@capacitor/action-sheet';
 import { Dialog } from '@capacitor/dialog';
 import { registerPlugin } from '@capacitor/core';
-const WyBuildContactsPlugin = registerPlugin<any>('WyBuildContacts');
+const WyBuildContactsPlugin = registerPlugin('WyBuildContacts');
 
 const safe = async (fn) => { try { return await fn(); } catch (e) { return { ok: false, error: String(e?.message || e) }; } };
 // Shared scroll-quality layer: smooth page scroll, resilient nested scrollers and horizontal rails.

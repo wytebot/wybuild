@@ -21,3 +21,7 @@ See `.env.example` for server configuration. No AI provider API key is required.
 ### Native feature compatibility checks
 
 The Web → Android screen now labels feature selections green or red against the chosen TWA/standalone workflow and repository inspection. Incompatible features cannot be newly selected; existing incompatible selections can be removed. The API rejects incompatible native feature selections before reserving build credits, and the GitHub Actions workflow refuses to silently omit Capacitor-only features when it detects a URL-only build. Native integrations also receive server-side compatibility checks before credit debit or repository changes. A source-build candidate still requires a successful build that produces `index.html`; no preflight can guarantee arbitrary build scripts without executing them.
+
+## Native bridge build safeguards (v45)
+
+The Capacitor bridge is plain JavaScript and must not contain TypeScript-only syntax such as `registerPlugin<any>(...)`. The workflow now checks the canonical bridge source, checks that the legacy duplicate is identical, validates the esbuild output with a TypeScript-generic leak scan and `node --check`, validates the bridge copied into Android assets, and revalidates the bridge extracted from the final APK before the artifact can be published. A failed check stops the build instead of shipping an APK likely to fail during startup. Keep both bridge source copies synchronized when changing the native bridge.
