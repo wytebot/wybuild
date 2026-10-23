@@ -5,6 +5,9 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
+    // Capacitor serves bundled files from its local HTTPS origin. Relative asset URLs
+    // keep JS/CSS chunks working regardless of the native app's origin/path.
+    base: './',
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
