@@ -39,3 +39,26 @@ Offline startup cannot be guaranteed before the app has ever loaded online and c
 ## Native offline limitation
 
 The service worker is deliberately disabled in Capacitor. The app shell is bundled, but API calls, GitHub operations, payments and other server-backed actions require network access. On native startup a server outage is represented as an unreachable-backend state rather than silently signing the user out.
+
+## v53 follow-up fact-check (2026-10-24)
+
+- Corrected the server-side workflow version constant to v48. It previously remained at v47 while both workflow templates declared v48, which could cause update/staleness checks to disagree.
+- Updated the Help page and feature hint to describe the actual Capacitor pull-to-refresh behavior: the workflow bootstraps the built-in reload gesture when selected; custom refresh behavior remains optional site code. This feature is not available in pure TWA mode.
+- Corrected the Help page's build charge statement from 3 to 5 credits to match the API build reservation.
+- Corrected credit guidance so it does not overstate client-side protection. The UI avoids charging saved feature selections again, but server-side project-delta enforcement is still required to make native-feature setup billing resistant to client tampering. This is a known remaining billing-hardening item, not claimed as fixed by this patch.
+- Added regression tests for API/workflow version alignment, pull-to-refresh bootstrapping, and the Help page's billing caveat.
+
+## Follow-up verification results
+
+- `node --test tests/wybuild-v53-regression.test.mjs tests/native-survival.test.mjs`: 15 passed, 0 failed.
+- `node --check api/index.js`: passed.
+- `node --check workflow/wybuild/capacitor-bridge.entry.js`: passed.
+- `node --check .github/wybuild/capacitor-bridge.entry.js`: passed.
+- Python compilation of both Capacitor finalizer copies: passed.
+
+Still not performed: full dependency install/Vite TypeScript build, GitHub Actions build, signed APK/AAB validation, device tests, and end-to-end credit transaction tests. Those require the project build environment and/or live credentials.
+
+
+## v54 UI addition
+- Added a small, dismissible Help reminder on the Projects and Web → Android/TWA screens. It does not block build controls. “Read build help” opens the existing Help page, and dismissal is persisted in localStorage.
+- UI behavior is source-reviewed; a full production Vite/TypeScript build and device verification should still be run in the project environment.

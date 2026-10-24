@@ -57,7 +57,7 @@ const STEPS: Step[] = [
     points: [
       'Capacitor source build: used when the repository has a package.json build script that produces an index.html (in dist, build, www, out or public). Your site is bundled into the app and the native bridge window.WyBuildNative is available.',
       'URL-based native shell: used when there is no buildable web project. The app loads your live address.',
-      'Native features are opt-in: biometric unlock, local reminders, push, native Firebase sign-in, pull to refresh and edge swipe back. Pull to refresh and swipe back only work when your site calls WyBuildNative.pullToRefresh.enable() and WyBuildNative.swipeBack.enable().',
+      'Native features are opt-in. For Capacitor source builds, selecting Pull to refresh installs and enables a built-in reload gesture even if your website has no refresh-specific code. Your site can replace the default reload with WyBuildNative.pullToRefresh.enable({ onRefresh }). Edge swipe back still needs your site to call WyBuildNative.swipeBack.enable(). Pure Trusted Web Activity builds do not have the Capacitor bridge, so Capacitor-only features are unavailable there.',
       'Choose the output: APK for direct installs, AAB for Google Play, or both.',
     ],
     notes: [
@@ -101,7 +101,7 @@ const STEPS: Step[] = [
     title: 'Start the build',
     summary: 'Press Build. WyBuild reserves credits, dispatches the workflow and follows the run.',
     points: [
-      'Each build reserves 3 credits, refunded automatically if the build fails or cannot be started. New accounts start with a small credit balance. WyBuild diagnosis and repair planning use separate automation credits.',
+      'Each Web → Android build reserves 5 credits. Failed or undispatched builds are intended to be refunded automatically; check the credit history if a run fails. Native-feature setup actions and package/version edits may cost additional credits when changed.',
       'The build uses your GitHub Actions minutes. Public repositories are free; private repositories use your plan quota.',
       'WyBuild limits how many builds run at once per account.',
     ],
@@ -115,10 +115,11 @@ const STEPS: Step[] = [
   },
   {
     title: 'Follow the logs and fix failures',
-    summary: 'The Logs tab shows each stage of the run live. A failed run is explained in the Errors tab.',
+    summary: 'The Logs tab shows each stage of the run. Read it after successful builds too: warnings may reveal a backend or native-feature issue that only appears at runtime.',
     points: [
       'Typical stages: authorize, check out your repository, build the web app, create the Android project, sign, verify and upload the artifact.',
       'Open a failed run in Errors to see the cause. WyBuild matches log signatures to detailed repair guidance and commits only supported deterministic integrations; unknown code failures are not guessed.',
+      'A successful status is not a runtime test. Review warnings, then install and test the APK on a real device before publishing.',
     ],
     tab: { id: 'builds', label: 'Open Logs' },
     notes: [
@@ -144,6 +145,67 @@ const STEPS: Step[] = [
   },
 ];
 
+
+const ARCHITECTURE_GUIDES = [
+  {
+    title: 'Standalone APK: best web-app architecture',
+    badge: 'Recommended when you need native features',
+    body: 'WyBuild packages your built web assets inside the APK using Capacitor. The app should start from local bundled files; do not make the app shell depend on your live website loading first.',
+    points: [
+      'Use a production build that emits static browser assets (HTML, CSS and JavaScript). For Next.js, use a compatible static export when your app can be static; for Vite/React, build the dist folder. Follow your framework’s own static-export limits.',
+      'Keep APIs on a public HTTPS backend. Call your API using an explicit production API base URL, CORS allow-list the app/site origins you actually use, and never put service-account keys, private API keys or database admin credentials in frontend code.',
+      'Do not assume server-side routes, server actions, filesystem access, Node-only packages, or a same-origin /api endpoint will magically run inside an APK. Move server work to a deployed backend and configure its URL.',
+      'Use OAuth flows that support Android redirects/deep links or a supported native sign-in plugin. Test refresh tokens, cookie/SameSite behaviour, CORS, file uploads/downloads, payments and push notifications on a real device.',
+      'Use IndexedDB or Capacitor Preferences for small local/offline state; keep authoritative user data and secrets on the backend. Plan offline and network-error states instead of assuming a permanent connection.'
+    ]
+  },
+  {
+    title: 'TWA: best architecture and requirements',
+    badge: 'Your website remains the app',
+    body: 'A Trusted Web Activity opens your live HTTPS PWA in a browser-backed full-screen experience. Unlike a standalone Capacitor APK, the website and its server-side routes remain online dependencies.',
+    points: [
+      'Use a reliable HTTPS website with a valid Web App Manifest, correctly sized icons, a service worker where appropriate, and responsive mobile UI.',
+      'Keep backend routes deployed and reachable over HTTPS. Test authentication cookies, CORS, redirects, third-party providers and payment returns in Chrome on Android.',
+      'Publish /.well-known/assetlinks.json for the exact package ID and signing-certificate SHA-256 fingerprint. Without a matching Digital Asset Links relationship, Chrome may show browser UI.',
+      'TWA does not automatically gain arbitrary Android APIs. If you need native plugins, automatic native refresh gestures, custom file pickers or native callbacks, choose the standalone shell and select the supported features in WyBuild.',
+      'Assume a TWA needs internet access to load the site. A service worker can improve resilience but does not make dynamic backend operations available offline.'
+    ]
+  },
+  {
+    title: 'Native features are baked into the build',
+    badge: 'Select features before building',
+    body: 'WyBuild should generate and package the native bridge and Android declarations for supported features you select. You should not have to commit a custom native plugin implementation yourself just to make a selected built-in feature exist.',
+    points: [
+      'Feature selection adds the corresponding bridge/native implementation and required Android manifest declarations where supported. Permissions are not a substitute for writing your app’s business logic.',
+      'In a Capacitor source build, selecting Pull to refresh adds and enables a built-in gesture that reloads the current page, even when your app did not implement it. If your app needs a data-only refresh, your site can override the default with WyBuildNative.pullToRefresh.enable({ onRefresh }). This does not make pull-to-refresh available in pure TWA mode.',
+      'Some features still need app-side calls or provider setup: for example, push notifications need Firebase configuration and a server that sends messages; camera/location use must be requested by the page; OAuth needs a compatible provider setup.',
+      'Native feature APIs are available in the standalone Capacitor shell, not a plain TWA. Unsupported combinations should fail validation with a clear explanation rather than silently producing a featureless APK.'
+    ]
+  },
+  {
+    title: 'Always read build logs — even after success',
+    badge: 'Prevent problems before release',
+    body: 'A green build means the workflow completed, not that every backend flow or Android feature works correctly. Warnings can point to failures that appear later on a user’s phone.',
+    points: [
+      'After every build, open Logs and inspect warnings as well as errors. Look for missing environment variables, skipped integrations, fallback engine selection, asset-link mismatches, missing Firebase configuration, deprecated APIs and compatibility warnings.',
+      'For failed builds, open the first failing step and read the first meaningful error above the final summary. The last line often only says that a command failed.',
+      'Install the APK on a real Android device and test login/logout, API calls, file picking, uploads/downloads, notifications, refresh gestures, deep links, back navigation and offline/network recovery.',
+      'Before publishing an update, check package ID, version name/code, signing fingerprint and release artifacts. Keep a known-good build available for rollback.'
+    ]
+  },
+  {
+    title: 'Credits: what should be charged again?',
+    badge: 'Avoid paying twice for unchanged setup',
+    body: 'The server charges setup/integration credits only when a feature or permission is new compared with that account’s last accepted build configuration. Rebuilding unchanged settings does not charge those setup credits again. The server—not the UI—decides the difference and reserves the credits.',
+    points: [
+      'The first build normally includes the build charge plus any package/version edits and newly selected native-feature or permission setup charges. A version edit is charged when you change the saved version name, not merely because you rebuild.',
+      'Later builds should charge the build charge and any actual version edit only. Setup credits apply only to features or permissions not already included in the project’s saved configuration.',
+      'Previously selected features and permissions are compared on the server against the last accepted build configuration for that account and repository; they are not charged again just because the user rebuilds.',
+      'New feature and permission costs are reserved when you start the build, not when you tap a checkbox. Removing a feature does not refund a previous setup charge. Failed dispatch/setup refunds the full reservation; a later failed Android build refunds the 5 build credits, while setup charges remain because that configuration was accepted for the build.'
+    ]
+  }
+];
+
 export const HowItWorksView: React.FC = () => {
   const { setCurrentTab } = useApp();
   return (
@@ -152,6 +214,21 @@ export const HowItWorksView: React.FC = () => {
         <h1 className="text-xl font-bold text-white">How WyBuild works</h1>
         <p className="text-sm text-slate-400 mt-1">Turn your web app into a signed Android app in nine steps. The build runs in your own GitHub Actions account and WyBuild coordinates it. Where something often goes wrong, a NOTE under the step explains the error and the fix.</p>
       </header>
+
+      <section className="space-y-3" aria-label="Architecture and build guidance">
+        {ARCHITECTURE_GUIDES.map((guide) => (
+          <article key={guide.title} className="rounded-xl border border-emerald-400/20 bg-emerald-400/[.035] p-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-white font-semibold">{guide.title}</h2>
+              <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2 py-1 text-[10px] text-emerald-200">{guide.badge}</span>
+            </div>
+            <p className="mt-2 text-sm leading-relaxed text-slate-400">{guide.body}</p>
+            <ul className="mt-3 space-y-2">
+              {guide.points.map((point) => <li key={point} className="flex gap-2 text-sm leading-relaxed text-slate-300"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400/80"/><span>{point}</span></li>)}
+            </ul>
+          </article>
+        ))}
+      </section>
 
       <ol className="space-y-4">
         {STEPS.map((s, i) => (

@@ -1,4 +1,5 @@
-# wybuild-twa-workflow-version: 47
+# wybuild-twa-workflow-version: 48
+# v48: auto-enable built-in pull-to-refresh when selected; no site-side bootstrap required for default reload behavior.
 # v43: native survival configuration, compatibility analyzer/report, optional HTTPS/Chromium smoke test and custom-scheme handoff support.
 # v41: Bundled index.html uses root-absolute asset URLs (a stray in-app navigation to /some/path no longer breaks JS/CSS loading), startup self-recovery, warning when the app needs a same-origin server /api.
 # v40: Verify the packaged AND built-APK capacitor config (catches capacitor-patch.sh server.url), fix meta-refresh regex, allow explicit TWA shell.
@@ -274,6 +275,18 @@ jobs:
           fi
           cp .github/wybuild/capacitor-bridge.entry.js ./wybuild-native-bridge.entry.js
           npx esbuild ./wybuild-native-bridge.entry.js --bundle --format=esm --target=es2020 --outfile="$WYBUILD_WEB_DIR/wybuild-native-bridge.js"
+          # Built-in features must work when selected in WyBuild, even when the website has no feature-specific code.
+          # Pull-to-refresh defaults to reloading the current page; apps can override this from their own code.
+          node - <<'NODEAUTOFEATURE'
+          const fs = require('fs');
+          const cfg = JSON.parse(process.env.TWA_CONFIG || '{}');
+          const selected = new Set(Array.isArray(cfg.nativeFeatures) ? cfg.nativeFeatures : []);
+          if (selected.has('pulltorefresh')) {
+            fs.appendFileSync(process.env.WYBUILD_WEB_DIR + '/wybuild-native-bridge.js',
+              '\n;try{setTimeout(()=>{if(window.WyBuildNative?.pullToRefresh?.enable)window.WyBuildNative.pullToRefresh.enable();},0)}catch(e){console.warn("[WyBuild] Pull-to-refresh bootstrap failed",e)}\n');
+            console.log('WyBuild built-in pull-to-refresh enabled: default action reloads the current page.');
+          }
+          NODEAUTOFEATURE
           # Validate the exact generated JavaScript before it can be copied into Android assets.
           if grep -nE 'registerPlugin[[:space:]]*<[[:space:]]*[^>]+>' "$WYBUILD_WEB_DIR/wybuild-native-bridge.js"; then
             echo '::error::TypeScript generic syntax leaked into the generated Android bridge bundle.'

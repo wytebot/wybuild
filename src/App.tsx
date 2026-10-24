@@ -10,7 +10,7 @@ import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
 import { DashboardOverview } from './components/dashboard/DashboardOverview';
 import { LoginScreen } from './components/LoginScreen';
-import { CheckCircle2, AlertCircle } from 'lucide-react';
+import { CheckCircle2, AlertCircle, BookOpen, X } from 'lucide-react';
 
 // Screens load on demand (smaller first download), then are preloaded while the browser is idle.
 const loaders = {
@@ -49,6 +49,7 @@ const MainLayout: React.FC = () => {
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);
   const [showQuickBuildModal, setShowQuickBuildModal] = useState(false);
   const [showBillingModal, setShowBillingModal] = useState(false);
+  const [showHelpReminder, setShowHelpReminder] = useState<boolean>(() => { try { return typeof window !== 'undefined' && localStorage.getItem('wybuild_help_reminder_dismissed_v1') !== '1'; } catch { return true; } });
   const [creditPack, setCreditPack] = useState<string>('starter');
   const [showCreditsSuccess, setShowCreditsSuccess] = useState<boolean>(() => typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('credits') === 'success');
   // Menu starts open on desktop, closed (drawer) on phones/tablets.
@@ -194,6 +195,21 @@ const MainLayout: React.FC = () => {
           </Suspense>
         </div>
       </div>
+
+      {/* Small, dismissible first-build reminder; never blocks build controls. */}
+      {showHelpReminder && (currentTab === 'projects' || currentTab === 'twa') && (
+        <aside role="status" aria-label="Build preparation tip" className="fixed bottom-20 right-3 sm:right-6 z-[105] w-[min(22rem,calc(100vw-1.5rem))] rounded-xl border border-emerald-400/25 bg-[#07100d] p-3.5 shadow-xl shadow-black/30 animate-in fade-in slide-in-from-bottom-2 duration-200">
+          <div className="flex items-start gap-3">
+            <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-400/10 text-emerald-300"><BookOpen className="h-4 w-4" /></span>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-white">Before your first build</p>
+              <p className="mt-1 text-xs leading-relaxed text-slate-300">Check Help first to choose the right APK or TWA setup and avoid backend or native-feature surprises.</p>
+              <button onClick={() => { try { localStorage.setItem('wybuild_help_reminder_dismissed_v1', '1'); } catch {} setShowHelpReminder(false); setCurrentTab('howitworks'); }} className="mt-2.5 inline-flex items-center gap-1.5 rounded-md bg-emerald-400 px-3 py-2 text-xs font-bold text-slate-950 hover:bg-emerald-300">Read build help <BookOpen className="h-3.5 w-3.5" /></button>
+            </div>
+            <button type="button" aria-label="Dismiss build help reminder" title="Dismiss" onClick={() => { try { localStorage.setItem('wybuild_help_reminder_dismissed_v1', '1'); } catch {} setShowHelpReminder(false); }} className="rounded-md p-1 text-slate-500 hover:bg-white/5 hover:text-white"><X className="h-4 w-4" /></button>
+          </div>
+        </aside>
+      )}
 
       {/* Toast Notification Banner */}
       {toastMessage && (

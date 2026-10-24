@@ -13,7 +13,7 @@ import { handoffKey, consumeHandoff } from './native-handoff.mjs';
 
 const TWA_WORKFLOW_FILE = 'wybuild-twa.yml';
 const TWA_WORKFLOW_PATH = `.github/workflows/${TWA_WORKFLOW_FILE}`;
-const TWA_WORKFLOW_VERSION = 47;
+const TWA_WORKFLOW_VERSION = 48;
 const TWA_MIN_SDK = 24; // androidbrowserhelper 2.7.x declares minSdk 24; a lower value fails the manifest merge
 // every file committed to a repo for each workflow kind: [path in repo, path in ./workflow]
 const WORKFLOW_KINDS = {
@@ -1934,6 +1934,47 @@ function cleanLinkRules(list) {
 }
 
 // Validates the TWA form and returns the JSON handed to the workflow (one input, because GitHub caps dispatch inputs at 25)
+// Server-authoritative build pricing. The client is only a UI: it cannot decide whether a
+// feature is "new" or whether an edit should be billed. The last accepted config is stored
+// server-side per GitHub repository and owner, and native APKs use the same authenticated API.
+const BUILD_BASE_CREDITS = 5;
+const CONFIG_FEATURE_PRICES = {
+  downloads: 2, biometric: 3, sharetarget: 1, reminders: 2, googleauth: 3, push: 3,
+  pulltorefresh: 2, swipeback: 2, shareout: 1, fileaccess: 2, networkstatus: 1,
+  deviceinfo: 1, haptics: 1, deeplinks: 2, localnotifications: 2,
+  fullscreen: 2, 'fullscreen-sticky': 2, predictiveBack: 1,
+  enableNotifications: 2, locationDelegation: 2,
+};
+function normalizedConfigForBilling(twa) {
+  return {
+    packageId: String(twa.packageId || ''), versionName: String(twa.versionName || '1.0.0'),
+    nativeFeatures: [...new Set(Array.isArray(twa.nativeFeatures) ? twa.nativeFeatures : [])].sort(),
+    androidPermissions: [...new Set(Array.isArray(twa.androidPermissions) ? twa.androidPermissions : [])].sort(),
+    display: String(twa.display || 'standalone'), predictiveBack: !!twa.predictiveBack,
+    enableNotifications: !!twa.enableNotifications, locationDelegation: !!twa.locationDelegation,
+  };
+}
+function configChangeCharge(previous, current) {
+  const old = previous || null;
+  const added = [];
+  const beforeFeatures = new Set(old?.nativeFeatures || []);
+  for (const id of current.nativeFeatures) if (!beforeFeatures.has(id)) added.push({ id, cost: CONFIG_FEATURE_PRICES[id] || 1, kind: 'native_feature' });
+  const beforePerms = new Set(old?.androidPermissions || []);
+  const permissionPrices = { CAMERA: 2, RECORD_AUDIO: 2, ACCESS_FINE_LOCATION: 2, ACCESS_COARSE_LOCATION: 2, VIBRATE: 1, POST_NOTIFICATIONS: 2, READ_CONTACTS: 2, WRITE_CONTACTS: 2, BLUETOOTH: 2, BLUETOOTH_CONNECT: 2, BLUETOOTH_SCAN: 2, READ_MEDIA_IMAGES: 2, READ_MEDIA_VIDEO: 2, READ_EXTERNAL_STORAGE: 2, WRITE_EXTERNAL_STORAGE: 2 };
+  for (const id of current.androidPermissions) if (!beforePerms.has(id)) added.push({ id: `permission:${id}`, cost: permissionPrices[id] || 1, kind: 'android_permission' });
+  for (const key of ['enableNotifications', 'locationDelegation', 'predictiveBack']) {
+    if (current[key] && !old?.[key]) added.push({ id: key, cost: CONFIG_FEATURE_PRICES[key] || 1, kind: 'native_capability' });
+  }
+  if (current.display !== 'standalone' && current.display !== (old?.display || 'standalone')) {
+    added.push({ id: current.display, cost: CONFIG_FEATURE_PRICES[current.display] || 2, kind: 'display_mode' });
+  }
+  const identity = [];
+  // Initial configuration is not an edit. Subsequent package/version changes are priced server-side.
+  if (old && current.packageId && old.packageId && current.packageId !== old.packageId) identity.push({ id: 'package_id_edit', cost: 2, kind: 'package_id' });
+  if (old && current.versionName && old.versionName && current.versionName !== old.versionName) identity.push({ id: 'version_edit', cost: 2, kind: 'version' });
+  return { changes: [...added, ...identity], total: [...added, ...identity].reduce((n, x) => n + x.cost, 0) };
+}
+
 function cleanTwaConfig(c = {}) {
   const out = { webUrl: cleanHttps(c.webUrl, 'Web app URL', true) };
   const host = new URL(out.webUrl).hostname.replace(/^www\./, '').toLowerCase();
@@ -3229,9 +3270,34 @@ async function route(req, res, path, query) {
     // Nothing has been charged yet, so stop cleanly instead of running into the platform timeout.
     if (Date.now() - t0 > 35000) throw tooSlow('WyBuild stopped before starting because GitHub or storage was responding slowly. Nothing was charged and no build was started.');
 
-    const BUILD_CREDITS = 5; // successful Web-to-Android builds cost five credits; failed/dispatch-failed builds are refunded
-    // Reserve credits before dispatch so concurrent builds cannot spend the same balance.
-    await debitCredits(session.login, BUILD_CREDITS, 'build_reserved', { repo, branch, output });
+    const BUILD_CREDITS = BUILD_BASE_CREDITS;
+    const billingConfigKey = `wb:build-config:${session.login}:${repo.toLowerCase()}`;
+    const configLockKey = `wb:build-config-lock:${session.login}:${repo.toLowerCase()}`;
+    const configLockToken = crypto.randomUUID();
+    const configLock = await kv.set(configLockKey, configLockToken, { nx: true, ex: 120 });
+    if (!configLock) throw new HttpError(409, 'Another build is preparing a credit reservation for this repository. Wait a few seconds and retry.', 'BUILD_BILLING_BUSY');
+    const releaseConfigLock = async () => {
+      try { if ((await kv.get(configLockKey)) === configLockToken) await kv.del(configLockKey); } catch {}
+    };
+    let previousBillingConfig;
+    let currentBillingConfig;
+    let configPricing;
+    let totalReserved;
+    try {
+      previousBillingConfig = await kv.get(billingConfigKey);
+      currentBillingConfig = normalizedConfigForBilling(twa);
+      configPricing = configChangeCharge(previousBillingConfig, currentBillingConfig);
+      totalReserved = BUILD_CREDITS + configPricing.total;
+    } catch (e) { await releaseConfigLock(); throw e; }
+    // One server-side reservation covers the build plus only newly introduced features/permissions
+    // and actual identity edits. This applies identically to browser and standalone WyBuild APK.
+    try {
+      await debitCredits(session.login, totalReserved, 'build_reserved', {
+        repo, branch, output, buildCredits: BUILD_CREDITS,
+        configCredits: configPricing.total, configChanges: configPricing.changes,
+        previousConfigExists: !!previousBillingConfig,
+      });
+    } catch (e) { await releaseConfigLock(); throw e; }
     let reservation;
     let wbTicket;
     try {
@@ -3240,8 +3306,14 @@ async function route(req, res, path, query) {
       mark('reserved');
       // Dispatch needs a few seconds; past this point the platform would kill the request mid-flight.
       if (Date.now() - t0 > 48000) throw tooSlow('WyBuild stopped before starting the build because storage was responding slowly. Your credits were refunded and no build was started.');
+      // Write the candidate baseline before dispatch while the per-repository billing lock is held.
+      // If GitHub rejects the dispatch, the catch paths restore the previous baseline.
+      await kv.set(billingConfigKey, { ...currentBillingConfig, updatedAt: new Date().toISOString(), updatedBy: session.login, pendingDispatch: true }, { ex: 60 * 60 * 24 * 365 * 5 });
     } catch (e) {
-      await refundCredits(session.login, BUILD_CREDITS, 'build_dispatch_setup_refund', { repo, branch }).catch(() => {});
+      if (previousBillingConfig) await kv.set(billingConfigKey, previousBillingConfig, { ex: 60 * 60 * 24 * 365 * 5 }).catch(() => {});
+      else await kv.del(billingConfigKey).catch(() => {});
+      await refundCredits(session.login, totalReserved, 'build_dispatch_setup_refund', { repo, branch, configCredits: configPricing.total }).catch(() => {});
+      await releaseConfigLock();
       if (reservation) {
         await kv.decr(reservation.inflightKey).catch(() => {});
         await kv.decr(reservation.pendingKey).catch(() => {});
@@ -3271,21 +3343,31 @@ async function route(req, res, path, query) {
       await kv.del(`wb:ticket:${ticketHash(wbTicket)}`).catch(() => {});
       await kv.decr(inflightKey).catch(() => {});
       await kv.decr(reservation.pendingKey).catch(() => {});
-      await refundCredits(session.login, BUILD_CREDITS, 'build_dispatch_error_refund', { repo, branch }).catch(() => {});
+      await refundCredits(session.login, totalReserved, 'build_dispatch_error_refund', { repo, branch, configCredits: configPricing.total }).catch(() => {});
+      if (previousBillingConfig) await kv.set(billingConfigKey, previousBillingConfig, { ex: 60 * 60 * 24 * 365 * 5 }).catch(() => {});
+      else await kv.del(billingConfigKey).catch(() => {});
+      await releaseConfigLock();
       throw e;
     }
     if (r.status !== 204) {
       await kv.del(`wb:ticket:${ticketHash(wbTicket)}`).catch(() => {});
       await kv.decr(inflightKey).catch(() => {});
       await kv.decr(reservation.pendingKey).catch(() => {});
-      await refundCredits(session.login, BUILD_CREDITS, 'build_dispatch_failed_refund', { repo, branch }).catch(() => {});
+      await refundCredits(session.login, totalReserved, 'build_dispatch_failed_refund', { repo, branch, configCredits: configPricing.total }).catch(() => {});
+      if (previousBillingConfig) await kv.set(billingConfigKey, previousBillingConfig, { ex: 60 * 60 * 24 * 365 * 5 }).catch(() => {});
+      else await kv.del(billingConfigKey).catch(() => {});
+      await releaseConfigLock();
       const e = await r.json().catch(() => ({}));
       const d = describeGithubFailure(r, e, `starting the build on branch ${branch}`, `POST /repos/${repo}/actions/workflows/<workflow>/dispatches`);
       throw new HttpError(d.http === 404 ? 409 : d.http, d.code === 'GITHUB_NOT_FOUND' ? `GitHub cannot find the workflow on branch "${branch}" of ${repo} (404).` : d.message, d.code === 'GITHUB_NOT_FOUND' ? 'WORKFLOW_NOT_DISPATCHABLE' : d.code, { hint: d.code === 'GITHUB_NOT_FOUND' ? 'The workflow file must exist on that exact branch and contain "on: workflow_dispatch". Reinstall the workflow for that branch, make sure Actions is enabled in the repo settings, then retry.' : d.hint, details: d.details });
     }
+    // Dispatch was accepted: finalize the server-owned billing baseline so retrying the same
+    // settings will not charge the same feature again. Never trust client-provided paid flags.
+    await kv.set(billingConfigKey, { ...currentBillingConfig, updatedAt: new Date().toISOString(), updatedBy: session.login }, { ex: 60 * 60 * 24 * 365 * 5 }).catch((e) => console.error('[twa-build] billing baseline finalization failed; pending baseline remains authoritative', String(e?.message || e)));
+    await releaseConfigLock();
     mark('dispatched');
-    console.log('[twa-build] timings ms', JSON.stringify({ ...marks, total: Date.now() - t0 }));
-    return send(res, 200, { ok: true });
+    console.log('[twa-build] timings ms', JSON.stringify({ ...marks, configCredits: configPricing.total, total: Date.now() - t0 }));
+    return send(res, 200, { ok: true, credits: { build: BUILD_CREDITS, configuration: configPricing.total, changes: configPricing.changes } });
   }
 
   if (path === 'runs' && m === 'GET') {
