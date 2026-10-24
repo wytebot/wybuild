@@ -1,4 +1,6 @@
-# wybuild-twa-workflow-version: 49
+# wybuild-twa-workflow-version: 51
+# v51: prefer Vercel Production config, then matching GitHub repository secrets, then repository variables and project fallbacks.
+# v50: Pull production client/API configuration from Vercel when credentials are configured; set Vite + Next aliases; fix runtime-config root path; correct analyzer scan and standalone WyBuild auth warning.
 # v49: auto-wire layer - selected native features take effect through standard web APIs (share, downloads, notifications, vibrate, online status, deep links, swipe-back) even when the site has no WyBuildNative code.
 # v48: auto-enable built-in pull-to-refresh when selected; no site-side bootstrap required for default reload behavior.
 # v43: native survival configuration, compatibility analyzer/report, optional HTTPS/Chromium smoke test and custom-scheme handoff support.
@@ -110,6 +112,105 @@ jobs:
         with:
           node-version: "20"
 
+      - name: Resolve production API and public client ID from Vercel
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID || secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID || secrets.VERCEL_PROJECT_ID }}
+          # If the Vercel Production environment does not define a value, use repository Actions secrets.
+          REPO_API_SECRET: ${{ secrets.NEXT_PUBLIC_API_BASE_URL || secrets.VITE_API_BASE_URL || secrets.API_BASE_URL }}
+          REPO_API_VARIABLE: ${{ vars.NEXT_PUBLIC_API_BASE_URL || vars.VITE_API_BASE_URL || vars.API_BASE_URL }}
+          REPO_GOOGLE_CLIENT_SECRET: ${{ secrets.NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID || secrets.VITE_GOOGLE_WEB_CLIENT_ID || secrets.GOOGLE_WEB_CLIENT_ID }}
+          REPO_GOOGLE_CLIENT_VARIABLE: ${{ vars.NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID || vars.VITE_GOOGLE_WEB_CLIENT_ID || vars.GOOGLE_WEB_CLIENT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Precedence: non-empty Vercel Production value > repository Actions secret > repository variable > project config.
+          # GitHub Actions cannot read a project's Vercel environment automatically without a VERCEL_TOKEN.
+          # Only the two public build-time settings below are exported; no other pulled values are logged.
+          VERCEL_ENV_FILE="$RUNNER_TEMP/wb-vercel-production.env"
+          # Never leave the full pulled env (which may contain unrelated secrets) on disk for npm build scripts.
+          trap 'rm -f "$VERCEL_ENV_FILE" .vercel/.env.production.local' EXIT
+          VERCEL_PROJECT_ID_RESOLVED="${VERCEL_PROJECT_ID:-}"
+          VERCEL_ORG_ID_RESOLVED="${VERCEL_ORG_ID:-}"
+          if [ -f .vercel/project.json ]; then
+            VERCEL_PROJECT_ID_RESOLVED="${VERCEL_PROJECT_ID_RESOLVED:-$(node -p 'try{require("./.vercel/project.json").projectId||""}catch{ "" }')}"
+            VERCEL_ORG_ID_RESOLVED="${VERCEL_ORG_ID_RESOLVED:-$(node -p 'try{require("./.vercel/project.json").orgId||""}catch{ "" }')}"
+          fi
+          VERCEL_API_FROM_PROJECT=""
+          VERCEL_CLIENT_FROM_PROJECT=""
+          if [ -n "${VERCEL_TOKEN:-}" ]; then
+            if [ -z "$VERCEL_PROJECT_ID_RESOLVED" ] || [ -z "$VERCEL_ORG_ID_RESOLVED" ]; then
+              echo "::error::VERCEL_TOKEN is configured, but Vercel project IDs are missing. Set VERCEL_PROJECT_ID and VERCEL_ORG_ID as GitHub Actions variables/secrets, or include the project's .vercel/project.json."
+              exit 1
+            fi
+            mkdir -p .vercel
+            node - "$VERCEL_PROJECT_ID_RESOLVED" "$VERCEL_ORG_ID_RESOLVED" <<'NODEPROJECT'
+          const fs=require('fs');
+          fs.writeFileSync('.vercel/project.json', JSON.stringify({projectId:process.argv[2],orgId:process.argv[3]},null,2));
+          NODEPROJECT
+            if ! npx --yes vercel@latest env pull "$VERCEL_ENV_FILE" --environment=production --token="$VERCEL_TOKEN" --yes; then
+              echo "::error::Could not pull the Vercel Production environment. Check VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID and the token's project access."
+              exit 1
+            fi
+            eval "$(node - "$VERCEL_ENV_FILE" <<'NODEENV'
+          const fs=require('fs');
+          const file=fs.readFileSync(process.argv[2],'utf8');
+          const values={};
+          for(const raw of file.split(/\r?\n/)){
+            const line=raw.trim(); if(!line||line.startsWith('#')) continue;
+            const m=line.match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/); if(!m) continue;
+            let v=m[2].trim();
+            if((v.startsWith('"')&&v.endsWith('"'))||(v.startsWith("'")&&v.endsWith("'"))) v=v.slice(1,-1);
+            v=v.replace(/\\n/g,'\n').replace(/\\r/g,'\r').replace(/\\"/g,'"').replace(/\\'/g,"'").replace(/\\\\/g,'\\');
+            values[m[1]]=v;
+          }
+          const q=v=>"'"+String(v).replace(/'/g,"'\\''")+"'";
+          for(const k of ['NEXT_PUBLIC_API_BASE_URL','VITE_API_BASE_URL','API_BASE_URL','NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID','VITE_GOOGLE_WEB_CLIENT_ID','GOOGLE_WEB_CLIENT_ID']) if(values[k]) console.log('export WB_VERCEL_'+k+'='+q(values[k]));
+          NODEENV
+            )"
+            VERCEL_API_FROM_PROJECT="${WB_VERCEL_VITE_API_BASE_URL:-${WB_VERCEL_NEXT_PUBLIC_API_BASE_URL:-${WB_VERCEL_API_BASE_URL:-}}}"
+            VERCEL_CLIENT_FROM_PROJECT="${WB_VERCEL_VITE_GOOGLE_WEB_CLIENT_ID:-${WB_VERCEL_NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID:-${WB_VERCEL_GOOGLE_WEB_CLIENT_ID:-}}}"
+            rm -f "$VERCEL_ENV_FILE" .vercel/.env.production.local
+            echo "Vercel Production environment pulled successfully; selected public settings only. The full environment file was removed before project build scripts run."
+          else
+            echo "::warning::VERCEL_TOKEN is not configured. Falling back to GitHub repository variables and project config; to pull Vercel Production env directly, add VERCEL_TOKEN plus VERCEL_ORG_ID and VERCEL_PROJECT_ID."
+          fi
+          API_VALUE="${VERCEL_API_FROM_PROJECT:-${REPO_API_SECRET:-${REPO_API_VARIABLE:-${VITE_API_BASE_URL:-${NEXT_PUBLIC_API_BASE_URL:-}}}}}"
+          CLIENT_VALUE="${VERCEL_CLIENT_FROM_PROJECT:-${REPO_GOOGLE_CLIENT_SECRET:-${REPO_GOOGLE_CLIENT_VARIABLE:-${VITE_GOOGLE_WEB_CLIENT_ID:-${NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID:-}}}}}"
+          # Derive the API origin from the configured production site only when no environment value exists.
+          if [ -z "$API_VALUE" ]; then
+            API_VALUE="$(node -e 'try{const c=JSON.parse(process.env.TWA_CONFIG||"{}");console.log(c.apiBaseUrl||new URL(c.webUrl).origin)}catch{}')"
+          fi
+          # Last-resort public OAuth client ID: read the type-3 web OAuth entry from google-services.json.
+          if [ -z "$CLIENT_VALUE" ]; then
+            CLIENT_VALUE="$(node - <<'NODECLIENT'
+          const fs=require('fs'); const cfg=JSON.parse(process.env.TWA_CONFIG||'{}');
+          for(const f of ['google-services.json','config/android/google-services.json','android/app/google-services.json','app/google-services.json']){
+            try { const j=JSON.parse(fs.readFileSync(f,'utf8')); const all=j.client||[]; const matched=all.filter(c=>!cfg.packageId||c.client_info?.android_client_info?.package_name===cfg.packageId); const clients=matched.length?matched:all; const web=clients.flatMap(c=>c.oauth_client||[]).find(o=>String(o.client_type)==='3'); if(web?.client_id){console.log(web.client_id);break;} } catch {}
+          }
+          NODECLIENT
+            )"
+          fi
+          # Publish values for later steps and set Vite aliases for Vite apps (NEXT_PUBLIC_* alone is ignored by Vite).
+          if [ -n "$API_VALUE" ]; then
+            case "$API_VALUE" in https://*) ;; *) echo "::error::Resolved API base URL must use HTTPS."; exit 1 ;; esac
+            case "$API_VALUE" in *$'\n'*|*$'\r'*) echo "::error::API base URL contains a newline and cannot be exported safely."; exit 1 ;; esac
+            printf 'NEXT_PUBLIC_API_BASE_URL=%s\nVITE_API_BASE_URL=%s\n' "$API_VALUE" "$API_VALUE" >> "$GITHUB_ENV"
+            export NEXT_PUBLIC_API_BASE_URL="$API_VALUE" VITE_API_BASE_URL="$API_VALUE"
+            echo "Resolved API base URL from Vercel/project fallback (value intentionally not printed)."
+          else
+            echo "::warning::No API base URL was found in Vercel/GitHub variables or TWA_CONFIG.webUrl. Vite apps may not reach their backend in a standalone APK. See WyBuild Help > Backend & sign-in survival settings."
+          fi
+          if [ -n "$CLIENT_VALUE" ]; then
+            case "$CLIENT_VALUE" in *$'\n'*|*$'\r'*) echo "::error::Google web client ID contains a newline and cannot be exported safely."; exit 1 ;; esac
+            printf 'NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID=%s\nVITE_GOOGLE_WEB_CLIENT_ID=%s\n' "$CLIENT_VALUE" "$CLIENT_VALUE" >> "$GITHUB_ENV"
+            export NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID="$CLIENT_VALUE" VITE_GOOGLE_WEB_CLIENT_ID="$CLIENT_VALUE"
+            echo "Resolved public Google web client ID from Vercel/project fallback (value intentionally not printed)."
+          else
+            echo "::notice::No public Google web client ID was found in Vercel/GitHub variables or google-services.json; this is acceptable for projects that do not use Google web sign-in."
+          fi
+
       - name: Analyze native compatibility (informational; credit gate ran before dispatch)
         shell: bash
         run: |
@@ -131,7 +232,7 @@ jobs:
           npm install --no-save --no-package-lock playwright
           npx playwright install --with-deps chromium
 
-      - name: Set up Java 17
+      - name: Set up Java 21
         uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -154,8 +255,8 @@ jobs:
           fi
           if [ -n "$BUILD_SCRIPT" ]; then
             echo "A web build script was found (npm run $BUILD_SCRIPT); checking whether this repository is a buildable web app."
-            # Defaults for static-export scripts: the API lives on the project's own website, and the Google web client id
-            # is the type-3 OAuth client inside google-services.json. Repository variables of the same name win.
+            # The earlier resolver prefers Vercel Production env, then GitHub variables, then safe project fallbacks.
+            # Keep this Next.js fallback only for repositories that do not define the public values anywhere.
             node - <<'NODEENV' > "$RUNNER_TEMP/wb-env.sh"
             const fs = require('fs');
             const cfg = JSON.parse(process.env.TWA_CONFIG || '{}');
@@ -191,7 +292,11 @@ jobs:
                 export WYBUILD_WEB_DIR="$WEB_DIR"
                 echo "Capacitor selected: built web assets found in $WEB_DIR (npm run $BUILD_SCRIPT)."
                 if [ -d api ] || grep -qs '"/api/' vercel.json 2>/dev/null || grep -rqsE '[^A-Za-z0-9_.:-]/api/' src 2>/dev/null; then
-                  echo "::warning::This project calls a same-origin /api/ backend. A standalone Capacitor APK is served from https://localhost with NO backend, so sign-in links and API calls cannot work there. Build it with shell: twa (loads the live site), or make the app use an absolute API base URL (for example VITE_API_BASE_URL) when running natively."
+                  if node -e 'const c=JSON.parse(process.env.TWA_CONFIG||"{}");process.exit(["wybuild-black.vercel.app","www.wybuild-black.vercel.app"].includes(new URL(c.webUrl).hostname.toLowerCase())?0:1)'; then
+                    echo "::notice::WyBuild standalone auth/API is designed for native use: it calls the deployed WyBuild backend via API_BASE and uses the browser PKCE/deep-link handoff. The runtime API base is set separately from the local https://localhost UI."
+                  else
+                    echo "::notice::This source uses same-origin /api routes. In a standalone APK, localhost has no server: point API calls to a deployed HTTPS backend and configure native sign-in/CORS as needed. See the existing WyBuild Help page: Backend & sign-in survival settings. This is guidance, not a build blocker."
+                  fi
                 fi
               else
                 echo "::error::The source build completed but did not produce a bundled index.html in dist/build/www/out/public. WyBuild will not package a URL-only app as a native standalone APK. Configure a static web build (for Next.js, output: 'export' and a build:capacitor-web script that writes out/index.html), or explicitly select Trusted Web Activity for a browser-rendered PWA."
@@ -348,14 +453,14 @@ jobs:
           const derivedScheme = ownWyBuildPackages.includes(appId) ? 'wybuild' : String(appId).replaceAll('.', '-');
           const requestedScheme = String(cfg.returnScheme || derivedScheme).toLowerCase();
           const returnScheme = /^[a-z][a-z0-9+.-]{1,30}$/.test(requestedScheme) && !['http','https','javascript','file','content','intent','data'].includes(requestedScheme) ? requestedScheme : derivedScheme;
-          const runtimeConfig = { apiBaseUrl: cfg.apiBaseUrl || '', apiPrefixes: Array.isArray(cfg.apiPrefixes) ? cfg.apiPrefixes : ['/api'], authMode: cfg.authMode || 'none', nativeFeatures: Array.isArray(cfg.nativeFeatures) ? cfg.nativeFeatures.filter((f) => typeof f === 'string' && /^[a-z]{2,24}$/.test(f)) : [], returnScheme, webFallbackUrl: cfg.webFallbackUrl || cfg.webUrl,
+          const runtimeConfig = { apiBaseUrl: process.env.VITE_API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || cfg.apiBaseUrl || new URL(cfg.webUrl).origin, googleWebClientId: process.env.VITE_GOOGLE_WEB_CLIENT_ID || process.env.NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID || '', apiPrefixes: Array.isArray(cfg.apiPrefixes) ? cfg.apiPrefixes : ['/api'], authMode: cfg.authMode || 'none', nativeFeatures: Array.isArray(cfg.nativeFeatures) ? cfg.nativeFeatures.filter((f) => typeof f === 'string' && /^[a-z]{2,24}$/.test(f)) : [], returnScheme, webFallbackUrl: cfg.webFallbackUrl || cfg.webUrl,
             // Android PushNotifications.register() throws a native, uncatchable IllegalStateException (app crash) when no Firebase config is packaged.
             firebaseConfigured: ['google-services.json','config/android/google-services.json','android/app/google-services.json','app/google-services.json'].some((f) => fs.existsSync(f)) || !!String(process.env.GOOGLE_SERVICES_JSON_BASE64 || '').trim() };
           fs.writeFileSync(path.join(webDir, 'wybuild-runtime-config.json'), JSON.stringify(runtimeConfig, null, 2));
           fs.writeFileSync(path.join(webDir, 'wybuild-runtime-config.js'), 'window.__WYBUILD_RUNTIME_CONFIG__=' + JSON.stringify(runtimeConfig).replace(/</g, '\\u003c') + ';');
           const entryPath = path.join(webDir, 'index.html');
           let entryHtml = fs.readFileSync(entryPath, 'utf8');
-          if (!entryHtml.includes('wybuild-runtime-config.js')) entryHtml = entryHtml.replace(/<head([^>]*)>/i, '<head$1><script src="./wybuild-runtime-config.js"></script>');
+          if (!entryHtml.includes('wybuild-runtime-config.js')) entryHtml = entryHtml.replace(/<head([^>]*)>/i, '<head$1><script src="/wybuild-runtime-config.js"></script>');
           fs.writeFileSync(entryPath, entryHtml);
           fs.writeFileSync('capacitor.config.json', JSON.stringify({ appId, appName: String(cfg.name || cfg.launcherName || new URL(cfg.webUrl).hostname).slice(0,50), webDir, backgroundColor: cfg.backgroundColor || '#ffffff', server: { androidScheme: 'https' }, android: { allowMixedContent: false, captureInput: true, webContentsDebuggingEnabled: String(process.env.WYBUILD_WEBVIEW_DEBUG || '').toLowerCase() === 'true' }, plugins: { FirebaseAuthentication: { providers: ['google.com'] }, SplashScreen: { launchShowDuration: 500, backgroundColor: cfg.backgroundColor || '#ffffff', showSpinner: false }, StatusBar: { backgroundColor: cfg.themeColor || '#0f172a' } } }, null, 2));
           if (String(process.env.WYBUILD_NATIVE_SMOKE_TEST || '').toLowerCase() === 'true') {
@@ -404,6 +509,13 @@ jobs:
           }
           if (!fs.existsSync(path.join(packaged, 'wybuild-native-bridge.js'))) {
             throw new Error(`Capacitor did not copy wybuild-native-bridge.js into ${packaged}.`);
+          }
+          if (!fs.existsSync(path.join(packaged, 'wybuild-runtime-config.js'))) {
+            throw new Error(`Capacitor did not copy wybuild-runtime-config.js into ${packaged}; the native API base would be unavailable.`);
+          }
+          const packagedEntryText = fs.readFileSync(packagedIndex, 'utf8');
+          if (!/src=["']\/wybuild-runtime-config\.js["']/.test(packagedEntryText)) {
+            throw new Error('Packaged index.html must load /wybuild-runtime-config.js using a root-absolute path.');
           }
           const bridgePath = path.join(packaged, 'wybuild-native-bridge.js');
           const bridgeText = fs.readFileSync(bridgePath, 'utf8');

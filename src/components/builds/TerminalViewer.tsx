@@ -11,7 +11,9 @@ interface TerminalViewerProps {
 export const TerminalViewer: React.FC<TerminalViewerProps> = ({ logs, isRunning, buildId }) => {
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<'all' | 'errors' | 'warnings'>('all');
-  const [copied, setCopied] = useState(false);\n  const [downloading, setDownloading] = useState(false);\n  const [downloadMessage, setDownloadMessage] = useState('');
+  const [copied, setCopied] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadMessage, setDownloadMessage] = useState('');
   const [autoScroll, setAutoScroll] = useState(true);
   const terminalEndRef = useRef<HTMLDivElement>(null);
   const terminalScrollRef = useRef<HTMLDivElement>(null);

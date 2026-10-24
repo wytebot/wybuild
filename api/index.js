@@ -13,7 +13,7 @@ import { handoffKey, consumeHandoff } from './native-handoff.mjs';
 
 const TWA_WORKFLOW_FILE = 'wybuild-twa.yml';
 const TWA_WORKFLOW_PATH = `.github/workflows/${TWA_WORKFLOW_FILE}`;
-const TWA_WORKFLOW_VERSION = 49;
+const TWA_WORKFLOW_VERSION = 51;
 const TWA_MIN_SDK = 24; // androidbrowserhelper 2.7.x declares minSdk 24; a lower value fails the manifest merge
 // every file committed to a repo for each workflow kind: [path in repo, path in ./workflow]
 const WORKFLOW_KINDS = {

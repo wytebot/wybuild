@@ -74,3 +74,34 @@ Still not performed: full dependency install/Vite TypeScript build, GitHub Actio
 - Added `wybuild-autowire.js` (workflow v49). See `AUTO-WIRE-NATIVE-FEATURES.md`.
 - Checks run: 30/30 Node tests (7 new in `tests/autowire.test.mjs`), plus 17/17 headless-Chromium checks of the shims against a recording stub of `WyBuildNative`: nothing wired when no feature ticked; nothing wired outside the native app; share (text, files, cancel → `AbortError`); downloads (blob link, detached `a.click()`, cross-origin, plain links untouched, failure fallback); notifications (granted/denied); vibrate; online/offline events; battery; deep-link routing once per session; swipe-back; a failing shim cannot break startup.
 - Not run: a real Gradle build, the GitHub Actions workflow, or a device. The shims call the existing `WyBuildNative` plugin wrappers, so Android behaviour (share sheet, notification permission dialog, save sheet) must be confirmed on a phone. Users must press **Update workflow** once so their repos get v49.
+
+## v50 workflow and Vercel environment fixes (2026-10-24)
+
+- Added a workflow step that pulls the target Vercel project's **Production** environment using `VERCEL_TOKEN`, `VERCEL_ORG_ID`, and `VERCEL_PROJECT_ID`. Vercel public API/client settings take precedence; the workflow publishes both `NEXT_PUBLIC_*` and `VITE_*` aliases so Vite apps do not accidentally ignore Next.js-style variable names.
+- Added a setup note at `VERCEL-ENV-WORKFLOW-SETUP.md`. GitHub Actions needs a Vercel access token and project/org IDs to read Vercel environment variables; deployment environment values are not automatically exposed to GitHub runners.
+- Fixed the generated runtime config script to use `/wybuild-runtime-config.js`, and added pre-Gradle checks that ensure the file exists in the packaged Android assets and that `index.html` references it using a root-absolute path.
+- Preserved WyBuild's existing standalone auth behavior: native API calls use the configured API base/canonical fallback; GitHub login uses the system browser plus PKCE and the `wybuild://auth` deep-link return. The workflow does not replace the standalone app with a live-site WebView.
+- Reworked the compatibility analyzer's ignored-directory check to match directory segments, fixing the false zero-file scan caused by the runner workspace path containing `wybuild`. A truly empty scan is now amber/inconclusive, not green.
+- Updated the generic same-origin backend message to point to the existing Help page's **Backend & sign-in survival settings** section; it remains guidance, not a build blocker.
+
+Checks completed for v50 source changes:
+- Both workflow YAML files parse successfully.
+- `npm run test:static`: 34 passed, 0 failed (including the four new v50 regression checks).
+- `node --check api/index.js`, both analyzer syntax checks, Python compilation of both Capacitor finalizer copies, and the four Capacitor finalizer manifest unit tests passed.
+- All workflow `run:` scripts pass `bash -n` syntax checks after substituting GitHub expression placeholders.
+- Both analyzer copies pass `node --check` and are synchronized.
+- Analyzer scans 77 source files in this checkout instead of zero; repeat scans remain stable at 77 files.
+- Empty analyzer input test returns `amber` and includes an `analyzer-no-files` warning.
+- Static checks confirm Vercel env pull, Vite aliases, root-absolute runtime-config injection, packaged runtime-config checks, and preservation of the native API/PKCE handoff.
+
+Not yet verified: live Vercel env pull (requires the target repository's Vercel token/project IDs), full Vite/TypeScript production build, GitHub Actions Gradle build, and physical Android launch/auth tests. The source changes cannot be described as device-tested until those are run.
+
+## v51 repository-secret fallback (2026-10-24)
+
+The Vercel environment resolver now uses this precedence independently for API base URL and Google web client ID: non-empty Vercel Production value → matching GitHub repository Actions secret → matching GitHub repository variable → existing project configuration fallback. This also works when `VERCEL_TOKEN` is absent. Supported API secret names are `NEXT_PUBLIC_API_BASE_URL`, `VITE_API_BASE_URL`, and `API_BASE_URL`; supported Google client secret names are `NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID`, `VITE_GOOGLE_WEB_CLIENT_ID`, and `GOOGLE_WEB_CLIENT_ID`.
+
+Checks completed for v51:
+- `npm run test:static`: 34 passed, 0 failed.
+- Node syntax check for `api/index.js` passed.
+- YAML parsing and workflow shell syntax checks performed after editing.
+- Live Vercel/GitHub credential resolution and an actual Android build remain untested in this environment.

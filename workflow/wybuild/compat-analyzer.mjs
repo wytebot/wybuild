@@ -28,13 +28,15 @@ export function analyzeCompatibility(files) {
       for (let i=0;i<lines.length;i++) { pattern.lastIndex=0; if(pattern.test(lines[i])) findings.push({id,level,file:file.path,line:i+1,message}); }
     }
   }
+  if (files.length === 0) findings.push({id:'analyzer-no-files',level:'warning',file:'<repository>',line:1,message:'Compatibility analyzer found no source files; result is inconclusive and must not be reported as green.'});
   const unique=[...new Map(findings.map(f=>[`${f.id}:${f.file}:${f.line}`,f])).values()];
   const blocking=unique.filter(f=>f.level==='blocking');
-  return { version:1, generatedAt:new Date().toISOString(), summary:{status:blocking.length?'red':unique.length?'amber':'green',blocking:blocking.length,warnings:unique.length-blocking.length,filesScanned:files.length}, findings:unique };
+  const status=blocking.length?'red':(unique.length || files.length===0)?'amber':'green';
+  return { version:1, generatedAt:new Date().toISOString(), summary:{status,blocking:blocking.length,warnings:unique.filter(f=>f.level!=='blocking').length,filesScanned:files.length}, findings:unique };
 }
 if (process.argv[1] && path.resolve(process.argv[1])===path.resolve(new URL(import.meta.url).pathname)) {
-  const root=path.resolve(process.argv[2]||'.'); const exts=/\.(?:[cm]?[jt]sx?|html|json|vue|svelte)$/i; const ignored=/node_modules|\.git|dist|build|\.next/;
-  const files=[]; const walk=d=>{for(const ent of fs.readdirSync(d,{withFileTypes:true})){const full=path.join(d,ent.name);if(ignored.test(full))continue;if(ent.isDirectory())walk(full);else if(exts.test(ent.name)&&fs.statSync(full).size<500000)files.push({path:path.relative(root,full),content:fs.readFileSync(full,'utf8')});}};
+  const root=path.resolve(process.argv[2]||'.'); const exts=/\.(?:[cm]?[jt]sx?|html|json|vue|svelte)$/i;
+  const files=[]; const ignored=/^(?:node_modules|\.git|dist|build|\.next)$/; const walk=d=>{for(const ent of fs.readdirSync(d,{withFileTypes:true})){const full=path.join(d,ent.name);if(ent.isDirectory()&&ignored.test(ent.name))continue;if(ent.isDirectory())walk(full);else if(ent.name==='wybuild-compat-report.json')continue;else if(exts.test(ent.name)&&fs.statSync(full).size<500000)files.push({path:path.relative(root,full),content:fs.readFileSync(full,'utf8')});}};
   walk(root); const report=analyzeCompatibility(files); fs.writeFileSync(path.join(root,'wybuild-compat-report.json'),JSON.stringify(report,null,2)); console.log(JSON.stringify({status:report.summary.status,files:report.summary.filesScanned,findings:report.findings.length,blocking:report.summary.blocking}));
   if(report.summary.blocking && process.env.WYBUILD_COMPAT_STRICT==='1') process.exitCode=2;
 }
