@@ -41,14 +41,14 @@ test('Capacitor finalizer keeps a working MainActivity matcher and share-target 
   assert.match(patched, /android\.intent\.action\.SEND/);
 });
 
-test('workflow templates and server version marker are aligned at v48', async () => {
+test('workflow templates and server version marker are aligned at v49', async () => {
   const fs = await import('node:fs');
   const api = fs.readFileSync(new URL('../api/index.js', import.meta.url), 'utf8');
   const live = fs.readFileSync(new URL('../.github/workflows/wybuild-twa.yml', import.meta.url), 'utf8');
   const template = fs.readFileSync(new URL('../workflow/wybuild-twa.yml', import.meta.url), 'utf8');
-  assert.match(api, /const TWA_WORKFLOW_VERSION = 48;/);
-  assert.match(live, /wybuild-twa-workflow-version: 48/);
-  assert.match(template, /wybuild-twa-workflow-version: 48/);
+  assert.match(api, /const TWA_WORKFLOW_VERSION = 49;/);
+  assert.match(live, /wybuild-twa-workflow-version: 49/);
+  assert.match(template, /wybuild-twa-workflow-version: 49/);
   assert.equal(live.replaceAll('https://wybuild-black.vercel.app', '__WYBUILD_APP_URL__'), template);
 });
 

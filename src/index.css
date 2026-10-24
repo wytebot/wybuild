@@ -269,3 +269,55 @@ input[type="file"] {
   color: #cbd5e1;
   max-width: 100%;
 }
+
+
+/* ---- WyBuild pickers (Select, ColorField, ComboInput): replace native browser dropdowns/color dialogs ---- */
+.wy-select-trigger{display:flex;align-items:center;justify-content:space-between;gap:.5rem;min-height:2.65rem;text-align:left;cursor:pointer;background-color:#070d0b;color:#e2e8f0;border:1px solid rgba(148,163,184,.22);border-radius:.55rem;padding:.55rem .8rem;transition:border-color .15s,background .15s}
+.wy-select-trigger:hover{border-color:rgba(52,211,153,.4)}
+.wy-select-trigger:focus-visible,.wy-select-trigger[aria-expanded="true"]{outline:2px solid rgba(52,211,153,.28);outline-offset:1px;border-color:rgba(52,211,153,.6)}
+.wy-select-trigger:disabled{opacity:.5;cursor:not-allowed}
+.wy-select-value{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wy-select-value.is-placeholder{color:#64748b}
+.wy-select-chevron{flex:0 0 auto;width:1rem;height:1rem;color:#94a3b8;transition:transform .16s}.wy-select-chevron.is-open{transform:rotate(180deg)}
+.wy-select-proxy{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;margin:0;padding:0;border:0}
+.wy-sheet-root{position:fixed;inset:0;z-index:200;display:flex;align-items:flex-end;justify-content:center}
+.wy-sheet-backdrop{position:absolute;inset:0;background:rgba(2,6,10,.72);backdrop-filter:blur(2px);animation:wySheetFade .14s ease-out;touch-action:none}
+.wy-sheet-panel{position:relative;display:flex;flex-direction:column;width:100%;max-width:30rem;max-height:min(78dvh,34rem);padding-bottom:env(safe-area-inset-bottom,0px);border:1px solid rgba(148,163,184,.24);border-bottom:0;border-radius:18px 18px 0 0;background:linear-gradient(145deg,rgba(52,211,153,.05),transparent 55%),#070b11;box-shadow:0 -16px 44px rgba(0,0,0,.55);animation:wySheetUp .18s ease-out;outline:none;overscroll-behavior:contain}
+.wy-sheet-grab{align-self:center;width:36px;height:4px;margin:8px 0 2px;border-radius:2px;background:rgba(148,163,184,.3)}
+.wy-sheet-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 14px 8px 16px}
+.wy-sheet-title{overflow:hidden;color:#94a3b8;font-size:11px;font-weight:800;letter-spacing:.12em;text-overflow:ellipsis;text-transform:uppercase;white-space:nowrap}
+.wy-sheet-close{display:grid;place-items:center;width:32px;height:32px;border:1px solid rgba(148,163,184,.2);border-radius:50%;background:transparent;color:#94a3b8;cursor:pointer}
+.wy-sheet-close:hover,.wy-sheet-close:focus-visible{border-color:#34d399;color:#e2e8f0;outline:none}
+.wy-select-search{display:flex;align-items:center;gap:8px;margin:0 12px 8px;padding:0 10px;border:1px solid rgba(148,163,184,.24);border-radius:10px;background:#080d14;color:#64748b}
+.wy-select-search input{flex:1;min-width:0;min-height:40px;border:0 !important;background:transparent !important;color:#f1f5f9;outline:none !important}
+.wy-select-list{display:grid;align-content:start;gap:3px;min-height:0;overflow-y:auto;padding:4px 8px 12px;overscroll-behavior:contain;outline:none}
+.wy-select-option{display:flex;align-items:center;gap:10px;width:100%;min-height:48px;padding:9px 12px;border:1px solid transparent;border-radius:10px;background:transparent;color:#f1f5f9;text-align:left;cursor:pointer}
+.wy-select-option.is-active,.wy-select-option:hover{background:rgba(52,211,153,.08);border-color:rgba(52,211,153,.2)}
+.wy-select-option.is-selected{background:rgba(52,211,153,.12);border-color:rgba(52,211,153,.34)}
+.wy-select-option.is-disabled{opacity:.4;cursor:not-allowed}
+.wy-select-copy{display:flex;flex:1;min-width:0;flex-direction:column;gap:2px}
+.wy-select-label{overflow-wrap:anywhere;font-size:14px;font-weight:600;line-height:1.3}
+.wy-select-copy small{color:#94a3b8;font-size:12px;line-height:1.3}
+.wy-select-radio{display:grid;place-items:center;flex:0 0 20px;width:20px;height:20px;border:2px solid rgba(148,163,184,.4);border-radius:50%;color:#022c22}
+.wy-select-option.is-selected .wy-select-radio{border-color:#34d399;background:#34d399}
+.wy-select-empty{padding:18px;color:#64748b;font-size:13px;text-align:center}
+.wy-color-trigger{display:grid;place-items:center;flex:0 0 3rem;width:3rem;height:2.75rem;padding:5px;border:1px solid rgba(255,255,255,.08);border-radius:.5rem;background:#050707;cursor:pointer}
+.wy-color-trigger span{display:block;width:100%;height:100%;border-radius:.3rem;border:1px solid rgba(255,255,255,.18)}
+.wy-color-trigger:focus-visible{outline:2px solid rgba(52,211,153,.4);outline-offset:1px}
+.wy-color-body{display:grid;gap:14px;padding:6px 16px 16px;overflow-y:auto}
+.wy-color-grid{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:8px}
+.wy-color-swatch{display:grid;place-items:center;aspect-ratio:1;border:2px solid rgba(255,255,255,.14);border-radius:10px;cursor:pointer}
+.wy-color-swatch.is-selected{border-color:#34d399;box-shadow:0 0 0 2px rgba(52,211,153,.35)}
+.wy-color-custom{display:grid;gap:6px;color:#94a3b8;font-size:11px;font-weight:800;letter-spacing:.12em;text-transform:uppercase}
+.wy-color-custom>div{display:flex;align-items:center;gap:8px;text-transform:none;letter-spacing:0}
+.wy-color-custom i{flex:0 0 28px;height:28px;border:1px solid rgba(255,255,255,.2);border-radius:7px}
+.wy-color-custom input{flex:1;min-width:0;min-height:42px;font-family:'WyBuild Mono',ui-monospace,monospace;color:#f1f5f9;background:#080d14;border:1px solid rgba(148,163,184,.24);padding:0 10px}
+.wy-color-custom input[aria-invalid="true"]{border-color:rgba(244,63,94,.6)}
+.wy-color-custom button{min-height:42px;padding:0 16px;border:0;border-radius:9px;background:#059669;color:#fff;font-size:13px;font-weight:700;cursor:pointer}
+.wy-color-custom button:disabled{opacity:.45;cursor:not-allowed}
+.wy-combo{position:relative}
+.wy-combo-list{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:60;display:grid;gap:3px;max-height:15rem;overflow-y:auto;padding:5px;border:1px solid rgba(148,163,184,.24);border-radius:12px;background:#070b11;box-shadow:0 16px 36px rgba(0,0,0,.48);animation:wyAccountIn .13s ease-out}
+@keyframes wySheetUp{from{opacity:.6;transform:translateY(24px)}to{opacity:1;transform:translateY(0)}}
+@keyframes wySheetFade{from{opacity:0}to{opacity:1}}
+@media (min-width:640px){.wy-sheet-root{align-items:center;padding:24px}.wy-sheet-panel{border-bottom:1px solid rgba(148,163,184,.24);border-radius:18px;animation-name:wySheetFade}.wy-sheet-grab{display:none}}
+@media (prefers-reduced-motion:reduce){.wy-sheet-backdrop,.wy-sheet-panel,.wy-combo-list{animation:none}.wy-select-chevron{transition:none}}

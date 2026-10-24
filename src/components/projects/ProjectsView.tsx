@@ -16,6 +16,7 @@ import {
   Sparkles,
   ExternalLink,
 } from 'lucide-react';
+import { Select } from '../ui/Select';
 
 interface ProjectsViewProps {
   onOpenNewProject: () => void;
@@ -222,60 +223,66 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({ onOpenNewProject }) 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-slate-300 font-medium mb-1.5">Output Artifact Target</label>
-                  <select
+                  <Select
+                    title="Output artifact target"
                     value={editingProject.config.target}
-                    onChange={(e) =>
+                    onChange={(v) =>
                       setEditingProject({
                         ...editingProject,
-                        config: { ...editingProject.config, target: e.target.value as any },
+                        config: { ...editingProject.config, target: v as any },
                       })
                     }
+                    options={[
+                      { value: 'apk', label: 'Android APK (Fat Single Binary)' },
+                      { value: 'split-per-abi', label: 'Split APK per ABI (arm64-v8a / v7a)' },
+                      { value: 'appbundle', label: 'Android App Bundle (.aab for Google Play)' },
+                    ]}
                     className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-white font-mono focus:border-emerald-500 focus:outline-none"
-                  >
-                    <option value="apk">Android APK (Fat Single Binary)</option>
-                    <option value="split-per-abi">Split APK per ABI (arm64-v8a / v7a)</option>
-                    <option value="appbundle">Android App Bundle (.aab for Google Play)</option>
-                  </select>
+                  />
                 </div>
 
                 <div>
                   <label className="block text-slate-300 font-medium mb-1.5">Build Mode</label>
-                  <select
+                  <Select
+                    title="Build mode"
                     value={editingProject.config.mode}
-                    onChange={(e) =>
+                    onChange={(v) =>
                       setEditingProject({
                         ...editingProject,
-                        config: { ...editingProject.config, mode: e.target.value as any },
+                        config: { ...editingProject.config, mode: v as any },
                       })
                     }
+                    options={[
+                      { value: 'release', label: 'Release (Optimized & Signed)' },
+                      { value: 'debug', label: 'Debug (Fast Unsigned Check)' },
+                      { value: 'profile', label: 'Profile (Performance Tracing)' },
+                    ]}
                     className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-white font-mono focus:border-emerald-500 focus:outline-none"
-                  >
-                    <option value="release">Release (Optimized & Signed)</option>
-                    <option value="debug">Debug (Fast Unsigned Check)</option>
-                    <option value="profile">Profile (Performance Tracing)</option>
-                  </select>
+                  />
                 </div>
               </div>
 
               {/* Web → Android settings */}
               <div>
                 <label className="block text-slate-300 font-medium mb-1.5">Web → Android settings</label>
-                <select
+                <Select
+                  title="Web → Android settings"
                   value={editingProject.config.flutterVersion}
-                  onChange={(e) =>
+                  onChange={(v) =>
                     setEditingProject({
                       ...editingProject,
-                      config: { ...editingProject.config, flutterVersion: e.target.value },
+                      config: { ...editingProject.config, flutterVersion: v },
                     })
                   }
+                  options={[
+                    { value: '3.29.0', label: 'Flutter 3.29.0 (Stable - Recommended)' },
+                    { value: '3.27.4', label: 'Flutter 3.27.4 (Stable)' },
+                    { value: '3.24.5', label: 'Flutter 3.24.5 (LTS)' },
+                    { value: 'beta', label: 'Flutter Beta Channel' },
+                    { value: 'master', label: 'Flutter Master (Edge)' },
+                  ]}
                   className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-white font-mono focus:border-emerald-500 focus:outline-none"
-                >
-                  <option value="3.29.0">Flutter 3.29.0 (Stable - Recommended)</option>
-                  <option value="3.27.4">Flutter 3.27.4 (Stable)</option>
-                  <option value="3.24.5">Flutter 3.24.5 (LTS)</option>
-                  <option value="beta">Flutter Beta Channel</option>
-                  <option value="master">Flutter Master (Edge)</option>
-                </select>
+                />
               </div>
 
               {/* Toggles */}
@@ -318,23 +325,21 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({ onOpenNewProject }) 
               {/* Keystore */}
               <div>
                 <label className="block text-slate-300 font-medium mb-1.5">Signing Keystore Profile</label>
-                <select
+                <Select
+                  title="Signing keystore profile"
                   value={editingProject.config.keystoreId || ''}
-                  onChange={(e) =>
+                  onChange={(v) =>
                     setEditingProject({
                       ...editingProject,
-                      config: { ...editingProject.config, keystoreId: e.target.value || undefined },
+                      config: { ...editingProject.config, keystoreId: v || undefined },
                     })
                   }
+                  options={[
+                    { value: '', label: 'Default Cloud Debug Keystore (Unsigned)' },
+                    ...keystores.map((k) => ({ value: k.id, label: `${k.name} (alias: ${k.alias})` })),
+                  ]}
                   className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-white font-mono focus:border-emerald-500 focus:outline-none"
-                >
-                  <option value="">Default Cloud Debug Keystore (Unsigned)</option>
-                  {keystores.map((k) => (
-                    <option key={k.id} value={k.id}>
-                      {k.name} (alias: {k.alias})
-                    </option>
-                  ))}
-                </select>
+                />
               </div>
 
               {/* Custom Command Args */}

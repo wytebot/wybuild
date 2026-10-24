@@ -62,3 +62,15 @@ Still not performed: full dependency install/Vite TypeScript build, GitHub Actio
 ## v54 UI addition
 - Added a small, dismissible Help reminder on the Projects and Web → Android/TWA screens. It does not block build controls. “Read build help” opens the existing Help page, and dismissal is persisted in localStorage.
 - UI behavior is source-reviewed; a full production Vite/TypeScript build and device verification should still be run in the project environment.
+
+## v56 custom pickers (2026-10-24)
+
+- Replaced all native `<select>` elements, the tag `<datalist>` and both native colour inputs with app-styled `Select`, `ComboInput` and `ColorSwatchButton` (see `CUSTOM-PICKERS.md`).
+- Checks run: 23/23 Node tests (existing suites + new `tests/custom-pickers.test.mjs`), Python finalizer tests, `node --check` on API/SW/workflow scripts, syntax parse of every edited TSX file, and a headless-Chromium run (390×780 touch viewport) of the picker components: open/select/close, Escape, backdrop, Back gesture with no leftover history entry, keyboard navigation, search filter, required-field blocking, colour preset + hex entry, tag suggestions.
+- Not run: `tsc`/`vite build` (dependencies could not be installed in the offline sandbox), Gradle APK build, and a physical-device test. Run `npm run lint && npm run build` before releasing.
+
+## v57 auto-wired native features (2026-10-24)
+
+- Added `wybuild-autowire.js` (workflow v49). See `AUTO-WIRE-NATIVE-FEATURES.md`.
+- Checks run: 30/30 Node tests (7 new in `tests/autowire.test.mjs`), plus 17/17 headless-Chromium checks of the shims against a recording stub of `WyBuildNative`: nothing wired when no feature ticked; nothing wired outside the native app; share (text, files, cancel → `AbortError`); downloads (blob link, detached `a.click()`, cross-origin, plain links untouched, failure fallback); notifications (granted/denied); vibrate; online/offline events; battery; deep-link routing once per session; swipe-back; a failing shim cannot break startup.
+- Not run: a real Gradle build, the GitHub Actions workflow, or a device. The shims call the existing `WyBuildNative` plugin wrappers, so Android behaviour (share sheet, notification permission dialog, save sheet) must be confirmed on a phone. Users must press **Update workflow** once so their repos get v49.

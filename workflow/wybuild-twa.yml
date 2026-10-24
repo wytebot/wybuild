@@ -1,4 +1,5 @@
-# wybuild-twa-workflow-version: 48
+# wybuild-twa-workflow-version: 49
+# v49: auto-wire layer - selected native features take effect through standard web APIs (share, downloads, notifications, vibrate, online status, deep links, swipe-back) even when the site has no WyBuildNative code.
 # v48: auto-enable built-in pull-to-refresh when selected; no site-side bootstrap required for default reload behavior.
 # v43: native survival configuration, compatibility analyzer/report, optional HTTPS/Chromium smoke test and custom-scheme handoff support.
 # v41: Bundled index.html uses root-absolute asset URLs (a stray in-app navigation to /some/path no longer breaks JS/CSS loading), startup self-recovery, warning when the app needs a same-origin server /api.
@@ -287,6 +288,10 @@ jobs:
             console.log('WyBuild built-in pull-to-refresh enabled: default action reloads the current page.');
           }
           NODEAUTOFEATURE
+          # Auto-wire layer: maps standard web APIs to the native plugins for every feature selected in WyBuild.
+          test -f .github/wybuild/wybuild-autowire.js || { echo '::error::wybuild-autowire.js is missing from .github/wybuild.'; exit 1; }
+          printf '\n' >> "$WYBUILD_WEB_DIR/wybuild-native-bridge.js"
+          cat .github/wybuild/wybuild-autowire.js >> "$WYBUILD_WEB_DIR/wybuild-native-bridge.js"
           # Validate the exact generated JavaScript before it can be copied into Android assets.
           if grep -nE 'registerPlugin[[:space:]]*<[[:space:]]*[^>]+>' "$WYBUILD_WEB_DIR/wybuild-native-bridge.js"; then
             echo '::error::TypeScript generic syntax leaked into the generated Android bridge bundle.'
@@ -343,7 +348,7 @@ jobs:
           const derivedScheme = ownWyBuildPackages.includes(appId) ? 'wybuild' : String(appId).replaceAll('.', '-');
           const requestedScheme = String(cfg.returnScheme || derivedScheme).toLowerCase();
           const returnScheme = /^[a-z][a-z0-9+.-]{1,30}$/.test(requestedScheme) && !['http','https','javascript','file','content','intent','data'].includes(requestedScheme) ? requestedScheme : derivedScheme;
-          const runtimeConfig = { apiBaseUrl: cfg.apiBaseUrl || '', apiPrefixes: Array.isArray(cfg.apiPrefixes) ? cfg.apiPrefixes : ['/api'], authMode: cfg.authMode || 'none', returnScheme, webFallbackUrl: cfg.webFallbackUrl || cfg.webUrl,
+          const runtimeConfig = { apiBaseUrl: cfg.apiBaseUrl || '', apiPrefixes: Array.isArray(cfg.apiPrefixes) ? cfg.apiPrefixes : ['/api'], authMode: cfg.authMode || 'none', nativeFeatures: Array.isArray(cfg.nativeFeatures) ? cfg.nativeFeatures.filter((f) => typeof f === 'string' && /^[a-z]{2,24}$/.test(f)) : [], returnScheme, webFallbackUrl: cfg.webFallbackUrl || cfg.webUrl,
             // Android PushNotifications.register() throws a native, uncatchable IllegalStateException (app crash) when no Firebase config is packaged.
             firebaseConfigured: ['google-services.json','config/android/google-services.json','android/app/google-services.json','app/google-services.json'].some((f) => fs.existsSync(f)) || !!String(process.env.GOOGLE_SERVICES_JSON_BASE64 || '').trim() };
           fs.writeFileSync(path.join(webDir, 'wybuild-runtime-config.json'), JSON.stringify(runtimeConfig, null, 2));
@@ -445,7 +450,7 @@ jobs:
           }
           JSON
           npm install --no-audit --no-fund --package-lock=false "@bubblewrap/cli@${{ inputs.bubblewrap_version }}"
-          for f in twa-prepare.mjs twa-generate.mjs twa-verify.sh twa-native.py WyBuildActivity.java WyBuildReminderReceiver.java capacitor-bridge.entry.js capacitor-finalize.py; do
+          for f in twa-prepare.mjs twa-generate.mjs twa-verify.sh twa-native.py WyBuildActivity.java WyBuildReminderReceiver.java capacitor-bridge.entry.js capacitor-finalize.py wybuild-autowire.js; do
             test -f "$GITHUB_WORKSPACE/.github/wybuild/$f" || { echo "::error::.github/wybuild/$f is missing in this repo/branch. Reinstall the WyBuild TWA workflow (WyBuild > Web to Android > Update workflow) so all the WyBuild files are committed."; exit 1; }
           done
           cp "$GITHUB_WORKSPACE/.github/wybuild/twa-generate.mjs" .

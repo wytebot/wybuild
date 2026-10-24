@@ -13,7 +13,7 @@ import { handoffKey, consumeHandoff } from './native-handoff.mjs';
 
 const TWA_WORKFLOW_FILE = 'wybuild-twa.yml';
 const TWA_WORKFLOW_PATH = `.github/workflows/${TWA_WORKFLOW_FILE}`;
-const TWA_WORKFLOW_VERSION = 48;
+const TWA_WORKFLOW_VERSION = 49;
 const TWA_MIN_SDK = 24; // androidbrowserhelper 2.7.x declares minSdk 24; a lower value fails the manifest merge
 // every file committed to a repo for each workflow kind: [path in repo, path in ./workflow]
 const WORKFLOW_KINDS = {
@@ -33,6 +33,7 @@ const WORKFLOW_KINDS = {
       ['.github/wybuild/capacitor-bridge.entry.js', 'wybuild/capacitor-bridge.entry.js'],
       ['.github/wybuild/capacitor-finalize.py', 'wybuild/capacitor-finalize.py'],
       ['.github/wybuild/android-startup-diagnostics.js', 'wybuild/android-startup-diagnostics.js'],
+      ['.github/wybuild/wybuild-autowire.js', 'wybuild/wybuild-autowire.js'],
       ['.github/wybuild/compat-analyzer.mjs', 'wybuild/compat-analyzer.mjs'],
       ['.github/wybuild/wybuild-smoke.mjs', 'wybuild/wybuild-smoke.mjs'],
     ],

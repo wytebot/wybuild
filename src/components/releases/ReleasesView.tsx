@@ -3,6 +3,8 @@ import { useApp } from '../../context/AppContext';
 import { api, ReleasePrep, ReleaseResult } from '../../services/api';
 import { ReleaseHandoff, peekReleaseHandoff, clearReleaseHandoff } from '../../services/releaseHandoff';
 import { AlertTriangle, CheckCircle2, ExternalLink, FileCode, Github, Loader2, RefreshCw, Rocket, Tag } from 'lucide-react';
+import { Select } from '../ui/Select';
+import { ComboInput } from '../ui/ComboInput';
 
 const input = 'w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500/60';
 const mb = (n: number) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
@@ -131,9 +133,15 @@ export const ReleasesView: React.FC = () => {
           <div className="p-5 rounded-lg bg-slate-950 border border-slate-800 space-y-2">
             <label className="text-xs text-slate-500">Build</label>
             <div className="flex gap-2">
-              <select className={input} value={buildId} onChange={(e) => { setBuildId(e.target.value); void load(e.target.value); }}>
-                {candidates.map((b) => <option key={b.id} value={b.id}>{b.repo} · {b.twa?.packageId || b.branch} · {b.commitHash} · {new Date(b.startedAt).toLocaleDateString()}</option>)}
-              </select>
+              <div className="flex-1 min-w-0">
+                <Select
+                  title="Choose a build"
+                  className={input}
+                  value={buildId}
+                  onChange={(v) => { setBuildId(v); void load(v); }}
+                  options={candidates.map((b) => ({ value: b.id, label: `${b.repo} · ${b.twa?.packageId || b.branch}`, hint: `${b.commitHash} · ${new Date(b.startedAt).toLocaleDateString()}` }))}
+                />
+              </div>
               <button onClick={() => buildId && load(buildId, artifactId ?? undefined)} title="Reload" className="px-3 rounded-lg border border-slate-800 text-slate-300 hover:text-white"><RefreshCw className="w-4 h-4" /></button>
             </div>
           </div>
@@ -164,8 +172,7 @@ export const ReleasesView: React.FC = () => {
             <div className="grid sm:grid-cols-2 gap-3">
               <div>
                 <label className="text-xs text-slate-500 flex items-center gap-1"><Tag className="w-3 h-3" /> Tag</label>
-                <input list="wybuild-existing-tags" className={input} value={tag} onChange={(e) => setTag(e.target.value)} placeholder="v1.0.0" />
-                <datalist id="wybuild-existing-tags">{(prep.tagSuggestions || []).map((suggestion) => <option key={suggestion} value={suggestion} />)}</datalist>
+                <ComboInput className={input} value={tag} onChange={setTag} suggestions={prep.tagSuggestions || []} placeholder="v1.0.0" />
                 {(prep.tagSuggestions || []).length > 0 && <p className="text-[11px] text-slate-500 mt-1">Suggestions from existing repository tags. Choose a new version tag to create a new release.</p>}
                 <p className="text-[11px] text-slate-500 mt-1">Created on commit {(prep.target?.sha || '').slice(0, 7) || 'unknown commit'} ({prep.target?.branch || 'unknown branch'}){prep.previousTag ? ` · previous release ${prep.previousTag}` : ''}</p>
               </div>

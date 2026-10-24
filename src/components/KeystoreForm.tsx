@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
+import { Select } from './ui/Select';
 
 interface Props {
   /** repos the key can be attached to; when only one is given it is fixed */
@@ -33,9 +34,7 @@ export const KeystoreForm: React.FC<Props> = ({ repos, defaultRepo, onDone, onCa
   return (
     <form onSubmit={save} className="space-y-3">
       {repos.length > 1 && (
-        <select required value={repo} onChange={(e) => setRepo(e.target.value)} className={field}>
-          {repos.map((r) => <option key={r} value={r}>{r}</option>)}
-        </select>
+        <Select required title="Repository" ariaLabel="Repository" value={repo} onChange={setRepo} options={repos.map((r) => ({ value: r, label: r }))} className={field} />
       )}
       <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Key name (optional)" className={field} />
       <input required value={alias} onChange={(e) => setAlias(e.target.value)} placeholder="Alias" className={`${field} font-mono`} />

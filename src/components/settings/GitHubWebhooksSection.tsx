@@ -23,6 +23,7 @@ import {
   Layers,
   Sparkles,
 } from 'lucide-react';
+import { Select } from '../ui/Select';
 
 export const GitHubWebhooksSection: React.FC = () => {
   const {
@@ -446,17 +447,14 @@ export const GitHubWebhooksSection: React.FC = () => {
             <form onSubmit={handleCreateWebhook} className="space-y-4 text-xs">
               <div>
                 <label className="block text-slate-300 font-medium mb-1">Target Web/Android Project</label>
-                <select
+                <Select
+                  title="Target Web/Android project"
                   value={selectedProjectId}
-                  onChange={(e) => setSelectedProjectId(e.target.value)}
+                  onChange={setSelectedProjectId}
+                  options={projects.map((p) => ({ value: p.id, label: `${p.name} (${p.repoUrl.replace('https://github.com/', '')})` }))}
+                  placeholder="Choose a project…"
                   className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-white font-medium focus:border-emerald-500 focus:outline-none"
-                >
-                  {projects.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name} ({p.repoUrl.replace('https://github.com/', '')})
-                    </option>
-                  ))}
-                </select>
+                />
               </div>
 
               <div>
@@ -479,26 +477,30 @@ export const GitHubWebhooksSection: React.FC = () => {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-slate-300 font-medium mb-1">Output Target Binary</label>
-                  <select
+                  <Select
+                    title="Output target binary"
                     value={target}
-                    onChange={(e) => setTarget(e.target.value as BuildTarget)}
+                    onChange={(v) => setTarget(v as BuildTarget)}
+                    options={[
+                      { value: 'apk', label: 'Android APK (Universal)' },
+                      { value: 'split-per-abi', label: 'Split APK per ABI (arm64/v7a)' },
+                      { value: 'appbundle', label: 'Android App Bundle (.aab)' },
+                    ]}
                     className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-white font-mono focus:border-emerald-500 focus:outline-none"
-                  >
-                    <option value="apk">Android APK (Universal)</option>
-                    <option value="split-per-abi">Split APK per ABI (arm64/v7a)</option>
-                    <option value="appbundle">Android App Bundle (.aab)</option>
-                  </select>
+                  />
                 </div>
                 <div>
                   <label className="block text-slate-300 font-medium mb-1">Build Mode</label>
-                  <select
+                  <Select
+                    title="Build mode"
                     value={mode}
-                    onChange={(e) => setMode(e.target.value as BuildMode)}
+                    onChange={(v) => setMode(v as BuildMode)}
+                    options={[
+                      { value: 'release', label: 'Release (Production)' },
+                      { value: 'debug', label: 'Debug (Fast Unsigned)' },
+                    ]}
                     className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-white font-mono focus:border-emerald-500 focus:outline-none"
-                  >
-                    <option value="release">Release (Production)</option>
-                    <option value="debug">Debug (Fast Unsigned)</option>
-                  </select>
+                  />
                 </div>
               </div>
 
@@ -572,36 +574,40 @@ export const GitHubWebhooksSection: React.FC = () => {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-slate-300 font-medium mb-1">Output Target</label>
-                  <select
+                  <Select
+                    title="Output target"
                     value={editingWebhook.target}
-                    onChange={(e) =>
+                    onChange={(v) =>
                       setEditingWebhook({
                         ...editingWebhook,
-                        target: e.target.value as BuildTarget,
+                        target: v as BuildTarget,
                       })
                     }
+                    options={[
+                      { value: 'apk', label: 'Android APK' },
+                      { value: 'split-per-abi', label: 'Split APK per ABI' },
+                      { value: 'appbundle', label: 'Android App Bundle (.aab)' },
+                    ]}
                     className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-white font-mono focus:border-emerald-500 focus:outline-none"
-                  >
-                    <option value="apk">Android APK</option>
-                    <option value="split-per-abi">Split APK per ABI</option>
-                    <option value="appbundle">Android App Bundle (.aab)</option>
-                  </select>
+                  />
                 </div>
                 <div>
                   <label className="block text-slate-300 font-medium mb-1">Build Mode</label>
-                  <select
+                  <Select
+                    title="Build mode"
                     value={editingWebhook.mode}
-                    onChange={(e) =>
+                    onChange={(v) =>
                       setEditingWebhook({
                         ...editingWebhook,
-                        mode: e.target.value as BuildMode,
+                        mode: v as BuildMode,
                       })
                     }
+                    options={[
+                      { value: 'release', label: 'Release' },
+                      { value: 'debug', label: 'Debug' },
+                    ]}
                     className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-white font-mono focus:border-emerald-500 focus:outline-none"
-                  >
-                    <option value="release">Release</option>
-                    <option value="debug">Debug</option>
-                  </select>
+                  />
                 </div>
               </div>
 

@@ -10,7 +10,8 @@
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
     "migrate:supabase:firestore": "node scripts/migrate-supabase-to-firestore.mjs",
-    "test:native": "node --test tests/native-survival.test.mjs"
+    "test:native": "node --test tests/native-survival.test.mjs",
+    "test:static": "node --test tests/*.test.mjs"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",

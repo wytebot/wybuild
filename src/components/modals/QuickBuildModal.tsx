@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Play, X, Zap, GitBranch, AlertCircle } from 'lucide-react';
+import { Select } from '../ui/Select';
 
 interface QuickBuildModalProps {
   isOpen: boolean;
@@ -62,20 +63,17 @@ export const QuickBuildModal: React.FC<QuickBuildModalProps> = ({ isOpen, onClos
         <form onSubmit={handleTrigger} className="space-y-4 text-xs">
           <div>
             <label className="block text-slate-300 font-medium mb-1">Select Target Project</label>
-            <select
+            <Select
+              title="Select target project"
               value={selectedProjectId}
-              onChange={(e) => {
-                setSelectedProjectId(e.target.value);
+              onChange={(v) => {
+                setSelectedProjectId(v);
                 setBranchOverride('');
               }}
+              options={projects.map((p) => ({ value: p.id, label: `${p.name} (${p.branch})` }))}
+              placeholder="Choose a project…"
               className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-white font-medium focus:border-emerald-500 focus:outline-none"
-            >
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name} ({p.branch})
-                </option>
-              ))}
-            </select>
+            />
           </div>
 
           <div>
