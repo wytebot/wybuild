@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, Download, Copy, Check, ArrowDown } from 'lucide-react';
+import { Search, Download, Copy, Check, ArrowDown, Loader2 } from 'lucide-react';
+import { isNative } from '../../services/apiBase';
 
 interface TerminalViewerProps {
   logs: string[];
@@ -10,7 +11,7 @@ interface TerminalViewerProps {
 export const TerminalViewer: React.FC<TerminalViewerProps> = ({ logs, isRunning, buildId }) => {
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<'all' | 'errors' | 'warnings'>('all');
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState(false);\n  const [downloading, setDownloading] = useState(false);\n  const [downloadMessage, setDownloadMessage] = useState('');
   const [autoScroll, setAutoScroll] = useState(true);
   const terminalEndRef = useRef<HTMLDivElement>(null);
   const terminalScrollRef = useRef<HTMLDivElement>(null);
@@ -52,14 +53,62 @@ export const TerminalViewer: React.FC<TerminalViewerProps> = ({ logs, isRunning,
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleDownloadLogs = () => {
-    const blob = new Blob([logs.join('\n')], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `wybuild-${buildId}-log.txt`;
-    a.click();
-    URL.revokeObjectURL(url);
+  const handleDownloadLogs = async () => {
+    if (downloading) return;
+    setDownloading(true);
+    setDownloadMessage('');
+    // Export the complete build log, not the current search/filter view.
+    const contents = `${logs.join('\\n')}\\n`;
+    const fileName = `wybuild-${String(buildId).replace(/[^a-zA-Z0-9._-]/g, '_')}-log.txt`;
+    try {
+      const native = isNative() || !!(window as any).Capacitor?.isNativePlatform?.();
+      if (native) {
+        // Save persistently on the device (Documents), rather than using a Blob URL,
+        // which Android WebView often fails to hand to the system download manager.
+        const { Filesystem, Directory, Encoding } = await import('@capacitor/filesystem');
+        const saved = await Filesystem.writeFile({
+          path: fileName,
+          data: contents,
+          directory: Directory.Documents,
+          encoding: Encoding.UTF8,
+          recursive: true,
+        });
+        setDownloadMessage(`Saved on device: ${fileName}`);
+        // Offer the saved file to Android's share/save sheet as a convenient second route
+        // to Downloads, Drive, email, or another file manager.
+        try {
+          const { Share } = await import('@capacitor/share');
+          await Share.share({
+            title: fileName,
+            text: 'WyBuild complete build logs',
+            url: saved.uri,
+            dialogTitle: 'Share or save build logs',
+          });
+        } catch (shareError) {
+          // A dismissed share sheet must not undo the file already saved in Documents.
+          console.warn('Log file saved; Android share sheet was unavailable or dismissed.', shareError);
+        }
+      } else {
+        const blob = new Blob([contents], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        // Delay revocation so Android browsers/WebViews have time to start the download.
+        window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+        setDownloadMessage('Full log download started.');
+      }
+    } catch (error) {
+      console.error('Could not download build logs:', error);
+      setDownloadMessage(error instanceof Error ? `Download failed: ${error.message}` : 'Download failed. Please try again.');
+    } finally {
+      setDownloading(false);
+      window.setTimeout(() => setDownloadMessage(''), 6000);
+    }
   };
 
   return (
@@ -136,14 +185,18 @@ export const TerminalViewer: React.FC<TerminalViewerProps> = ({ logs, isRunning,
 
           {/* Download */}
           <button
-            onClick={handleDownloadLogs}
-            className="p-1.5 rounded text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
-            title="Download full log file"
+            onClick={() => void handleDownloadLogs()}
+            disabled={downloading}
+            className="p-1.5 rounded text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer disabled:opacity-50"
+            title="Download complete log file"
+            aria-label="Download complete build logs"
           >
-            <Download className="w-3.5 h-3.5" />
+            {downloading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
           </button>
         </div>
       </div>
+
+      {downloadMessage && <div role="status" className="px-3 py-1.5 text-[11px] font-sans text-emerald-300 bg-emerald-950/30 border-b border-slate-800 break-words">{downloadMessage}</div>}
 
       {/* Terminal Output */}
       <div ref={terminalScrollRef} className="min-h-0 flex-1 p-4 overflow-y-auto overflow-x-hidden overscroll-contain space-y-1 font-mono text-[11px] leading-relaxed text-slate-300 select-text" style={{ WebkitOverflowScrolling: "touch", touchAction: "pan-y" }}>
