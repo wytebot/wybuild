@@ -2487,6 +2487,13 @@ async function route(req, res, path, query) {
             const lookupData = await lookup.json().catch(() => ({}));
             if (!lookup.ok || !lookupData?.providerChargeId) throw new Error(`WyCut confirmation failed: charge-ID lookup returned HTTP ${lookup.status}`);
             charge = await getCharge(String(lookupData.providerChargeId));
+          } else if (/^wryte[a-f0-9]{20,40}$/i.test(String(referenceHint || ''))) {
+            const confirmUrl = env('WYTICLE_PAYMENT_CONFIRM_URL'); const sharedSecret = env('WYTICLE_WEBHOOK_SHARED_SECRET');
+            if (!confirmUrl || !sharedSecret || new URL(confirmUrl).protocol !== 'https:') throw new Error('Wyticle confirmation failed: secure lookup endpoint/shared secret is not configured');
+            const lookup = await fetch(confirmUrl, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-WyBuild-Webhook-Secret': sharedSecret }, body: JSON.stringify({ source: 'wybuild-flutterwave-v4', action: 'lookup', reference: String(referenceHint) }), signal: AbortSignal.timeout(15000) });
+            const lookupData = await lookup.json().catch(() => ({}));
+            if (!lookup.ok || !lookupData?.providerChargeId) throw new Error(`Wyticle confirmation failed: charge-ID lookup returned HTTP ${lookup.status}`);
+            charge = await getCharge(String(lookupData.providerChargeId));
           } else if (pending) {
             console.info('Flutterwave webhook received reference-only event; awaiting charge reconciliation', referenceHint);
           }
@@ -2549,6 +2556,37 @@ async function route(req, res, path, query) {
                 signal: AbortSignal.timeout(15000),
               });
               if (!forward.ok) throw new Error(`Kivora confirmation endpoint returned HTTP ${forward.status}`);
+            }
+          } else if (/^wryte[a-f0-9]{20,40}$/i.test(ref)) {
+            // Wyticle AI one-time credit packs: WyBuild owns the registered Flutterwave webhook.
+            // Wyticle independently matches the reference to its pending payment and verifies the charge again.
+            const confirmUrl = env('WYTICLE_PAYMENT_CONFIRM_URL');
+            const sharedSecret = env('WYTICLE_WEBHOOK_SHARED_SECRET');
+            if (!confirmUrl || !sharedSecret) {
+              throw new Error('Wyticle confirmation failed: WYTICLE_PAYMENT_CONFIRM_URL / WYTICLE_WEBHOOK_SHARED_SECRET is not configured');
+            }
+            if (new URL(confirmUrl).protocol !== 'https:') throw new Error('WYTICLE_PAYMENT_CONFIRM_URL must use HTTPS');
+            const verifiedStatus = String(charge.status || '').toLowerCase();
+            const terminalFailure = ['failed', 'cancelled', 'canceled', 'declined', 'expired', 'rejected', 'voided'].includes(verifiedStatus);
+            if (verifiedStatus === 'succeeded' || terminalFailure) {
+              const forward = await fetch(confirmUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-WyBuild-Webhook-Secret': sharedSecret },
+                body: JSON.stringify({
+                  source: 'wybuild-flutterwave-v4',
+                  action: 'settle',
+                  id: String(charge.id || id || ''),
+                  reference: ref,
+                  status: verifiedStatus,
+                  amount: Number(charge.amount),
+                  currency: String(charge.currency || '').toUpperCase(),
+                  customerEmail: String(charge.customer?.email || charge.customer_email || ''),
+                }),
+                signal: AbortSignal.timeout(15000),
+              });
+              if (!forward.ok) throw new Error(`Wyticle confirmation endpoint returned HTTP ${forward.status}`);
+            } else {
+              console.info('Wyticle Flutterwave charge is not final yet', ref, verifiedStatus);
             }
           } else {
             if (String(charge.status || '').toLowerCase() === 'succeeded') {

@@ -65,3 +65,16 @@ When WyCut and WyBuild use the same Flutterwave merchant account, set the same `
 ## WyBuild one-time AI credit packs
 
 New WyBuild purchases use the same Flutterwave v4 webhook but are non-recurring. The server identifies `wbc-...` references, fetches the authoritative charge from Flutterwave, validates the stored pack amount/currency/customer and grants the matching credits idempotently. Do not use browser callback data as proof of payment. The old subscription checkout is disabled and the scheduled renewal handler no longer creates recurring charges.
+
+
+## Wyticle AI credit-pack payments (same shared webhook)
+
+Use the existing WyBuild webhook URL in Flutterwave:
+`https://wybuild-black.vercel.app/api/billing/webhook`
+
+Set these environment variables in **WyBuild's Vercel project**:
+- `WYTICLE_PAYMENT_CONFIRM_URL=https://YOUR-WYTICLE-API-DOMAIN/api/wybuild-payment-confirmation`
+- `WYTICLE_WEBHOOK_SHARED_SECRET=<long random secret>`
+
+Configure the exact same secret in Wyticle's backend as `WYBUILD_WEBHOOK_SHARED_SECRET`.
+WyBuild recognizes Wyticle's `wryte...` payment references, verifies the Flutterwave v4 charge directly, and forwards only authoritative settlement fields. Wyticle matches the reference to its own pending payment and independently verifies the provider charge before crediting. Reference-only webhook events use a read-only lookup at the Wyticle confirmation endpoint; WyBuild still fetches the charge from Flutterwave itself. Duplicate delivery is safe because Wyticle's credit ledger is idempotent. Do not register Wyticle's direct Flutterwave webhook as a second webhook for this shared merchant flow.
