@@ -60,7 +60,7 @@ export const TerminalViewer: React.FC<TerminalViewerProps> = ({ logs, isRunning,
     setDownloading(true);
     setDownloadMessage('');
     // Export the complete build log, not the current search/filter view.
-    const contents = `${logs.join('\\n')}\\n`;
+    const contents = `${logs.join('\n')}\n`;
     const fileName = `wybuild-${String(buildId).replace(/[^a-zA-Z0-9._-]/g, '_')}-log.txt`;
     try {
       const native = isNative() || !!(window as any).Capacitor?.isNativePlatform?.();
@@ -96,10 +96,13 @@ export const TerminalViewer: React.FC<TerminalViewerProps> = ({ logs, isRunning,
         const a = document.createElement('a');
         a.href = url;
         a.download = fileName;
-        a.style.display = 'none';
+        a.target = '_blank';
+        a.rel = 'noopener';
+        a.style.position = 'fixed';
+        a.style.left = '-9999px';
         document.body.appendChild(a);
         a.click();
-        a.remove();
+        window.setTimeout(() => a.remove(), 1000);
         // Delay revocation so Android browsers/WebViews have time to start the download.
         window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
         setDownloadMessage('Full log download started.');

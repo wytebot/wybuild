@@ -85,9 +85,19 @@ export const BuildsView: React.FC = () => {
         if (!/^https:\/\//i.test(direct)) throw new Error('The server did not return a download address. Retry or rebuild.');
       } finally { clearTimeout(timer); }
 
-      if (!isNative) {
-        // Browser / TWA: navigating to the signed URL triggers the normal download (Content-Disposition: attachment).
-        window.location.assign(direct);
+      if (!nativeBuild) {
+        // Browser / TWA: use a temporary download link rather than navigating away from WyBuild.
+        // The signed GitHub URL is short-lived and serves the ZIP directly without the Vercel proxy.
+        const a = document.createElement('a');
+        a.href = direct;
+        a.download = fileName;
+        a.rel = 'noopener';
+        a.target = '_blank';
+        a.style.position = 'fixed';
+        a.style.left = '-9999px';
+        document.body.appendChild(a);
+        a.click();
+        window.setTimeout(() => a.remove(), 1000);
         return;
       }
 
@@ -99,8 +109,8 @@ export const BuildsView: React.FC = () => {
         progressHandle = await (Filesystem as any).addListener('progress', (p: { bytes?: number; contentLength?: number }) => {
           if (p?.contentLength && p.contentLength > 0) setDownloadPct(Math.min(99, Math.round(((p.bytes || 0) / p.contentLength) * 100)));
         });
-        await Filesystem.downloadFile({ url: direct, path: fileName, directory: Directory.Cache, recursive: true, progress: true } as any);
-        const { uri } = await Filesystem.getUri({ path: fileName, directory: Directory.Cache });
+        await Filesystem.downloadFile({ url: direct, path: fileName, directory: Directory.Documents, recursive: true, progress: true } as any);
+        const { uri } = await Filesystem.getUri({ path: fileName, directory: Directory.Documents });
         if (!uri) throw new Error('The artifact was downloaded but Android did not return its saved location.');
         // Android's share/save sheet lets the user save it to Files/Downloads or send it to another app.
         await Share.share({ title: fileName, text: 'WyBuild build artifact', url: uri, dialogTitle: 'Save or share build artifact' });
