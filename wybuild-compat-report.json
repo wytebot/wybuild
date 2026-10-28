@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "generatedAt": "2026-10-28T01:45:04.325Z",
+  "summary": {
+    "status": "green",
+    "blocking": 0,
+    "warnings": 0,
+    "filesScanned": 53
+  },
+  "findings": []
+}
