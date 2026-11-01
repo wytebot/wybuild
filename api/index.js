@@ -2468,7 +2468,7 @@ async function route(req, res, path, query) {
     // then fetch the authoritative charge from Flutterwave v4 and validate amount,
     // currency, customer/payment-method ownership, reference and succeeded status.
     const id = webhook?.data?.id || webhook?.data?.charge_id || webhook?.charge_id || null;
-    const referenceHint = webhook?.data?.reference || webhook?.reference || webhook?.tx_ref || null;
+    const referenceHint = webhook?.data?.reference || webhook?.data?.tx_ref || webhook?.reference || webhook?.tx_ref || null;
     if (id || referenceHint) {
       try {
         let charge = null;
@@ -2487,6 +2487,21 @@ async function route(req, res, path, query) {
             const lookupData = await lookup.json().catch(() => ({}));
             if (!lookup.ok || !lookupData?.providerChargeId) throw new Error(`WyCut confirmation failed: charge-ID lookup returned HTTP ${lookup.status}`);
             charge = await getCharge(String(lookupData.providerChargeId));
+          } else if (/^kh[a-f0-9]{32}$/i.test(String(referenceHint || ''))) {
+            // PotHub credit purchases use the single registered WyBuild Flutterwave webhook.
+            // The lookup is read-only; the charge is still fetched directly from Flutterwave.
+            const confirmUrl = env('POTHUB_PAYMENT_CONFIRM_URL');
+            const sharedSecret = env('POTHUB_WEBHOOK_SHARED_SECRET');
+            if (!confirmUrl || !sharedSecret || new URL(confirmUrl).protocol !== 'https:') throw new Error('PotHub confirmation failed: secure lookup endpoint/shared secret is not configured');
+            const lookup = await fetch(confirmUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'X-WyBuild-Webhook-Secret': sharedSecret },
+              body: JSON.stringify({ source: 'wybuild-flutterwave-v4', action: 'lookup', reference: String(referenceHint) }),
+              signal: AbortSignal.timeout(15000),
+            });
+            const lookupData = await lookup.json().catch(() => ({}));
+            if (!lookup.ok || !lookupData?.providerChargeId) throw new Error(`PotHub confirmation failed: charge-ID lookup returned HTTP ${lookup.status}`);
+            charge = await getCharge(String(lookupData.providerChargeId));
           } else if (/^wryte[a-f0-9]{20,40}$/i.test(String(referenceHint || ''))) {
             const confirmUrl = env('WYTICLE_PAYMENT_CONFIRM_URL'); const sharedSecret = env('WYTICLE_WEBHOOK_SHARED_SECRET');
             if (!confirmUrl || !sharedSecret || new URL(confirmUrl).protocol !== 'https:') throw new Error('Wyticle confirmation failed: secure lookup endpoint/shared secret is not configured');
@@ -2499,6 +2514,9 @@ async function route(req, res, path, query) {
           }
         }
         if (charge) {
+          if (referenceHint && charge.reference && String(charge.reference).trim() !== String(referenceHint).trim()) {
+            throw new Error('Flutterwave charge reference does not match the webhook reference.');
+          }
           const ref = String(charge.reference || referenceHint || '').trim();
           // WyCut orders are verified by WyBuild's single Flutterwave v4 webhook.
           // Forward only authoritative fields from getCharge(); WyCut matches the reference,
@@ -2556,6 +2574,34 @@ async function route(req, res, path, query) {
                 signal: AbortSignal.timeout(15000),
               });
               if (!forward.ok) throw new Error(`Kivora confirmation endpoint returned HTTP ${forward.status}`);
+            }
+          } else if (/^kh[a-f0-9]{32}$/i.test(ref)) {
+            // PotHub settlement: only forward fields from the authoritative v4 charge lookup.
+            const confirmUrl = env('POTHUB_PAYMENT_CONFIRM_URL');
+            const sharedSecret = env('POTHUB_WEBHOOK_SHARED_SECRET');
+            if (!confirmUrl || !sharedSecret) throw new Error('PotHub confirmation failed: POTHUB_PAYMENT_CONFIRM_URL / POTHUB_WEBHOOK_SHARED_SECRET is not configured');
+            if (new URL(confirmUrl).protocol !== 'https:') throw new Error('POTHUB_PAYMENT_CONFIRM_URL must use HTTPS');
+            const verifiedStatus = String(charge.status || '').toLowerCase();
+            const terminalFailure = ['failed', 'cancelled', 'canceled', 'declined', 'expired', 'rejected', 'voided'].includes(verifiedStatus);
+            if (verifiedStatus === 'succeeded' || terminalFailure) {
+              const forward = await fetch(confirmUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-WyBuild-Webhook-Secret': sharedSecret },
+                body: JSON.stringify({
+                  source: 'wybuild-flutterwave-v4',
+                  action: 'settle',
+                  id: String(charge.id || id || ''),
+                  reference: ref,
+                  status: verifiedStatus,
+                  amount: Number(charge.amount),
+                  currency: String(charge.currency || '').toUpperCase(),
+                  customerEmail: String(charge.customer?.email || charge.customer_email || ''),
+                }),
+                signal: AbortSignal.timeout(15000),
+              });
+              if (!forward.ok) throw new Error(`PotHub confirmation endpoint returned HTTP ${forward.status}`);
+            } else {
+              console.info('PotHub Flutterwave charge is not final yet', ref, verifiedStatus);
             }
           } else if (/^wryte[a-f0-9]{20,40}$/i.test(ref)) {
             // Wyticle AI one-time credit packs: WyBuild owns the registered Flutterwave webhook.
