@@ -78,3 +78,21 @@ Set these environment variables in **WyBuild's Vercel project**:
 
 Configure the exact same secret in Wyticle's backend as `WYBUILD_WEBHOOK_SHARED_SECRET`.
 WyBuild recognizes Wyticle's `wryte...` payment references, verifies the Flutterwave v4 charge directly, and forwards only authoritative settlement fields. Wyticle matches the reference to its own pending payment and independently verifies the provider charge before crediting. Reference-only webhook events use a read-only lookup at the Wyticle confirmation endpoint; WyBuild still fetches the charge from Flutterwave itself. Duplicate delivery is safe because Wyticle's credit ledger is idempotent. Do not register Wyticle's direct Flutterwave webhook as a second webhook for this shared merchant flow.
+
+
+## PotHub credit-pack payments (shared webhook)
+
+Keep Flutterwave's registered webhook URL unchanged:
+
+`https://wybuild-black.vercel.app/api/billing/webhook`
+
+WyBuild now recognizes PotHub references in the form `kh` followed by 32 hexadecimal characters. It verifies the charge directly through Flutterwave v4, then forwards only the verified charge ID, reference, status, amount, and currency to PotHub over HTTPS. PotHub checks the shared secret, matches the reference to its pending `credit_orders` row, verifies exact amount/currency/status, and uses its idempotent credit ledger before marking the order paid.
+
+Configure these variables in **WyBuild's Vercel project**:
+- `POTHUB_PAYMENT_CONFIRM_URL=https://YOUR-POTHUB-DOMAIN/api/billing/wybuild-confirmation`
+- `POTHUB_WEBHOOK_SHARED_SECRET=<long random secret>`
+
+Configure this variable in **PotHub's Vercel project**:
+- `WYBUILD_WEBHOOK_SHARED_SECRET=<the exact same random secret>`
+
+Use a randomly generated secret of at least 32 characters and keep it server-side in both projects. Do not put it in client-side `NEXT_PUBLIC_*` variables. The PotHub API must be deployed and publicly reachable over HTTPS. Do not register PotHub's own Flutterwave webhook URL in Flutterwave; the single registered endpoint remains WyBuild. Failed downstream forwarding returns a retryable HTTP 500 from WyBuild so Flutterwave can retry. Duplicate delivery cannot grant the same purchase twice.
