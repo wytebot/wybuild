@@ -2448,28 +2448,36 @@ async function route(req, res, path, query) {
 
   /* billing webhook + callback: authenticated by Flutterwave, not by session */
   if (path === 'billing/webhook' && post) {
+    res.setHeader('Cache-Control', 'no-store');
     const want = env('FLW_SECRET_HASH');
-    const safeEq = (a, b) => a.length === b.length && a.length > 0 && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+    const safeEq = (a, b) => {
+      const left = Buffer.from(String(a || ''));
+      const right = Buffer.from(String(b || ''));
+      return left.length > 0 && left.length === right.length && crypto.timingSafeEqual(left, right);
+    };
     const legacy = String(req.headers['verif-hash'] || '');
     const sig = String(req.headers['flutterwave-signature'] || '');
-    // Flutterwave v4 signs the raw HTTP request body. Prefer a runtime-provided raw body when available;
-    // string/Buffer bodies are already raw. JSON.stringify is only a compatibility fallback for runtimes
-    // that eagerly parse JSON before invoking the function.
+    if (!want) throw new HttpError(503, 'Flutterwave webhook verification is not configured.', 'WEBHOOK_NOT_CONFIGURED');
+    // Never reconstruct signed bytes from parsed JSON: key order/spacing can change and
+    // would make the signature check meaningless. HMAC verification requires the exact raw body.
     const rawWebhookBody = Buffer.isBuffer(req.rawBody) ? req.rawBody
       : typeof req.rawBody === 'string' ? Buffer.from(req.rawBody)
       : Buffer.isBuffer(req.body) ? req.body
       : typeof req.body === 'string' ? Buffer.from(req.body)
-      : Buffer.from(JSON.stringify(req.body ?? {}));
-    const expectedSig = want ? crypto.createHmac('sha256', want).update(rawWebhookBody).digest('base64') : '';
-    const ok = !!want && (safeEq(legacy, want) || safeEq(sig, expectedSig));
-    if (!ok) throw new HttpError(401, 'Invalid signature');
+      : null;
+    const expectedSig = rawWebhookBody && rawWebhookBody.length
+      ? crypto.createHmac('sha256', want).update(rawWebhookBody).digest('base64')
+      : '';
+    const ok = safeEq(legacy, want) || (!!expectedSig && safeEq(sig, expectedSig));
+    if (!ok) throw new HttpError(401, 'Invalid Flutterwave webhook signature.', 'INVALID_WEBHOOK_SIGNATURE');
     const webhook = bodyOf(req) || {};
     // Never activate from webhook fields alone. Use the webhook only as a trigger,
     // then fetch the authoritative charge from Flutterwave v4 and validate amount,
     // currency, customer/payment-method ownership, reference and succeeded status.
     const id = webhook?.data?.id || webhook?.data?.charge_id || webhook?.charge_id || null;
     const referenceHint = webhook?.data?.reference || webhook?.data?.tx_ref || webhook?.reference || webhook?.tx_ref || null;
-    if (id || referenceHint) {
+    if (!id && !referenceHint) throw new HttpError(400, 'Webhook is missing a charge ID and transaction reference.', 'WEBHOOK_MISSING_PAYMENT_ID');
+    {
       try {
         let charge = null;
         if (id) {
@@ -2514,10 +2522,16 @@ async function route(req, res, path, query) {
           }
         }
         if (charge) {
-          if (referenceHint && charge.reference && String(charge.reference).trim() !== String(referenceHint).trim()) {
+          if (!charge.id || !charge.reference) {
+            throw new Error('Flutterwave charge response is missing its authoritative ID or reference.');
+          }
+          if (id && String(charge.id) !== String(id)) {
+            throw new Error('Flutterwave charge ID does not match the webhook charge ID.');
+          }
+          if (referenceHint && String(charge.reference).trim() !== String(referenceHint).trim()) {
             throw new Error('Flutterwave charge reference does not match the webhook reference.');
           }
-          const ref = String(charge.reference || referenceHint || '').trim();
+          const ref = String(charge.reference).trim();
           // WyCut orders are verified by WyBuild's single Flutterwave v4 webhook.
           // Forward only authoritative fields from getCharge(); WyCut matches the reference,
           // amount, currency, transaction ID and stored order before granting credits.
