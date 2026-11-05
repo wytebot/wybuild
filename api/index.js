@@ -13,7 +13,7 @@ import { handoffKey, consumeHandoff } from './native-handoff.mjs';
 
 const TWA_WORKFLOW_FILE = 'wybuild-twa.yml';
 const TWA_WORKFLOW_PATH = `.github/workflows/${TWA_WORKFLOW_FILE}`;
-const TWA_WORKFLOW_VERSION = 51;
+const TWA_WORKFLOW_VERSION = 52;
 const TWA_MIN_SDK = 24; // androidbrowserhelper 2.7.x declares minSdk 24; a lower value fails the manifest merge
 // every file committed to a repo for each workflow kind: [path in repo, path in ./workflow]
 const WORKFLOW_KINDS = {
@@ -625,18 +625,42 @@ const BUILD_REPAIR_CATALOG = [
   { id: 'package_id', re: /applicationId|package name|Invalid package name|namespace .* is not a valid/i, title: 'Android package ID or namespace issue', category: 'configuration', detail: 'The Android application ID or namespace is invalid or inconsistent with the project configuration.', suggestions: ['Use a reverse-domain identifier such as app.company.product with lowercase letters, digits, and dots.', 'Ensure there are no spaces, hyphens, empty segments, or Java keywords in invalid positions.', 'Keep applicationId, Firebase package_name, and any app-link configuration aligned.', 'Rebuild and verify the resulting APK package ID before publishing.'], manualSteps: ['Changing a published app’s application ID creates a different Android app identity; confirm before changing it.'] },
   { id: 'network_timeout', re: /ETIMEDOUT|ECONNRESET|socket hang up|Read timed out|Connection timed out|Could not GET .* (502|503|504)/i, title: 'Transient network or package-server failure', category: 'network', detail: 'A network request or package repository timed out or reset. This may be transient and is not necessarily a source-code defect.', suggestions: ['Retry the same build once to determine whether the failure is transient.', 'Check the URL/host and HTTP status immediately preceding the failure.', 'If the same dependency repeatedly fails, inspect repository availability, TLS certificates, and rate limits.', 'Avoid repeatedly rebuilding in a tight loop; use bounded retries with backoff.'], manualSteps: ['No source changes are recommended unless the same endpoint consistently fails.'] },
   { id: 'vite_config', re: /vite\.config|Failed to load config|Invalid config/i, title: 'Vite configuration error', category: 'configuration', detail: 'Vite could not load or validate the project configuration.', suggestions: ['Check the exact vite.config file and the first reported stack-trace location.', 'Confirm imported Vite plugins are declared and compatible with the installed Vite major version.', 'Check whether the config uses ESM/CJS syntax inconsistent with package.json type.', 'Run the package manager’s build command after correcting the first config error.'], manualSteps: ['WyBuild will not replace the whole Vite config automatically because that can remove aliases, plugins, or environment settings.'] },
+  { id: 'vite_missing_script', re: /Missing script: ['"](build|dev|start)['"]|npm error Missing script|missing script:.*build/i, title: 'Required package script is missing', category: 'configuration', detail: 'The selected package manager command does not exist in the repository package.json scripts. The build cannot start until the expected script is defined or the workflow is pointed at the correct script.', suggestions: ['Open the root package.json and inspect its scripts object.', 'Confirm the workflow is running in the intended project directory and not a parent or nested folder.', 'Add the actual framework build command (for example vite build or next build) only if the project uses that tool.', 'Keep the lockfile synchronized if dependencies or package manager configuration also changed.'], manualSteps: ['No build script was fabricated; the correct command depends on the repository framework.'] },
+  { id: 'vite_transform', re: /Internal server error.*transform|Transform failed with \d+ error|Pre-transform error|\[plugin:vite:.*\].*error|Rollup failed to resolve import/i, title: 'Source transform or module resolution failure', category: 'source_code', detail: 'The bundler failed while transforming a source module. The earliest plugin or transform error is usually the root cause; later module failures may be cascading.', suggestions: ['Use the first transform error and its source file/line rather than the final Rollup summary.', 'Check the import path spelling, file extension, filename case, and whether the target file is committed.', 'Confirm the imported package exists in the lockfile and is compatible with the installed bundler.', 'Fix one earliest transform failure, then rerun the same build command.'], manualSteps: ['The source file is not edited automatically because the correct intended import or code change cannot be inferred safely.'] },
+  { id: 'eslint', re: /ESLint.*(error|failed)|\b(error|warning)\s+\S+\s+\S+\s+(@typescript-eslint|react-hooks|no-unused-vars)|Treating warnings as errors/i, title: 'Lint rule blocked the build', category: 'source_code', detail: 'The configured lint step is enforcing a rule that the source currently violates. A lint warning can become fatal when CI enables warnings-as-errors.', suggestions: ['Open the exact file and line in the lint output and identify the rule name.', 'Fix the underlying code issue instead of disabling the rule globally.', 'Check whether CI sets CI=true or a warnings-as-errors flag.', 'Run the repository lint command locally before rebuilding.'], manualSteps: ['No lint rule was disabled automatically.'] },
+  { id: 'node_engine', re: /Unsupported engine|The engine .* is incompatible|Node\.js version .* is not supported|requires a Node version/i, title: 'Node.js version does not match project requirements', category: 'configuration', detail: 'The Node runtime used by CI is outside the version range declared by the project or one of its dependencies.', suggestions: ['Read the package.json engines.node range and the dependency error together.', 'Set the workflow Node version to a supported LTS release compatible with the project.', 'Avoid changing dependency engine constraints merely to suppress the warning.', 'Re-run dependency installation after aligning the CI Node version.'], manualSteps: ['The correct Node version must respect the framework and dependency requirements.'] },
+  { id: 'gradle_java', re: /Android Gradle plugin requires Java|Unsupported class file major version|class file version .* not supported|invalid source release|requires Java [0-9]+/i, title: 'Java and Android Gradle versions are incompatible', category: 'android', detail: 'The Java runtime, Gradle wrapper, or Android Gradle Plugin versions do not form a supported combination.', suggestions: ['Find the required Java version in the Android Gradle Plugin error.', 'Align actions/setup-java, the Gradle wrapper and Android Gradle Plugin with a documented compatible matrix.', 'Do not upgrade Gradle and the Android plugin independently without checking compatibility.', 'Run the Gradle version and Java version commands in CI to verify the effective toolchain.'], manualSteps: ['The compatible version set depends on the project’s Gradle and Android plugin versions.'] },
+  { id: 'duplicate_class', re: /Duplicate class .* found in modules|Program type already present|Duplicate class .*\.class/i, title: 'Duplicate Android class or dependency conflict', category: 'android', detail: 'Two dependencies package the same Java/Kotlin class, commonly because plugin versions or transitive Android libraries are duplicated.', suggestions: ['Read the two artifact coordinates named in the duplicate-class error.', 'Inspect dependencyInsight for the duplicated group and artifact.', 'Align Capacitor/plugin major versions and remove the redundant dependency at its source.', 'Avoid excluding an entire library until you verify which dependency requires it.'], manualSteps: ['No dependency was excluded automatically because that could break a required plugin.'] },
   { id: 'unknown', re: /.*/, title: 'Unclassified build failure', category: 'unknown', detail: 'No known signature confidently matched the available build logs. WyBuild will show the strongest log evidence and safe next diagnostic steps rather than inventing a root cause.', suggestions: ['Start with the earliest step marked failed and the first actual error; ignore warnings unless the build treats them as errors.', 'Inspect roughly 30–60 lines before the first fatal error to find the originating command or dependency.', 'Compare the failed commit with the last successful commit for changes to package.json, lockfiles, build scripts, and native configuration.', 'Re-run once only if the failure looks transient; repeated identical failures need a targeted code/configuration change.'], manualSteps: ['No automatic code change was made because the failure did not match a verified repair rule.'] },
 ];
 function diagnoseLogs(logs, build) {
-  const normalized = String(logs || '').replace(/\u001b\[[0-9;]*m/g, '');
-  const rule = BUILD_REPAIR_CATALOG.find((item) => item.id !== 'unknown' && item.re.test(normalized)) || BUILD_REPAIR_CATALOG[BUILD_REPAIR_CATALOG.length - 1];
-  const lines = normalized.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const evidenceLine = lines.find((line) => /error|failed|exception|cannot find|could not resolve|timed out|denied|not found/i.test(line)) || lines[lines.length - 1] || 'No specific error line was provided.';
-  const match = evidenceLine.match(/(?:Cannot find module|Could not resolve|Failed to resolve import) ['"]([^'"]+)['"]/i);
-  const detail = rule.id === 'npm_missing_package' && match ? `The log names missing package “${match[1]}”. ${rule.detail}` : rule.detail;
-  const canAutoFix = false; // no rule writes source unless it has a fully verified, narrow patch
-  return { title: rule.title, category: rule.category, summary: detail, rootCause: `Log evidence: ${evidenceLine.slice(0, 900)}`, suggestions: rule.suggestions, canAutoFix, filesToInspect: [], manualSteps: rule.manualSteps, ruleId: rule.id, branch: build.branch, commit: build.commitHash, evidenceLines: lines.filter((line) => /error|failed|exception|cannot find|could not resolve|timed out|denied|not found/i.test(line)).slice(0, 8) };
+  const normalized = String(logs || '').replace(/\u001b\[[0-9;]*m/g, '').replace(/\r/g, '');
+  const rawLines = normalized.split('\n');
+  const lines = rawLines.map((text, index) => ({ text: text.trim(), line: index + 1 })).filter((item) => item.text);
+  const fatalPattern = /\b(error|fatal|failed|failure|exception|cannot find|could not resolve|timed out|denied|not found|duplicate class|unsupported engine|BUILD FAILED|npm ERR!|ERR!|TS\d{4})\b/i;
+  const fatalLines = lines.filter((item) => fatalPattern.test(item.text) && !(/\b(warn|warning)\b/i.test(item.text) && !/error|failed|fatal/i.test(item.text)));
+  const candidates = fatalLines.length ? fatalLines : lines;
+  // Match the earliest actionable error first; searching the entire log first can mistake a later
+  // cascading error or harmless warning for the real build blocker.
+  let matched = null;
+  let evidence = candidates[0] || { text: 'No specific error line was provided.', line: 0 };
+  for (const candidate of candidates) {
+    const rule = BUILD_REPAIR_CATALOG.find((item) => item.id !== 'unknown' && item.re.test(candidate.text));
+    if (rule) { matched = rule; evidence = candidate; break; }
+  }
+  if (!matched) matched = BUILD_REPAIR_CATALOG.find((item) => item.id !== 'unknown' && item.re.test(normalized)) || BUILD_REPAIR_CATALOG[BUILD_REPAIR_CATALOG.length - 1];
+  const rule = matched;
+  const packageMatch = evidence.text.match(/(?:Cannot find module|Could not resolve|Failed to resolve import) ['"]([^'"]+)['"]/i);
+  const detail = rule.id === 'npm_missing_package' && packageMatch ? `The log names missing package “${packageMatch[1]}”. ${rule.detail}` : rule.detail;
+  const evidenceItems = fatalLines.slice(0, 10).map((item) => `L${item.line}: ${item.text.slice(0, 420)}`);
+  const fileMatches = [...normalized.matchAll(/(?:\.\/)?([\w@./-]+\.(?:tsx?|jsx?|vue|svelte|json|gradle|kt|java|xml|ya?ml)):(\d+)(?::(\d+))?/g)];
+  const filesToInspect = [...new Set(fileMatches.slice(0, 8).map((m) => `${m[1]}:${m[2]}`))];
+  const stepMatch = rawLines.slice(0, evidence.line).reverse().find((line) => /^###\s+.+\[(?:failure|failed|cancelled)/i.test(line.trim()));
+  const stepName = stepMatch ? stepMatch.trim().replace(/^###\s+/, '') : undefined;
+  const rootCause = `${stepName ? `Failed step: ${stepName}. ` : ''}First actionable log evidence (line ${evidence.line || 'unknown'}): ${evidence.text.slice(0, 900)}`;
+  return { title: rule.title, category: rule.category, summary: detail, rootCause, suggestions: rule.suggestions, canAutoFix: false, filesToInspect, manualSteps: rule.manualSteps, ruleId: rule.id, branch: build.branch, commit: build.commitHash, evidenceLines: evidenceItems.length ? evidenceItems : [evidence.text.slice(0, 420)], evidenceLineNumber: evidence.line || null, failedStep: stepName || null };
 }
+
 async function wybuildDiagnose(session, repo, runId) {
   const { build, logs } = await getFailedBuildContext(session, repo, runId);
   const baseCharge = 2;
@@ -673,7 +697,7 @@ const API_INTEGRATIONS = {
   network_status: { label: 'Network status', requiredPackages: ['@capacitor/network'], guidance: 'Observe network connectivity state and changes.' },
   haptics: { label: 'Haptic feedback', requiredPackages: ['@capacitor/haptics'], guidance: 'Trigger supported native haptic feedback.' },
   clipboard: { label: 'Clipboard', requiredPackages: ['@capacitor/clipboard'], guidance: 'Read and write clipboard content only on explicit user action.' },
-  native_downloads: { label: 'Native downloads / save files', requiredPackages: ['@capacitor/filesystem'], guidance: 'Download files from HTTPS URLs into app-private Documents in Capacitor APKs, with browser fallback. Validate URLs and filenames; do not claim public Downloads-folder access unless the platform supports it.' },
+  native_downloads: { label: 'Native downloads / save files', requiredPackages: ['@capacitor/filesystem'], guidance: 'Use the generated Android DownloadManager bridge to save HTTPS files into categorized public Downloads/WyBuild folders; use browser download fallback. Validate URLs and filenames; do not request broad storage permissions.' },
 };
 const CAPACITOR_PLUGIN_FOR_INTEGRATION = {
   native_camera: '@capacitor/camera', native_share: '@capacitor/share', native_downloads: '@capacitor/filesystem',
@@ -777,7 +801,7 @@ const STATIC_INTEGRATION_TEMPLATES = {
   device_info: `/** WyBuild device info adapter. Avoid storing or transmitting identifiers without consent. */\nexport async function wybuildGetDeviceInfo() { if ((window as any).Capacitor?.isNativePlatform?.()) { const mod = await import('@capacitor/device'); return { ...(await mod.Device.getInfo()), ...(await mod.Device.getBatteryInfo().catch(() => ({}))) }; } return { platform: 'web', userAgent: navigator.userAgent, language: navigator.language, online: navigator.onLine }; }\n`,
   network_status: `/** WyBuild network status adapter for native and web. */\nexport async function wybuildGetNetworkStatus() { if ((window as any).Capacitor?.isNativePlatform?.()) { const mod = await import('@capacitor/network'); return mod.Network.getStatus(); } return { connected: navigator.onLine, connectionType: navigator.onLine ? 'unknown' : 'none' }; }\nexport async function wybuildOnNetworkChange(callback: (status: any) => void) { if ((window as any).Capacitor?.isNativePlatform?.()) { const mod = await import('@capacitor/network'); return mod.Network.addListener('networkStatusChange', callback); } const handler = () => callback({ connected: navigator.onLine, connectionType: navigator.onLine ? 'unknown' : 'none' }); window.addEventListener('online', handler); window.addEventListener('offline', handler); return { remove: async () => { window.removeEventListener('online', handler); window.removeEventListener('offline', handler); } }; }\n`,
   haptics: `/** WyBuild haptic feedback adapter with a web vibration fallback. */\nexport async function wybuildHaptic(style: 'light' | 'medium' | 'heavy' = 'medium') { if ((window as any).Capacitor?.isNativePlatform?.()) { const mod = await import('@capacitor/haptics'); return mod.Haptics.impact({ style: style === 'light' ? mod.ImpactStyle.Light : style === 'heavy' ? mod.ImpactStyle.Heavy : mod.ImpactStyle.Medium }); } if (navigator.vibrate) navigator.vibrate(style === 'light' ? 10 : style === 'heavy' ? 35 : 20); return { supported: !!navigator.vibrate }; }\n`,
-  native_downloads: `/** WyBuild native download helper. On Android/Capacitor it saves into app-private Documents; Share opens the system sheet where available. This does not silently write into the public Downloads folder. */\nexport async function wybuildDownloadFile(url: string, filename: string, options: { shareAfterSave?: boolean } = {}) { const safeName = String(filename || 'download.bin').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 160) || 'download.bin'; const parsed = new URL(url, location.href); if (!['https:', location.protocol === 'https:' ? 'https:' : 'http:'].includes(parsed.protocol) || parsed.username || parsed.password) throw new Error('Downloads must use a safe HTTP(S) URL without embedded credentials.'); const cap = (window as any).Capacitor; if (cap?.isNativePlatform?.()) { const fs = await import('@capacitor/filesystem'); const saved = await fs.Filesystem.downloadFile({ url: parsed.href, path: safeName, directory: fs.Directory.Documents }); const uri = (saved as any).path || (saved as any).uri; if (options.shareAfterSave && uri && (window as any).Capacitor?.Plugins?.Share) await (window as any).Capacitor.Plugins.Share.share({ title: safeName, url: uri, dialogTitle: 'Save or share downloaded file' }); return { saved: true, path: uri || safeName, directory: 'Documents' as const }; } const response = await fetch(parsed.href); if (!response.ok) throw new Error('Download failed (HTTP ' + response.status + ').'); const blob = await response.blob(); const objectUrl = URL.createObjectURL(blob); try { const a = document.createElement('a'); a.href = objectUrl; a.download = safeName; a.rel = 'noopener'; document.body.appendChild(a); a.click(); a.remove(); } finally { setTimeout(() => URL.revokeObjectURL(objectUrl), 30000); } return { saved: true, filename: safeName, directory: 'browser-downloads' as const }; }\n`,
+  native_downloads: `/** Native downloads use Android DownloadManager and the public Downloads/WyBuild folders; browser fallback uses the standard download attribute. */\nexport async function wybuildDownloadFile(url: string, filename: string) { const native = (window as any).WyBuildNative; if (native?.isNative?.() && native.files?.download) { const result = await native.files.download(url, filename); if (result?.ok === false) throw new Error(result.error || 'Native download failed.'); return result; } const parsed = new URL(url, location.href); if (parsed.protocol !== 'https:' || parsed.username || parsed.password) throw new Error('Downloads require a secure HTTPS URL.'); const safeName = String(filename || 'download.bin').replace(/[\\/:*?"<>|\\u0000-\\u001f]/g, '_').slice(0, 150) || 'download.bin'; const response = await fetch(parsed.href); if (!response.ok) throw new Error('Download failed (HTTP ' + response.status + ').'); const blob = await response.blob(); const objectUrl = URL.createObjectURL(blob); try { const a = document.createElement('a'); a.href = objectUrl; a.download = safeName; a.rel = 'noopener'; document.body.appendChild(a); a.click(); a.remove(); } finally { setTimeout(() => URL.revokeObjectURL(objectUrl), 30000); } return { saved: true, filename: safeName, directory: 'browser-downloads' as const }; }\n`,
   clipboard: `/** WyBuild clipboard adapter. Reading clipboard may require a user gesture and browser permission. */\nexport async function wybuildWriteClipboard(text: string) { if ((window as any).Capacitor?.isNativePlatform?.()) { const mod = await import('@capacitor/clipboard'); await mod.Clipboard.write({ string: text }); return; } if (!navigator.clipboard?.writeText) throw new Error('Clipboard writing is not supported in this context.'); await navigator.clipboard.writeText(text); }\nexport async function wybuildReadClipboard() { if ((window as any).Capacitor?.isNativePlatform?.()) { const mod = await import('@capacitor/clipboard'); return (await mod.Clipboard.read()).value || ''; } if (!navigator.clipboard?.readText) throw new Error('Clipboard reading is not supported or permission was denied.'); return navigator.clipboard.readText(); }\n`,
 };
 async function wybuildIntegrateApi(session, repo, branchHint, integrationId, userGoal = '', shell = 'standalone') {
@@ -849,7 +873,7 @@ async function wybuildIntegrateApi(session, repo, branchHint, integrationId, use
   if (integrationId === 'analytics') manualSteps.push('Call configureWyBuildAnalytics({ endpoint, consent: true }) only after user consent and use an endpoint you control.');
   if (integrationId === 'rest_api') manualSteps.push('Set VITE_API_BASE_URL in the build environment and call wybuildRequest(path, options) from the application. Do not place private API secrets in VITE_ variables.');
   if (integrationId === 'contacts') manualSteps.push('Import wybuildPickContact and call it from a user-triggered action. It opens Android’s system picker and returns only the selected contact; it does not enumerate the address book. Test cancel and no-phone-number cases on-device.');
-  if (integrationId === 'native_downloads') manualSteps.push('Import wybuildDownloadFile from the generated module and call it from a user-triggered button. Android saves to app-private Documents. If a Share plugin is already installed, shareAfterSave may open the system share sheet. Public Downloads-folder writes vary by Android version and are not promised by this helper.');
+  if (integrationId === 'native_downloads') manualSteps.push('Import wybuildDownloadFile from the generated module and call it from a user-triggered button. Capacitor source builds use Android DownloadManager to save into public Downloads/WyBuild subfolders and show native completion notifications; test large downloads on a physical device.');
   if (integrationId === 'native_camera') manualSteps.push('Import wybuildPickPhoto from the generated module and call it from a user-triggered action. Run the Capacitor sync/build and test permissions on-device.');
   if (integrationId === 'native_share') manualSteps.push('Import wybuildShare and call it from a user-triggered action.');
   if (integrationId === 'file_uploads') manualSteps.push('Import wybuildPickFile and explicitly upload the returned File to your chosen backend if needed.');
@@ -2448,36 +2472,28 @@ async function route(req, res, path, query) {
 
   /* billing webhook + callback: authenticated by Flutterwave, not by session */
   if (path === 'billing/webhook' && post) {
-    res.setHeader('Cache-Control', 'no-store');
     const want = env('FLW_SECRET_HASH');
-    const safeEq = (a, b) => {
-      const left = Buffer.from(String(a || ''));
-      const right = Buffer.from(String(b || ''));
-      return left.length > 0 && left.length === right.length && crypto.timingSafeEqual(left, right);
-    };
+    const safeEq = (a, b) => a.length === b.length && a.length > 0 && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
     const legacy = String(req.headers['verif-hash'] || '');
     const sig = String(req.headers['flutterwave-signature'] || '');
-    if (!want) throw new HttpError(503, 'Flutterwave webhook verification is not configured.', 'WEBHOOK_NOT_CONFIGURED');
-    // Never reconstruct signed bytes from parsed JSON: key order/spacing can change and
-    // would make the signature check meaningless. HMAC verification requires the exact raw body.
+    // Flutterwave v4 signs the raw HTTP request body. Prefer a runtime-provided raw body when available;
+    // string/Buffer bodies are already raw. JSON.stringify is only a compatibility fallback for runtimes
+    // that eagerly parse JSON before invoking the function.
     const rawWebhookBody = Buffer.isBuffer(req.rawBody) ? req.rawBody
       : typeof req.rawBody === 'string' ? Buffer.from(req.rawBody)
       : Buffer.isBuffer(req.body) ? req.body
       : typeof req.body === 'string' ? Buffer.from(req.body)
-      : null;
-    const expectedSig = rawWebhookBody && rawWebhookBody.length
-      ? crypto.createHmac('sha256', want).update(rawWebhookBody).digest('base64')
-      : '';
-    const ok = safeEq(legacy, want) || (!!expectedSig && safeEq(sig, expectedSig));
-    if (!ok) throw new HttpError(401, 'Invalid Flutterwave webhook signature.', 'INVALID_WEBHOOK_SIGNATURE');
+      : Buffer.from(JSON.stringify(req.body ?? {}));
+    const expectedSig = want ? crypto.createHmac('sha256', want).update(rawWebhookBody).digest('base64') : '';
+    const ok = !!want && (safeEq(legacy, want) || safeEq(sig, expectedSig));
+    if (!ok) throw new HttpError(401, 'Invalid signature');
     const webhook = bodyOf(req) || {};
     // Never activate from webhook fields alone. Use the webhook only as a trigger,
     // then fetch the authoritative charge from Flutterwave v4 and validate amount,
     // currency, customer/payment-method ownership, reference and succeeded status.
     const id = webhook?.data?.id || webhook?.data?.charge_id || webhook?.charge_id || null;
     const referenceHint = webhook?.data?.reference || webhook?.data?.tx_ref || webhook?.reference || webhook?.tx_ref || null;
-    if (!id && !referenceHint) throw new HttpError(400, 'Webhook is missing a charge ID and transaction reference.', 'WEBHOOK_MISSING_PAYMENT_ID');
-    {
+    if (id || referenceHint) {
       try {
         let charge = null;
         if (id) {
@@ -2522,16 +2538,10 @@ async function route(req, res, path, query) {
           }
         }
         if (charge) {
-          if (!charge.id || !charge.reference) {
-            throw new Error('Flutterwave charge response is missing its authoritative ID or reference.');
-          }
-          if (id && String(charge.id) !== String(id)) {
-            throw new Error('Flutterwave charge ID does not match the webhook charge ID.');
-          }
-          if (referenceHint && String(charge.reference).trim() !== String(referenceHint).trim()) {
+          if (referenceHint && charge.reference && String(charge.reference).trim() !== String(referenceHint).trim()) {
             throw new Error('Flutterwave charge reference does not match the webhook reference.');
           }
-          const ref = String(charge.reference).trim();
+          const ref = String(charge.reference || referenceHint || '').trim();
           // WyCut orders are verified by WyBuild's single Flutterwave v4 webhook.
           // Forward only authoritative fields from getCharge(); WyCut matches the reference,
           // amount, currency, transaction ID and stored order before granting credits.

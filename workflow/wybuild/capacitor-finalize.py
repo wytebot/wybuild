@@ -56,6 +56,152 @@ if 'haptics' in _selected_features: names.append('android.permission.VIBRATE')
 if 'networkstatus' in _selected_features: names.append('android.permission.ACCESS_NETWORK_STATE')
 if manifest.exists(): add_permissions(manifest, sorted(set(names)))
 
+# Native DownloadManager + MediaStore bridge. APK/AAB/ZIP downloads are placed in the
+# public Downloads/WyBuild subfolders without MANAGE_EXTERNAL_STORAGE. Text exports use MediaStore.
+java_root = project / 'app/src/main/java'
+if java_root.exists():
+    for main_activity in java_root.rglob('MainActivity.java'):
+        source = main_activity.read_text(encoding='utf-8')
+        package_match = re.search(r'^package\s+([\w.]+)\s*;', source, re.M)
+        if not package_match:
+            continue
+        package_name = package_match.group(1)
+        plugin_dir = java_root / Path(*package_name.split('.')) / 'wybuild'
+        plugin_dir.mkdir(parents=True, exist_ok=True)
+        plugin_file = plugin_dir / 'WyBuildDownloadsPlugin.java'
+        plugin_source = r"""package __PACKAGE__.wybuild;
+
+import android.app.DownloadManager;
+import android.content.ContentValues;
+import android.content.Context;
+import android.database.Cursor;
+import android.net.Uri;
+import android.os.Build;
+import android.os.Environment;
+import android.provider.MediaStore;
+import android.util.Base64;
+import com.getcapacitor.JSObject;
+import com.getcapacitor.Plugin;
+import com.getcapacitor.PluginCall;
+import com.getcapacitor.PluginMethod;
+import com.getcapacitor.annotation.CapacitorPlugin;
+import java.io.File;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
+
+@CapacitorPlugin(name = "WyBuildDownloads")
+public class WyBuildDownloadsPlugin extends Plugin {
+  private String folderFor(String category) {
+    if ("apk".equals(category) || "aab".equals(category)) return "WyBuild/Builds/Installers";
+    if ("archive".equals(category)) return "WyBuild/Builds/Archives";
+    if ("log".equals(category)) return "WyBuild/Builds/Logs";
+    return "WyBuild/Downloads";
+  }
+  @PluginMethod public void enqueue(PluginCall call) {
+    try {
+      String raw = call.getString("url", "");
+      Uri uri = Uri.parse(raw);
+      if (!"https".equalsIgnoreCase(uri.getScheme()) || uri.getUserInfo() != null || uri.getHost() == null) { call.reject("A valid HTTPS download URL is required", "BAD_DOWNLOAD_URL"); return; }
+      String name = call.getString("filename", "download.bin").replaceAll("[^A-Za-z0-9._-]", "_");
+      if (name.length() > 150) name = name.substring(0, 150);
+      if (name.isEmpty() || ".".equals(name) || "..".equals(name)) name = "download.bin";
+      String folder = folderFor(call.getString("category", "generic"));
+      File parent = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), folder);
+      if (!parent.exists() && !parent.mkdirs()) { call.reject("Could not create the WyBuild Downloads folder", "DOWNLOAD_FOLDER_FAILED"); return; }
+      DownloadManager manager = (DownloadManager) getContext().getSystemService(Context.DOWNLOAD_SERVICE);
+      if (manager == null) { call.reject("Android Download Manager is unavailable", "DOWNLOAD_MANAGER_UNAVAILABLE"); return; }
+      DownloadManager.Request request = new DownloadManager.Request(uri);
+      request.setTitle(name);
+      request.setDescription("WyBuild download");
+      request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+      request.setAllowedOverMetered(true);
+      request.setAllowedOverRoaming(false);
+      request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, folder + "/" + name);
+      String mime = call.getString("mimeType", "application/octet-stream");
+      if (mime != null && mime.matches("[A-Za-z0-9.+-]+/[A-Za-z0-9.+-]+")) request.setMimeType(mime);
+      long id = manager.enqueue(request);
+      JSObject out = new JSObject(); out.put("requestId", id); out.put("filename", name); out.put("folder", "Downloads/" + folder); out.put("status", "queued");
+      call.resolve(out);
+    } catch (Exception e) { call.reject("Android could not start this download", "DOWNLOAD_ENQUEUE_FAILED", e); }
+  }
+  @PluginMethod public void saveText(PluginCall call) {
+    if (Build.VERSION.SDK_INT < 29) { call.reject("Public Downloads text export requires Android 10 or later", "SCOPED_STORAGE_UNAVAILABLE"); return; }
+    Uri item = null;
+    try {
+      String name = call.getString("filename", "wybuild-log.txt").replaceAll("[^A-Za-z0-9._-]", "_");
+      String content = call.getString("content", "");
+      String folder = folderFor(call.getString("category", "log"));
+      ContentValues values = new ContentValues();
+      values.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
+      values.put(MediaStore.MediaColumns.MIME_TYPE, call.getString("mimeType", "text/plain"));
+      values.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/" + folder);
+      values.put(MediaStore.MediaColumns.IS_PENDING, 1);
+      item = getContext().getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+      if (item == null) throw new IllegalStateException("Android did not create the Downloads file");
+      try (OutputStream stream = getContext().getContentResolver().openOutputStream(item)) {
+        if (stream == null) throw new IllegalStateException("Could not open the Downloads file");
+        stream.write(content.getBytes(StandardCharsets.UTF_8));
+      }
+      ContentValues ready = new ContentValues(); ready.put(MediaStore.MediaColumns.IS_PENDING, 0);
+      getContext().getContentResolver().update(item, ready, null, null);
+      JSObject out = new JSObject(); out.put("uri", item.toString()); out.put("filename", name); out.put("folder", "Downloads/" + folder); out.put("saved", true); call.resolve(out);
+    } catch (Exception e) {
+      if (item != null) try { getContext().getContentResolver().delete(item, null, null); } catch (Exception ignored) {}
+      call.reject("Could not save the file to Android Downloads", "DOWNLOAD_SAVE_FAILED", e);
+    }
+  }
+  @PluginMethod public void saveBase64(PluginCall call) {
+    if (Build.VERSION.SDK_INT < 29) { call.reject("Public Downloads export requires Android 10 or later", "SCOPED_STORAGE_UNAVAILABLE"); return; }
+    Uri item = null;
+    try {
+      String name = call.getString("filename", "download.bin").replaceAll("[^A-Za-z0-9._-]", "_");
+      String encoded = call.getString("data", "");
+      if (encoded.length() > 42000000) { call.reject("File is too large for an in-memory native export", "FILE_TOO_LARGE"); return; }
+      byte[] bytes = Base64.decode(encoded, Base64.DEFAULT);
+      String folder = folderFor(call.getString("category", "generic"));
+      ContentValues values = new ContentValues();
+      values.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
+      values.put(MediaStore.MediaColumns.MIME_TYPE, call.getString("mimeType", "application/octet-stream"));
+      values.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/" + folder);
+      values.put(MediaStore.MediaColumns.IS_PENDING, 1);
+      item = getContext().getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+      if (item == null) throw new IllegalStateException("Android did not create the Downloads file");
+      try (OutputStream stream = getContext().getContentResolver().openOutputStream(item)) {
+        if (stream == null) throw new IllegalStateException("Could not open the Downloads file");
+        stream.write(bytes);
+      }
+      ContentValues ready = new ContentValues(); ready.put(MediaStore.MediaColumns.IS_PENDING, 0);
+      getContext().getContentResolver().update(item, ready, null, null);
+      JSObject out = new JSObject(); out.put("uri", item.toString()); out.put("filename", name); out.put("folder", "Downloads/" + folder); out.put("saved", true); call.resolve(out);
+    } catch (Exception e) {
+      if (item != null) try { getContext().getContentResolver().delete(item, null, null); } catch (Exception ignored) {}
+      call.reject("Could not export file into Android Downloads", "DOWNLOAD_SAVE_FAILED", e);
+    }
+  }
+  @PluginMethod public void status(PluginCall call) {
+    Cursor cursor = null;
+    try {
+      long id = call.getData().optLong("requestId", -1L);
+      if (id < 0) { call.reject("Invalid Download Manager request id", "BAD_DOWNLOAD_ID"); return; }
+      DownloadManager manager = (DownloadManager) getContext().getSystemService(Context.DOWNLOAD_SERVICE);
+      cursor = manager.query(new DownloadManager.Query().setFilterById(id));
+      if (cursor == null || !cursor.moveToFirst()) { call.reject("Download record was not found", "DOWNLOAD_NOT_FOUND"); return; }
+      int status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS));
+      int reason = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON));
+      long bytes = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR));
+      long total = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES));
+      JSObject out = new JSObject(); out.put("status", status); out.put("reason", reason); out.put("bytesDownloaded", bytes); out.put("totalBytes", total); call.resolve(out);
+    } catch (Exception e) { call.reject("Could not read Android download status", "DOWNLOAD_STATUS_FAILED", e); }
+    finally { if (cursor != null) cursor.close(); }
+  }
+}
+""".replace('__PACKAGE__', package_name)
+        plugin_file.write_text(plugin_source, encoding='utf-8')
+        import_line = 'import ' + package_name + '.wybuild.WyBuildDownloadsPlugin;'
+        if import_line not in source:
+            source = source.replace('import com.getcapacitor.BridgeActivity;', 'import com.getcapacitor.BridgeActivity;\n' + import_line)
+        main_activity.write_text(source, encoding='utf-8')
+
 # Native one-contact picker for Capacitor builds. ACTION_PICK returns only the chosen
 # contact and does not require broad READ_CONTACTS access.
 java_root = project / 'app/src/main/java'
@@ -296,6 +442,12 @@ public class WyBuildShareTargetPlugin extends Plugin {
 for main_activity in (project / 'app/src/main/java').rglob('MainActivity.java'):
     source = main_activity.read_text(encoding='utf-8')
     plugin_registrations = []
+    downloads_plugin = main_activity.parent / 'wybuild' / 'WyBuildDownloadsPlugin.java'
+    if downloads_plugin.exists():
+        import_line = 'import ' + '.'.join(downloads_plugin.relative_to(project / 'app/src/main/java').with_suffix('').parts) + ';'
+        if import_line not in source:
+            source = source.replace('import com.getcapacitor.BridgeActivity;', 'import com.getcapacitor.BridgeActivity;\n' + import_line)
+        plugin_registrations.append('        registerPlugin(WyBuildDownloadsPlugin.class);')
     contacts_plugin = main_activity.parent / 'wybuild' / 'WyBuildContactsPlugin.java'
     share_plugin = project / 'app/src/main/java/com/wybuild/sharetarget/WyBuildShareTargetPlugin.java'
     if contacts_plugin.exists():

@@ -46,9 +46,9 @@ test('workflow templates and server version marker are aligned at v51', async ()
   const api = fs.readFileSync(new URL('../api/index.js', import.meta.url), 'utf8');
   const live = fs.readFileSync(new URL('../.github/workflows/wybuild-twa.yml', import.meta.url), 'utf8');
   const template = fs.readFileSync(new URL('../workflow/wybuild-twa.yml', import.meta.url), 'utf8');
-  assert.match(api, /const TWA_WORKFLOW_VERSION = 51;/);
-  assert.match(live, /wybuild-twa-workflow-version: 51/);
-  assert.match(template, /wybuild-twa-workflow-version: 51/);
+  assert.match(api, /const TWA_WORKFLOW_VERSION = 52;/);
+  assert.match(live, /wybuild-twa-workflow-version: 52/);
+  assert.match(template, /wybuild-twa-workflow-version: 52/);
   assert.equal(live.replaceAll('https://wybuild-black.vercel.app', '__WYBUILD_APP_URL__'), template);
 });
 
@@ -119,4 +119,36 @@ test('push registration is refused (not crashed) when no Firebase config was pac
   const gate = bridge.indexOf('runtimeConfig.firebaseConfigured !== true');
   assert.ok(gate > 0 && gate < bridge.indexOf('PushNotifications.register()'), 'gate must precede the native register call');
   for (const f of ['.github/workflows/wybuild-twa.yml', 'workflow/wybuild-twa.yml']) assert.match(fs.readFileSync(new URL('../' + f, import.meta.url), 'utf8'), /firebaseConfigured:/);
+});
+
+
+test('native download bridge uses public Downloads through scoped Android APIs', async () => {
+  const fs = await import('node:fs');
+  const bridge = fs.readFileSync(new URL('../.github/wybuild/capacitor-bridge.entry.js', import.meta.url), 'utf8');
+  const finalizer = fs.readFileSync(new URL('../.github/wybuild/capacitor-finalize.py', import.meta.url), 'utf8');
+  const app = fs.readFileSync(new URL('../src/services/nativeFiles.ts', import.meta.url), 'utf8');
+  assert.match(bridge, /WyBuildDownloadsPlugin\.enqueue/);
+  assert.match(bridge, /WyBuildDownloadsPlugin\.status/);
+  assert.match(bridge, /WyBuildDownloadsPlugin\.saveBase64/);
+  assert.match(finalizer, /DownloadManager\.Request\.VISIBILITY_VISIBLE_NOTIFY_COMPLETED/);
+  assert.match(finalizer, /MediaStore\.Downloads\.EXTERNAL_CONTENT_URI/);
+  assert.match(finalizer, /public void saveBase64/);
+  assert.match(finalizer, /Environment\.DIRECTORY_DOWNLOADS/);
+  assert.match(finalizer, /registerPlugin\(WyBuildDownloadsPlugin\.class\)/);
+  assert.doesNotMatch(finalizer, /android\.permission\.MANAGE_EXTERNAL_STORAGE/);
+  assert.match(app, /Builds\/Installers/);
+  assert.match(app, /Downloads/);
+});
+
+test('welcome flow and actionable build evidence are wired', async () => {
+  const fs = await import('node:fs');
+  const app = fs.readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  const welcome = fs.readFileSync(new URL('../src/components/WelcomeScreen.tsx', import.meta.url), 'utf8');
+  const api = fs.readFileSync(new URL('../api/index.js', import.meta.url), 'utf8');
+  assert.match(app, /<WelcomeScreen onStart=/);
+  assert.match(app, /Native back handling could not be attached/);
+  assert.match(welcome, /Start/);
+  assert.match(api, /First actionable log evidence/);
+  assert.match(api, /evidenceLineNumber/);
+  assert.match(api, /vite_missing_script/);
 });

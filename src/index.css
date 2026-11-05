@@ -321,3 +321,15 @@ input[type="file"] {
 @keyframes wySheetFade{from{opacity:0}to{opacity:1}}
 @media (min-width:640px){.wy-sheet-root{align-items:center;padding:24px}.wy-sheet-panel{border-bottom:1px solid rgba(148,163,184,.24);border-radius:18px;animation-name:wySheetFade}.wy-sheet-grab{display:none}}
 @media (prefers-reduced-motion:reduce){.wy-sheet-backdrop,.wy-sheet-panel,.wy-combo-list{animation:none}.wy-select-chevron{transition:none}}
+
+/* Animated first-launch welcome screen. Motion respects the device accessibility setting. */
+.wy-welcome-orb{position:absolute;width:min(72vw,520px);aspect-ratio:1;border-radius:50%;filter:blur(90px);pointer-events:none;opacity:.13;animation:wyOrbDrift 11s ease-in-out infinite alternate}
+.wy-welcome-orb-a{top:-28%;left:-22%;background:#10b981}.wy-welcome-orb-b{right:-28%;bottom:-34%;background:#0e7490;animation-delay:-5s}
+.wy-welcome-mark{animation:wyMarkIn .8s cubic-bezier(.2,.8,.2,1) both}
+.wy-welcome-phrase{animation:wyPhraseIn .45s ease both}
+.wy-welcome-start{animation:wyStartPulse 3s ease-in-out 1.1s infinite}
+@keyframes wyOrbDrift{from{transform:translate3d(-3%,0,0) scale(.92)}to{transform:translate3d(5%,7%,0) scale(1.08)}}
+@keyframes wyMarkIn{from{opacity:0;transform:translateY(14px) scale(.88)}to{opacity:1;transform:translateY(0) scale(1)}}
+@keyframes wyPhraseIn{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:translateY(0)}}
+@keyframes wyStartPulse{0%,100%{box-shadow:0 12px 42px rgba(16,185,129,.18)}50%{box-shadow:0 12px 54px rgba(16,185,129,.32)}}
+@media(prefers-reduced-motion:reduce){.wy-welcome-orb,.wy-welcome-mark,.wy-welcome-phrase,.wy-welcome-start{animation:none!important}.wy-welcome-start{transition:none}}

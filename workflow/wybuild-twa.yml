@@ -1,4 +1,4 @@
-# wybuild-twa-workflow-version: 51
+# wybuild-twa-workflow-version: 52
 # v51: prefer Vercel Production config, then matching GitHub repository secrets, then repository variables and project fallbacks.
 # v50: Pull production client/API configuration from Vercel when credentials are configured; set Vite + Next aliases; fix runtime-config root path; correct analyzer scan and standalone WyBuild auth warning.
 # v49: auto-wire layer - selected native features take effect through standard web APIs (share, downloads, notifications, vibrate, online status, deep links, swipe-back) even when the site has no WyBuildNative code.

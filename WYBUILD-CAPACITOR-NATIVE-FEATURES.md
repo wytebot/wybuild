@@ -216,3 +216,10 @@ For the privacy-preserving single-contact flow in standalone native builds, use 
 ## Offline app shell and connection banners
 
 WyBuild's service worker caches the app shell and same-origin JS/CSS/static bundles. After the app has loaded successfully once, it can reopen to the cached interface without a connection; API calls for authentication, billing, builds and remote data still require internet. A top banner displays “You're offline” and then “You're back online” when connectivity returns.
+
+
+## WyBuild artifact folder layout (native builds)
+
+Native downloads use Android DownloadManager and land directly in the public `Downloads/WyBuild` folders: APK/AAB files in `Builds/Installers`, ZIP/TAR archives in `Builds/Archives`, TXT/log files in `Builds/Logs`, and other files in `Downloads`. The OS shows native download notifications and continues transfers if the WebView is backgrounded. Text exports use Android MediaStore. WyBuild does not request `MANAGE_EXTERNAL_STORAGE` or broad storage permissions; Android scoped storage handles these writes.
+
+The native bridge exposes `WyBuildNative.permissions.check(feature)` and `WyBuildNative.permissions.request(feature)` for `camera`, `photos`, `location`, `notifications`, and `push`. Request a permission only after the user invokes the matching feature; never prompt for all permissions at startup. `WyBuildNative.files.download(url, filename)` queues a public Downloads transfer, `files.downloadStatus(requestId)` reports OS transfer status, and `files.saveText(filename, content, 'log')` exports text directly through MediaStore, and `files.saveBase64(filename, base64, category, mimeType)` exports small browser-generated binary files. Large remote files should use `files.download` so Android streams them without copying the whole file through JavaScript memory.

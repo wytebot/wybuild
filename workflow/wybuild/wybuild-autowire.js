@@ -37,6 +37,16 @@
       });
     };
     var saveBlob = function (blob, name) {
+      var ext = String(name || '').toLowerCase().split('.').pop();
+      var category = ['apk','aab'].indexOf(ext) >= 0 ? ext : ['zip','tar','gz','tgz'].indexOf(ext) >= 0 ? 'archive' : ['txt','log'].indexOf(ext) >= 0 ? 'log' : 'generic';
+      // Small browser-generated files can be committed to public Downloads via MediaStore.
+      // Avoid base64 bridge copies for large blobs; preserve the private-file/share fallback.
+      if (blob.size <= 30 * 1024 * 1024 && N.files.saveBase64) {
+        return toBase64(blob).then(function (b64) { return N.files.saveBase64(name, b64, category, blob.type || 'application/octet-stream'); }).then(function (saved) {
+          if (failed(saved)) throw new Error(saved.error);
+          return saved;
+        });
+      }
       return toBase64(blob).then(function (b64) { return N.files.write('wybuild-saved/' + name, b64); }).then(function (saved) {
         if (failed(saved)) throw new Error(saved.error);
         var uri = saved && (saved.uri || saved.path);

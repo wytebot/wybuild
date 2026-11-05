@@ -21,6 +21,7 @@ import { ActionSheet } from '@capacitor/action-sheet';
 import { Dialog } from '@capacitor/dialog';
 import { registerPlugin } from '@capacitor/core';
 const WyBuildContactsPlugin = registerPlugin('WyBuildContacts');
+const WyBuildDownloadsPlugin = registerPlugin('WyBuildDownloads');
 
 const safe = async (fn) => { try { return await fn(); } catch (e) { return { ok: false, error: String(e?.message || e) }; } };
 const pendingNativeUrls = (window.__WYBUILD_PENDING_APP_URLS__ = window.__WYBUILD_PENDING_APP_URLS__ || []);
@@ -158,6 +159,26 @@ try {
 const native = {
   isNative: () => !!window.Capacitor?.isNativePlatform?.(),
   platform: () => window.Capacitor?.getPlatform?.() || 'web',
+  // Inspect/request only the permission tied to the feature the user just invoked.
+  // Never request broad storage access or prompt for unrelated permissions at startup.
+  permissions: {
+    check: async (feature) => safe(async () => {
+      const key = String(feature || '').toLowerCase();
+      if (key === 'camera' || key === 'photos') return Camera.checkPermissions();
+      if (key === 'location') return Geolocation.checkPermissions();
+      if (key === 'notifications') return LocalNotifications.checkPermissions();
+      if (key === 'push') return PushNotifications.checkPermissions();
+      throw new Error('Unsupported permission feature.');
+    }),
+    request: async (feature) => safe(async () => {
+      const key = String(feature || '').toLowerCase();
+      if (key === 'camera' || key === 'photos') return Camera.requestPermissions();
+      if (key === 'location') return Geolocation.requestPermissions();
+      if (key === 'notifications') return LocalNotifications.requestPermissions();
+      if (key === 'push') return PushNotifications.requestPermissions();
+      throw new Error('Unsupported permission feature.');
+    }),
+  },
   camera: {
     permissions: () => safe(() => Camera.requestPermissions()),
     takePhoto: (options = {}) => safe(() => Camera.getPhoto({ quality: 90, allowEditing: false, resultType: 'uri', source: 'CAMERA', ...options })),
@@ -204,14 +225,15 @@ const native = {
     list: (path = '') => safe(() => Filesystem.readdir({ path, directory: Directory.Documents })),
     download: async (url, filename, options = {}) => safe(async () => {
       const parsed = new URL(url, location.href);
-      if (!['https:', 'http:'].includes(parsed.protocol) || parsed.username || parsed.password) throw new Error('Downloads must use a safe HTTP(S) URL.');
-      const safeName = String(filename || parsed.pathname.split('/').pop() || 'download.bin').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 150) || 'download.bin';
-      // Use native streaming instead of fetch->Blob->base64, which can exhaust Android WebView memory on APK/AAB ZIPs.
-      const saved = await Filesystem.downloadFile({ url: parsed.href, path: safeName, directory: Directory.Documents });
-      const uri = saved?.path || saved?.uri;
-      if (options.shareAfterSave && uri) await Share.share({ title: safeName, text: 'Downloaded file', url: uri, dialogTitle: 'Save or share downloaded file' });
-      return { ...saved, saved: true, filename: safeName, directory: 'Documents', uri };
+      if (parsed.protocol !== 'https:' || parsed.username || parsed.password) throw new Error('Downloads require a secure HTTPS URL.');
+      const safeName = String(filename || parsed.pathname.split('/').pop() || 'download.bin').replace(/[\\/:*?\"<>|\u0000-\u001f]/g, '_').slice(0, 150) || 'download.bin';
+      const ext = safeName.toLowerCase().split('.').pop();
+      const category = ['apk','aab'].includes(ext) ? ext : ['zip','tar','gz','tgz'].includes(ext) ? 'archive' : ['txt','log'].includes(ext) ? 'log' : 'generic';
+      return WyBuildDownloadsPlugin.enqueue({ url: parsed.href, filename: safeName, category, mimeType: ext === 'apk' ? 'application/vnd.android.package-archive' : ext === 'aab' ? 'application/octet-stream' : 'application/octet-stream' });
     }),
+    downloadStatus: (requestId) => safe(() => WyBuildDownloadsPlugin.status({ requestId })),
+    saveText: (filename, content, category = 'log') => safe(() => WyBuildDownloadsPlugin.saveText({ filename, content, category, mimeType: 'text/plain' })),
+    saveBase64: (filename, data, category = 'generic', mimeType = 'application/octet-stream') => safe(() => WyBuildDownloadsPlugin.saveBase64({ filename, data, category, mimeType })),
   },
   haptics: { impact: (style = 'medium') => safe(() => Haptics.impact({ style: ({ light: ImpactStyle.Light, heavy: ImpactStyle.Heavy, medium: ImpactStyle.Medium })[style] || ImpactStyle.Medium })), success: () => safe(() => Haptics.notification({ type: NotificationType.Success })), vibrate: (duration = 300) => safe(() => Haptics.vibrate({ duration })) },
   network: { status: () => safe(() => Network.getStatus()), watch: (callback) => Network.addListener('networkStatusChange', callback) },

@@ -1,0 +1,7 @@
+Affected files for WyBuild-PotHub-Native-Upgrade
+Compared against: WyBuild-PotHub-Webhook-Integrated.zip
+
+Included files are new or modified.
+
+Deleted files:
+tests/__pycache__/test_capacitor_finalize_manifest.cpython-313.pyc

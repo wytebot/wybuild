@@ -5,6 +5,7 @@ import { useApp } from '../../context/AppContext';
 import { TerminalViewer } from './TerminalViewer';
 import { TwaBuildPanel } from '../twa/TwaBuildPanel';
 import { setReleaseHandoff } from '../../services/releaseHandoff';
+import { saveNativeFile, classifyArtifact } from '../../services/nativeFiles';
 import type { BuildArtifact } from '../../types';
 import {
   CheckCircle2,
@@ -34,7 +35,7 @@ export const BuildsView: React.FC = () => {
   const [aiDone, setAiDone] = useState(false);
   const [downloadingArtifact, setDownloadingArtifact] = useState<number | string | null>(null);
   const [downloadError, setDownloadError] = useState('');
-  const [downloadPct, setDownloadPct] = useState<number | null>(null);
+  const [downloadNotice, setDownloadNotice] = useState('');
 
   // while a new run is being created the old build (and its logs) must not stay on screen
   const selectedBuild = awaitingNewBuild ? undefined : builds.find((b) => b.id === activeBuildId) || builds[0];
@@ -59,7 +60,7 @@ export const BuildsView: React.FC = () => {
   const downloadArtifact = async (art: BuildArtifact) => {
     if (!selectedBuild) return;
     setDownloadError('');
-    setDownloadPct(null);
+    setDownloadNotice('');
     setDownloadingArtifact(art.id ?? art.name);
     const capacitor = (window as any).Capacitor;
     const nativeBuild = !!capacitor?.isNativePlatform?.();
@@ -67,7 +68,6 @@ export const BuildsView: React.FC = () => {
     const proxyUrl = new URL(art.downloadUrl, appOrigin).href;
     const safeName = String(art.name || 'wybuild-artifact').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 140) || 'wybuild-artifact';
     const fileName = /\.zip$/i.test(safeName) ? safeName : `${safeName}.zip`;
-    let progressHandle: { remove: () => Promise<void> } | null = null;
     try {
       // 1) Ask WyBuild (authenticated, small JSON, ~1 call) for GitHub's short-lived signed storage URL.
       //    The big file then comes straight from GitHub: no Vercel hop, no 60 s function limit, and no
@@ -103,17 +103,9 @@ export const BuildsView: React.FC = () => {
 
       // 2) Capacitor APK: native streaming download straight to app storage (no fetch -> Blob -> base64 through
       //    the JS bridge, which runs out of memory / times out on large ZIPs).
-      const { Filesystem, Directory } = await import('@capacitor/filesystem');
-      const { Share } = await import('@capacitor/share');
       try {
-        progressHandle = await (Filesystem as any).addListener('progress', (p: { bytes?: number; contentLength?: number }) => {
-          if (p?.contentLength && p.contentLength > 0) setDownloadPct(Math.min(99, Math.round(((p.bytes || 0) / p.contentLength) * 100)));
-        });
-        await Filesystem.downloadFile({ url: direct, path: fileName, directory: Directory.Documents, recursive: true, progress: true } as any);
-        const { uri } = await Filesystem.getUri({ path: fileName, directory: Directory.Documents });
-        if (!uri) throw new Error('The artifact was downloaded but Android did not return its saved location.');
-        // Android's share/save sheet lets the user save it to Files/Downloads or send it to another app.
-        await Share.share({ title: fileName, text: 'WyBuild build artifact', url: uri, dialogTitle: 'Save or share build artifact' });
+        const queued = await saveNativeFile(direct, fileName, classifyArtifact(fileName));
+        setDownloadNotice(`Download started. Android is saving ${queued.filename} to ${queued.folder}; check your notification shade for progress.`);
       } catch (nativeErr) {
         const msg = String((nativeErr as any)?.message || nativeErr || '');
         if (/cancel|dismiss/i.test(msg)) return; // user closed the share sheet
@@ -130,8 +122,6 @@ export const BuildsView: React.FC = () => {
         setDownloadError(aborted ? 'The server took too long to prepare the download. Check your connection and try again.' : e instanceof Error ? e.message : 'Could not download this artifact. Check your connection and try again.');
       }
     } finally {
-      try { await progressHandle?.remove(); } catch { /* listener already gone */ }
-      setDownloadPct(null);
       setDownloadingArtifact(null);
     }
   };
@@ -473,7 +463,7 @@ export const BuildsView: React.FC = () => {
                           className={`px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-semibold flex items-center gap-1 transition cursor-pointer text-xs ${downloadingArtifact === (art.id ?? art.name) ? 'opacity-60 pointer-events-none' : ''}`}
                         >
                           <Download className="w-3.5 h-3.5" />
-                          <span>{downloadingArtifact === (art.id ?? art.name) ? (downloadPct !== null ? `Downloading ${downloadPct}%` : 'Preparing…') : 'Download artifact'}</span>
+                          <span>{downloadingArtifact === (art.id ?? art.name) ? 'Starting…' : 'Download artifact'}</span>
                         </a>
                         {selectedBuild.repo && selectedBuild.kind === 'twa' && art.id && (
                           <button
@@ -488,6 +478,7 @@ export const BuildsView: React.FC = () => {
                     </div>
                   ))}
                 </div>
+                {downloadNotice && <div role="status" className="text-xs text-emerald-300 rounded border border-emerald-500/25 bg-emerald-500/5 p-3">{downloadNotice}</div>}
                 {downloadError && <div role="alert" className="text-xs text-rose-300 rounded border border-rose-500/30 bg-rose-500/10 p-3">Download failed: {downloadError}</div>}
               </div>
             )}

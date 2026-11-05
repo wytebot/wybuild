@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Search, Download, Copy, Check, ArrowDown, Loader2 } from 'lucide-react';
 import { isNative } from '../../services/apiBase';
+import { saveNativeFile } from '../../services/nativeFiles';
 
 interface TerminalViewerProps {
   logs: string[];
@@ -65,31 +66,19 @@ export const TerminalViewer: React.FC<TerminalViewerProps> = ({ logs, isRunning,
     try {
       const native = isNative() || !!(window as any).Capacitor?.isNativePlatform?.();
       if (native) {
-        // Save persistently on the device (Documents), rather than using a Blob URL,
-        // which Android WebView often fails to hand to the system download manager.
-        const { Filesystem, Directory, Encoding } = await import('@capacitor/filesystem');
-        const saved = await Filesystem.writeFile({
-          path: fileName,
-          data: contents,
-          directory: Directory.Documents,
-          encoding: Encoding.UTF8,
-          recursive: true,
-        });
-        setDownloadMessage(`Saved on device: ${fileName}`);
-        // Offer the saved file to Android's share/save sheet as a convenient second route
-        // to Downloads, Drive, email, or another file manager.
-        try {
+        const native = (window as any).WyBuildNative;
+        let saved = await native?.files?.saveText?.(fileName, contents, 'log');
+        if (!saved || saved.ok === false || !saved.saved) {
+          // Legacy shell fallback; source builds use MediaStore to export into public Downloads.
+          const { Filesystem, Directory, Encoding } = await import('@capacitor/filesystem');
+          const folder = 'WyBuild/Builds/Logs';
+          await Filesystem.mkdir({ path: folder, directory: Directory.Documents, recursive: true }).catch(() => {});
+          saved = await Filesystem.writeFile({ path: `${folder}/${fileName}`, data: contents, directory: Directory.Documents, encoding: Encoding.UTF8, recursive: true });
           const { Share } = await import('@capacitor/share');
-          await Share.share({
-            title: fileName,
-            text: 'WyBuild complete build logs',
-            url: saved.uri,
-            dialogTitle: 'Share or save build logs',
-          });
-        } catch (shareError) {
-          // A dismissed share sheet must not undo the file already saved in Documents.
-          console.warn('Log file saved; Android share sheet was unavailable or dismissed.', shareError);
+          await Share.share({ title: fileName, text: 'WyBuild build logs', url: saved.uri, dialogTitle: 'Export or share build logs' }).catch(() => {});
+          saved = { ...saved, saved: true, folder: `Documents/${folder}` };
         }
+        setDownloadMessage(`Saved to ${saved.folder || 'Downloads/WyBuild/Builds/Logs'}: ${fileName}`);
       } else {
         const blob = new Blob([contents], { type: 'text/plain;charset=utf-8' });
         const url = URL.createObjectURL(blob);

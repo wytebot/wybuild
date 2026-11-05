@@ -10,6 +10,7 @@ import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
 import { DashboardOverview } from './components/dashboard/DashboardOverview';
 import { LoginScreen } from './components/LoginScreen';
+import { WelcomeScreen } from './components/WelcomeScreen';
 import { CheckCircle2, AlertCircle, BookOpen, X } from 'lucide-react';
 
 // Screens load on demand (smaller first download), then are preloaded while the browser is idle.
@@ -78,6 +79,29 @@ const MainLayout: React.FC = () => {
     const query = params.toString();
     window.history.replaceState({}, '', `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`);
   }, [builds, setActiveBuildId, setCurrentTab]);
+
+  // Keep Android system-back behaviour inside the app navigation model.
+  useEffect(() => {
+    let disposed = false;
+    let listener: { remove: () => Promise<void> } | undefined;
+    let readyHandler: (() => void) | undefined;
+    const attach = async () => {
+      const native = (window as any).WyBuildNative;
+      if (disposed || !native?.isNative?.() || !native?.app?.onBack) return;
+      try {
+        await native.statusBar?.show?.();
+        await native.statusBar?.light?.();
+        listener = await native.app.onBack(() => {
+          if (navOpen && window.matchMedia('(max-width: 1023px)').matches) { setNavOpen(false); return; }
+          if (currentTab !== 'dashboard') { setCurrentTab('dashboard'); return; }
+          void native.app.exit();
+        });
+      } catch (error) { console.warn('Native back handling could not be attached:', error); }
+    };
+    if ((window as any).WyBuildNative) void attach();
+    else { readyHandler = () => { void attach(); }; window.addEventListener('wybuild-native-ready', readyHandler, { once: true }); }
+    return () => { disposed = true; if (readyHandler) window.removeEventListener('wybuild-native-ready', readyHandler); void listener?.remove().catch(() => {}); };
+  }, [currentTab, navOpen, setCurrentTab]);
 
   // Register Firebase Cloud Messaging on native Capacitor builds. The server keeps tokens
   // private and maps them to the authenticated GitHub account and repositories.
@@ -231,14 +255,17 @@ const MainLayout: React.FC = () => {
 };
 
 const Gate: React.FC = () => {
-  const { authState } = useApp();
+  const { authState, user, retryAuth } = useApp();
+  const [welcomeComplete, setWelcomeComplete] = useState<boolean>(() => { try { return localStorage.getItem('wybuild_welcome_complete_v1') === '1'; } catch { return false; } });
   if (authState === 'unreachable') {
     return <main className="min-h-dvh bg-slate-950 text-slate-100 flex items-center justify-center p-6"><section className="max-w-md w-full rounded-2xl border border-amber-400/20 bg-slate-900 p-6"><h1 className="text-xl font-bold">Can’t reach WyBuild</h1><p className="mt-2 text-sm text-slate-300">Your saved sign-in has not been cleared. Check your connection, then retry. {user?.login ? `Last signed in as @${user.login}.` : ''}</p><div className="mt-5 flex flex-col gap-2"><button onClick={() => void retryAuth()} className="rounded-lg bg-emerald-400 px-4 py-3 font-bold text-slate-950">Retry connection</button><a href="https://wybuild-black.vercel.app" onClick={e => { if ((window as any).Capacitor?.isNativePlatform?.()) { e.preventDefault(); void import('@capacitor/browser').then(({ Browser }) => Browser.open({ url: 'https://wybuild-black.vercel.app' })); } }} className="rounded-lg border border-white/10 px-4 py-3 text-center">Open web version</a></div></section></main>;
   }
   if (authState === 'loading') {
     return <div className="h-dvh bg-slate-950 flex items-center justify-center text-slate-500 text-sm">Loading...</div>;
   }
-  return authState === 'authed' ? <MainLayout /> : <LoginScreen />;
+  if (authState === 'authed') return <MainLayout />;
+  if (!welcomeComplete) return <WelcomeScreen onStart={() => { try { localStorage.setItem('wybuild_welcome_complete_v1', '1'); } catch {} setWelcomeComplete(true); }} />;
+  return <LoginScreen />;
 };
 
 export default function App() {

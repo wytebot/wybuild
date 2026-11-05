@@ -5,7 +5,7 @@ Before v49, ticking a native feature only made the plugin available as `window.W
 | Ticked in WyBuild | Existing site code that now works natively |
 |---|---|
 | Native Share Sheet | `navigator.share()` / `navigator.canShare()` (text, links, files) → Android share sheet |
-| Native Downloads (or File Access) | `<a download>`, `blob:` / `data:` links and `a.click()` downloads → saved, then Android save/share sheet. Cross-origin links use the native downloader. Failure opens the link externally |
+| Native Downloads (or File Access) | `<a download>`, `blob:` / `data:` links and `a.click()` downloads → Android DownloadManager → public Downloads/WyBuild folders with native progress notifications. Cross-origin links use the native downloader. Failure opens the link externally |
 | Scheduled Local Notifications / Local reminders | `Notification.requestPermission()`, `new Notification()`, `registration.showNotification()` → Android notifications |
 | Haptic Feedback | `navigator.vibrate()` |
 | Network Status Events | `navigator.onLine`, `online` / `offline` events follow validated Android connectivity |
