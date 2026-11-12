@@ -35,6 +35,7 @@
     function button(label, action, bg) { var b = document.createElement('button'); b.textContent = label; b.onclick = action; b.style.cssText = 'padding:11px 14px;border:0;border-radius:9px;background:' + bg + ';color:#fff;font-weight:700'; return b; }
     row.appendChild(button('Copy diagnostics', function () { var text = details.textContent || ''; if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).catch(function () {}); try { var ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); } catch (_) {} }, '#4f46e5'));
     row.appendChild(button('Reload app', function () { location.reload(); }, '#047857'));
+    row.appendChild(button('Dismiss', function () { panel.remove(); }, '#334155'));
     card.append(title, intro, details, row); panel.appendChild(card); document.body.appendChild(panel);
   }
   window.addEventListener('error', function (event) {
@@ -64,17 +65,44 @@
     record('unhandled-rejection', detail); window.setTimeout(function () { show(detail); }, 0);
   });
   window.addEventListener('securitypolicyviolation', function (event) { record('csp-violation', event.violatedDirective + ' ' + event.blockedURI); });
+  // Framework-agnostic "did the app render?" check. Vite/CRA mount into #root, Next.js into #__next, others into #app.
+  // The Next.js "Loading Pothub..." placeholder does not count as rendered, so a genuinely stuck load is still reported.
+  function appRendered() {
+    var host = document.getElementById('root') || document.getElementById('__next') || document.getElementById('app') || document.body;
+    if (!host) return false;
+    var text = ((host.innerText || host.textContent || '') + '').replace(/\s+/g, ' ').trim();
+    if (host === document.body) text = text.replace(/Copy diagnostics\s*Reload app\s*Dismiss/i, '').trim();
+    if (/^Loading Pothub/i.test(text)) return false;
+    if (text.length > 0 && host !== document.body) return true;
+    var found = false;
+    Array.prototype.some.call(host.querySelectorAll('button,a,input,textarea,select,img,svg,canvas,[role=button]'), function (el) {
+      if (el.closest && el.closest('#' + panelId)) return false;
+      var rect = el.getBoundingClientRect(); var style = window.getComputedStyle(el);
+      if (rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || 1) > 0) { found = true; return true; }
+      return false;
+    });
+    return found;
+  }
+  function describeHost() {
+    var ids = ['root', '__next', 'app'], found = [];
+    ids.forEach(function (id) { var el = document.getElementById(id); if (el) found.push('#' + id + ' (' + ((el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim().length) + ' chars)'); });
+    var host = document.getElementById('root') || document.getElementById('__next') || document.getElementById('app') || document.body;
+    var text = ((host && (host.innerText || host.textContent)) || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+    return 'hosts: ' + (found.join(', ') || 'none') + '; text: "' + text + '"; readyState: ' + document.readyState;
+  }
+  function dismiss() { var p = document.getElementById(panelId); if (p) p.remove(); }
   document.addEventListener('DOMContentLoaded', function () {
     window.setTimeout(function () {
-      var root = document.getElementById('root');
-      var hasText = !!(root && (root.innerText || root.textContent || '').trim().length > 0);
-      var hasVisibleControl = false;
-      if (root) Array.prototype.some.call(root.querySelectorAll('button,a,input,textarea,select,img,svg,canvas,[role=button]'), function (el) {
-        var rect = el.getBoundingClientRect(); var style = window.getComputedStyle(el);
-        if (rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || 1) > 0) { hasVisibleControl = true; return true; }
-        return false;
-      });
-      if (!root || (!hasText && !hasVisibleControl)) { record('startup-timeout', 'No visible app content after 15000 ms'); show('No visible app content appeared after 15000 ms. This usually indicates a module load/evaluation failure or startup code that never rendered.'); }
+      if (!appRendered()) {
+        record('startup-timeout', 'No visible app content after 15000 ms');
+        show('No visible app content appeared after 15000 ms. This usually indicates a module load/evaluation failure or startup code that never rendered.\n\n[check v2] ' + describeHost());
+        // If the app finishes loading late, remove the overlay on its own instead of covering a working app.
+        var tries = 0, timer = window.setInterval(function () {
+          tries++;
+          if (appRendered()) { window.clearInterval(timer); record('startup-recovered', 'App rendered after the timeout panel was shown'); dismiss(); }
+          else if (tries > 120) window.clearInterval(timer);
+        }, 1000);
+      }
     }, 15000);
   });
   record('diagnostics-installed', 'Early Android startup diagnostics installed before application modules');
